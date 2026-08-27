@@ -171,7 +171,17 @@ export const layer = (options: EvidenceOptions): Layer.Layer<Evidence, EvidenceU
 
       yield* Effect.try({
         try: () => {
-          mkdirSync(directory, { recursive: true })
+          // The root may already exist and should. The run directory may not.
+          //
+          // `recursive: true` on the run directory would accept one that is
+          // already there, and a second writer opened on the same `runId` would
+          // then append to the same `events.jsonl` with its own `seq` counter
+          // starting at zero. The log would carry two sessions interleaved and a
+          // `seq` that goes backwards, which is exactly what the event contract
+          // promises cannot happen. Failing here costs a run; not failing here
+          // costs the ability to trust any log.
+          mkdirSync(options.root, { recursive: true })
+          mkdirSync(directory)
           writeFileSync(join(directory, "README.txt"), note(options))
         },
         catch: (cause) => new EvidenceUnwritable({ path: directory, reason: String(cause) })

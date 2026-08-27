@@ -177,3 +177,44 @@ it("defines every event kind SPEC lists, including the ones replay may never emi
     new Set([...SPEC_KINDS, ...RECOVERY_KINDS, ...ASSIST_KINDS, ...TENANT_KINDS])
   )
 })
+
+// ---------------------------------------------------------------------------
+// One run, one directory
+// ---------------------------------------------------------------------------
+
+it.effect("a second writer on the same run is refused, rather than interleaving two sessions", () =>
+  Effect.gen(function* () {
+    const root = mkdtempSync(join(tmpdir(), "cua-exclusive-"))
+    const open = (sessionId: string) =>
+      Effect.gen(function* () {
+        const evidence = yield* Evidence
+        yield* evidence.record({
+          kind: "run.start",
+          mode: "replay",
+          capability: "c",
+          version: "1.0.0",
+          baseUrl: "http://127.0.0.1:4173",
+          inputs: []
+        })
+      }).pipe(
+        Effect.provide(evidenceFiles({ root, runId: "shared", sessionId, scrubber: noScrubbing }))
+      )
+
+    yield* open("session-one")
+
+    // `seq` is promised monotonic within a run. A second writer opened on the
+    // same runId would start its own counter at zero and append to the same
+    // file, so the log would carry two sessions with a seq that goes backwards.
+    // The writer refuses instead, and says which directory it would not reuse.
+    const second = yield* Effect.result(open("session-two"))
+    expect(second._tag).toBe("Failure")
+    if (second._tag === "Failure") {
+      expect((second.failure as { path: string }).path).toContain("shared")
+    }
+
+    // The first run's log is intact and untouched.
+    const lines = readFileSync(join(root, "shared", "events.jsonl"), "utf8").trim().split("\n")
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]!).sessionId).toBe("session-one")
+  })
+)

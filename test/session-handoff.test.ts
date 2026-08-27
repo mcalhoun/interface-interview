@@ -24,6 +24,7 @@ import { join } from "node:path"
 import { it } from "@effect/vitest"
 import { Effect, Fiber, Layer } from "effect"
 import { expect } from "vitest"
+import { randomUUID } from "node:crypto"
 import { evidenceFiles, noScrubbing } from "@cua/evidence"
 import {
   HandoffRefused,
@@ -75,7 +76,16 @@ const releaseTheHold = (desk: {
 // ---------------------------------------------------------------------------
 
 /** A Session control with nothing else attached. No browser, no run. */
-const bareControl = Effect.gen(function* () {
+/**
+ * A bare control, on its own run.
+ *
+ * A factory rather than a constant: the Evidence writer refuses to open a run
+ * directory that already exists, because two writers sharing a `runId` would
+ * interleave two sessions in one log with a `seq` that goes backwards. Every
+ * test that wants one gets its own run.
+ */
+const bareControl = () =>
+  Effect.gen(function* () {
   return yield* SessionControl
 }).pipe(
   Effect.provide(
@@ -83,7 +93,7 @@ const bareControl = Effect.gen(function* () {
       Layer.provideMerge(
         evidenceFiles({
           root: mkdtempSync(join(tmpdir(), "cua-machine-")),
-          runId: "machine",
+          runId: `machine-${randomUUID()}`,
           sessionId: "session-bare",
           // Nothing sensitive is in play: this control has no run and no inputs.
           // Saying so is spelled out rather than defaulted (ticket 08).
@@ -96,7 +106,7 @@ const bareControl = Effect.gen(function* () {
 
 it.live("a session starts owned by automation and says so", () =>
   Effect.gen(function* () {
-    const control = yield* bareControl
+    const control = yield* bareControl()
     const snapshot = yield* control.snapshot
 
     expect(snapshot.owner).toBe("automation")
@@ -111,7 +121,7 @@ it.live("a session starts owned by automation and says so", () =>
 
 it.live("taking control of a session nobody paused is refused, not ignored", () =>
   Effect.gen(function* () {
-    const control = yield* bareControl
+    const control = yield* bareControl()
     const refusal = yield* Effect.flip(control.takeControl("j.okafor"))
 
     if (!(refusal instanceof HandoffRefused)) throw new Error(String(refusal))
@@ -126,7 +136,7 @@ it.live("taking control of a session nobody paused is refused, not ignored", () 
 
 it.live("an unattended session refuses to pause, because nobody is listening", () =>
   Effect.gen(function* () {
-    const control = yield* bareControl
+    const control = yield* bareControl()
     const outcome = yield* control.pause({
       capability: "member.account-balance",
       version: "1.0.0",
@@ -147,7 +157,7 @@ it.live("an unattended session refuses to pause, because nobody is listening", (
 
 it.live("the machine walks AUTOMATION, PAUSED, HUMAN, RESUME_REQUESTED, AUTOMATION", () =>
   Effect.gen(function* () {
-    const control = yield* bareControl
+    const control = yield* bareControl()
     yield* control.attach("http://127.0.0.1:0")
 
     const paused = yield* Effect.forkChild(
@@ -234,7 +244,7 @@ it.live("the machine walks AUTOMATION, PAUSED, HUMAN, RESUME_REQUESTED, AUTOMATI
 
 it.live("acting after handing the session back is refused", () =>
   Effect.gen(function* () {
-    const control = yield* bareControl
+    const control = yield* bareControl()
     yield* control.attach("http://127.0.0.1:0")
 
     const paused = yield* Effect.forkChild(
