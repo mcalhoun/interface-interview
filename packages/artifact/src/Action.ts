@@ -22,6 +22,7 @@
 
 import { Schema } from "effect"
 import { TargetScopeSchema } from "@cua/surface"
+import { OutcomeCode } from "./BusinessOutcomes.ts"
 import { CapabilityTarget } from "./Target.ts"
 import { ValueRef } from "./Value.ts"
 
@@ -105,6 +106,63 @@ const ItemMatch = Schema.Struct({
 const Escalation = Schema.Struct({ escalate: Schema.String })
 
 /**
+ * What it means when the live list offers nothing matching.
+ *
+ * Two spellings, and the difference between them is the whole of what an
+ * Intervention teaches (ticket 13):
+ *
+ *   - `escalate: CODE` — *we do not know*. The list rendered, nothing in it
+ *     carried the tokens asked for, and whether that is the domain saying no or
+ *     the screen having changed is exactly the question. The run stops, and if
+ *     somebody is attending it, a person is asked.
+ *   - `outcome: CODE` — *this is an answer*. The same state, reclassified: the
+ *     application is telling the caller something true about its own domain, so
+ *     Replay returns it and nobody is woken.
+ *
+ * A document cannot start life in the second form. An Artifact author knows a
+ * selection can find nothing; they do not know what finding nothing *means* at
+ * an institution they have never seen. So `escalate` is what a hand-written or
+ * compiled document says, and `outcome` is what an Amendment writes after an
+ * Operator met the state, changed nothing, and confirmed that automation should
+ * handle it itself next time (ADR-0004).
+ *
+ * The code does not change across that promotion, and that is deliberate. What
+ * was learned is the *classification*, not the vocabulary: renaming the state at
+ * intervention time would let whoever happened to be on shift redefine a
+ * Capability's contract, which is the "smuggling the answer in" ADR-0004 rules
+ * out. The prose that explains the code to a caller is written into `outcomes:`
+ * by the Amendment, from the Intervention record.
+ *
+ * ## Why only `onNoMatch` has two forms
+ *
+ * `onMultiple` keeps one. SPEC: "two or more matches is a hard failure, never a
+ * coin flip". Several items carrying every token of the parameter is a Capability
+ * that has stopped being precise enough, and no amount of human confirmation
+ * turns that into an answer a caller should receive — picking one would return a
+ * balance for an account nobody asked for. The asymmetry in these two types is
+ * that rule, stated where it cannot be forgotten.
+ */
+const NoMatchDisposition = Schema.Union([
+  Escalation,
+  Schema.Struct({ outcome: OutcomeCode })
+])
+export type NoMatchDisposition = typeof NoMatchDisposition.Type
+
+/** The code this disposition names, whichever form it is in. */
+export const noMatchCode = (disposition: NoMatchDisposition): string =>
+  "outcome" in disposition ? disposition.outcome : disposition.escalate
+
+/**
+ * The declared Business Outcome a no-match reaches, or `undefined` while the
+ * state is still unclassified.
+ *
+ * The one place the engine asks "is this an answer or a stop", so the branch is
+ * a property of the document rather than a condition somewhere in the executor.
+ */
+export const noMatchOutcome = (disposition: NoMatchDisposition): string | undefined =>
+  "outcome" in disposition ? disposition.outcome : undefined
+
+/**
  * Choose one of the items a screen currently offers, and press it.
  *
  * This is the generic form of "click the savings account". Nothing about which
@@ -123,7 +181,7 @@ const SelectFromList = Schema.Struct({
   type: Schema.Literal("selectFromList"),
   list: ItemList,
   match: ItemMatch,
-  onNoMatch: Escalation,
+  onNoMatch: NoMatchDisposition,
   onMultiple: Escalation,
   /**
    * Why this list and this matching rule, and what would have to change on screen

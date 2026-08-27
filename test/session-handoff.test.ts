@@ -172,7 +172,12 @@ it.live("the machine walks AUTOMATION, PAUSED, HUMAN, RESUME_REQUESTED, AUTOMATI
     yield* control.returnControl({
       operator: "j.okafor",
       classification: "resolved",
-      detail: "authorized the account"
+      detail: "authorized the account",
+      // Ticket 13's one question, declined. This suite is about the transfer of
+      // control; a return that also amended a stored Capability would be testing
+      // two things at once, and `not_asked` is exactly what an episode where
+      // nobody answered should record.
+      nextTime: "not_asked"
     })
 
     const outcome = yield* Fiber.join(paused)
@@ -234,7 +239,8 @@ it.live("acting after handing the session back is refused", () =>
     yield* control.returnControl({
       operator: "j.okafor",
       classification: "unresolved",
-      detail: "could not reach a supervisor"
+      detail: "could not reach a supervisor",
+      nextTime: "not_asked"
     })
     const outcome = yield* Fiber.join(paused)
     expect(outcome.resumed).toBe(false)

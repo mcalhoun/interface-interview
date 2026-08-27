@@ -19,6 +19,7 @@
  */
 
 import { Result, Schema } from "effect"
+import { noMatchCode, noMatchOutcome } from "./Action.ts"
 import { CapabilityArtifact } from "./CapabilityArtifact.ts"
 import type { Assertion } from "./Checkpoint.ts"
 import type { ValueRef } from "./Value.ts"
@@ -196,11 +197,25 @@ const referentialProblems = (artifact: CapabilityArtifact): ReadonlyArray<string
       if (step.action.list.itemRole.trim() === "") {
         problems.push(`${where} selects from a list without saying what an item is`)
       }
-      if (step.action.onNoMatch.escalate.trim() === "") {
-        problems.push(`${where} declares no code to escalate under when nothing matches`)
+      if (noMatchCode(step.action.onNoMatch).trim() === "") {
+        problems.push(`${where} declares no code for when nothing matches`)
       }
       if (step.action.onMultiple.escalate.trim() === "") {
         problems.push(`${where} declares no code to escalate under when several match`)
+      }
+      // A learned no-match is a Business Outcome like any other, and is held to
+      // the same contract in both directions: it needs prose declaring what the
+      // code means to a caller, and declaring it here is what makes it reachable.
+      // Without this, an Amendment could promote a state to an answer and leave
+      // the caller with a code nothing explains.
+      const learned = noMatchOutcome(step.action.onNoMatch)
+      if (learned !== undefined) {
+        if (!declared.has(learned)) {
+          problems.push(
+            `${where}'s learned no-match outcome ${learned} is not declared in outcomes`
+          )
+        }
+        reachable.add(learned)
       }
     }
     // An `extract` binds its reading under the step's own id, and a Checkpoint on
@@ -224,13 +239,15 @@ const referentialProblems = (artifact: CapabilityArtifact): ReadonlyArray<string
     }
   }
 
-  // ...and the other direction. A declared outcome no Checkpoint can reach is a
+  // ...and the other direction. A declared outcome nothing can reach is a
   // document claiming a behaviour the Capability does not have, which is worse
   // than not documenting it: a reviewer approves the claim, and a caller writes a
   // branch that never runs.
   for (const code of declared) {
     if (!reachable.has(code)) {
-      problems.push(`outcome ${code} is declared but no checkpoint branch can reach it`)
+      problems.push(
+        `outcome ${code} is declared but no checkpoint branch or learned no-match can reach it`
+      )
     }
   }
 

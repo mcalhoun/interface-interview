@@ -32,8 +32,10 @@ import {
   type ControlReturnClassification,
   type HandoffSnapshot,
   type InterventionRecord,
+  type NextTimeAnswer,
   type OwnerTransition,
   SessionControl,
+  THE_QUESTION,
   describeOwner
 } from "@cua/session"
 
@@ -112,7 +114,8 @@ const route = (
               ? control.returnControl({
                   operator: field("operator") === "" ? "(unnamed)" : field("operator"),
                   classification: classificationOf(field("classification")),
-                  detail: field("detail") === "" ? "(no detail given)" : field("detail")
+                  detail: field("detail") === "" ? "(no detail given)" : field("detail"),
+                  nextTime: nextTimeOf(field("nextTime"))
                 })
               : undefined
 
@@ -137,6 +140,31 @@ const route = (
 
 const classificationOf = (value: string): ControlReturnClassification =>
   value === "resolved" ? "resolved" : "unresolved"
+
+/**
+ * The one question's answer, read off the form.
+ *
+ * Anything that is not one of the two answers is `not_asked`, which is the
+ * careful direction. A malformed post, a `curl` that omitted the field, or a
+ * future form that renames it all close the episode having learned nothing —
+ * rather than being read as a confirmation nobody gave. An Amendment is a
+ * durable change to a Capability's contract and this is the field that
+ * authorises one, so guessing here would be guessing about the wrong thing.
+ */
+const nextTimeOf = (value: string): NextTimeAnswer =>
+  value === "automation_handles_it" || value === "always_stop_here" ? value : "not_asked"
+
+/** How an answer reads back on a closed episode. */
+const describeAnswer = (answer: NextTimeAnswer): string => {
+  switch (answer) {
+    case "automation_handles_it":
+      return "Yes."
+    case "always_stop_here":
+      return "No, always stop."
+    case "not_asked":
+      return "Not answered."
+  }
+}
 
 const html = (body: string, status = 200): Response =>
   new Response(body, {
@@ -184,6 +212,8 @@ th, td { border: 1px solid #ccc; padding: .4rem .6rem; text-align: left; vertica
 th { width: 12rem; background: #f4f4f4; font-weight: normal; color: #555; }
 pre { background: #f7f7f7; border: 1px solid #ddd; padding: .8rem; overflow: auto; max-height: 22rem; font-size: 12px; }
 form { border: 1px solid #ccc; padding: 1rem; margin: 1rem 0; }
+fieldset { border: 1px solid #999; padding: .6rem 1rem; margin: 1rem 0; }
+legend { font-weight: bold; padding: 0 .4rem; }
 label { display: block; margin: .5rem 0; }
 input[type=text] { width: 24rem; padding: .3rem; }
 .refused { color: #900; font-weight: bold; }
@@ -276,6 +306,7 @@ Work in it directly &mdash; this page does not drive the browser.</p>
 <label><input type="radio" name="classification" value="unresolved">
   Not resolved &mdash; end the run and report that a person is needed</label>
 <label>What you did <input type="text" name="detail" placeholder="authorized the account as supervisor SUP7"></label>
+${theQuestion(record)}
 <button type="submit">Return control</button>
 </form>`
     : `<h2>Take control</h2>
@@ -285,6 +316,50 @@ Work in it directly &mdash; this page does not drive the browser.</p>
 </form>`
 
   return facts + actions + controls
+}
+
+/**
+ * The one question, and the only new thing on this page.
+ *
+ * SPEC gives the operator interface exactly one job beyond moving the state
+ * machine: resolve, per case, how automation should treat the state that stopped
+ * it. It is asked here, at return-of-control, because this is the only moment at
+ * which the person answering has actually seen the state — an upfront policy is
+ * written by somebody who has not.
+ *
+ * What is deliberately *not* asked: what to call the state, which class it
+ * belongs to, or what prose to put in the Capability. Naming it would let
+ * whoever is on shift redefine a document's contract, and asking for the class
+ * outright would make the classification a preference rather than a finding. The
+ * class is derived from this answer together with whether they did anything
+ * (`classify`, ADR-0004), and the prose is written from the record.
+ *
+ * The line above the radios says what the system observed them do, because that
+ * is the other input to the derivation and they should be able to see it. An
+ * Operator who fixed something by hand and did not record it can say so with the
+ * form above before answering.
+ *
+ * The default is "I would rather not say". A page that arrived pre-answered
+ * would make the commonest outcome of all — somebody hitting the button without
+ * reading — into a durable change to a Capability's contract.
+ */
+const theQuestion = (record: InterventionRecord): string => {
+  const observed =
+    record.actions.length === 0
+      ? "You have not recorded doing anything to this session."
+      : `You have recorded ${record.actions.length} action(s) on this session.`
+
+  return `<fieldset>
+<legend>${escape(THE_QUESTION)}</legend>
+<p class="note">${escape(observed)} That, and your answer, are together what decide
+  whether this state can be declared in the capability itself.</p>
+<label><input type="radio" name="nextTime" value="automation_handles_it">
+  Yes &mdash; automation should handle this state itself next time</label>
+<label><input type="radio" name="nextTime" value="always_stop_here">
+  No &mdash; automation should always stop here and ask for a person</label>
+<label><input type="radio" name="nextTime" value="not_asked" checked>
+  I would rather not say &mdash; change nothing about this capability</label>
+</fieldset>`
 }
 
 const resolvedList = (records: ReadonlyArray<InterventionRecord>): string =>
@@ -297,7 +372,9 @@ const resolvedList = (records: ReadonlyArray<InterventionRecord>): string =>
               escape(record.classification ?? "(open)")
             } by ${escape(record.operator ?? "(nobody)")} at ${
               escape(record.returnedAt ?? "")
-            } &mdash; ${escape(record.detail ?? "")}</td></tr>`
+            } &mdash; ${escape(record.detail ?? "")}<br>${
+              escape(`${THE_QUESTION} ${describeAnswer(record.nextTime)}`)
+            }</td></tr>`
           )
           .join("")
       }</table>`

@@ -32,7 +32,8 @@ import {
   describeOutputValue,
   listCapabilities,
   loadArtifact,
-  prepareInputs
+  prepareInputs,
+  writeArtifact
 } from "@cua/artifact"
 import type { EvidenceUnwritable } from "@cua/evidence"
 import { DEFAULT_OPERATOR_PORT, serveOperator } from "@cua/operator"
@@ -49,6 +50,7 @@ import {
   unsafeRepeats
 } from "@cua/policy"
 import {
+  type InterventionRecord,
   DEFAULT_HANDOFF_WAIT_MILLIS,
   SessionControl,
   handoffSession,
@@ -57,7 +59,13 @@ import {
 import { type SurfaceUnavailable, playwrightSurface } from "@cua/surface"
 import { Console, Effect, Layer, Result } from "effect"
 import type { Scope } from "effect/Scope"
-import { type ReplayResult, evidenceForRun, replayCapability } from "./index.ts"
+import {
+  type ReplayResult,
+  evidenceForRun,
+  proposeAmendment,
+  replayCapability,
+  scrubberFor
+} from "./index.ts"
 
 const EVIDENCE_ROOT = "evidence/replay"
 
@@ -80,6 +88,10 @@ const usage = (): string =>
     "                    checkpoint is a hard failure, because nobody is watching",
     "  --operatorPort <n>       port for the operator interface (default 4180)",
     "  --handoffWait <seconds>  how long a paused run waits for someone",
+    "  --noAmend         do not store what an intervention taught this capability.",
+    "                    Without it, an operator answering yes to the one question",
+    "                    at return-of-control cuts a new version and prints the diff",
+    "  --amendTo <ver>   the version an amendment is cut as (default: next minor)",
     "  --expireSessionAfter <n>",
     "                    arm Heritage Core's one-shot session-expiry toggle after",
     "                    n page requests, to watch a mid-flow expiry be recovered",
@@ -139,7 +151,8 @@ const RESERVED = new Set([
   "policy",
   "operatorPort",
   "handoffWait",
-  "expireSessionAfter"
+  "expireSessionAfter",
+  "amendTo"
 ])
 
 const report = (
@@ -198,6 +211,84 @@ const report = (
     yield* Console.log("")
     yield* Console.log(`policy:   ${policy.name} (${policy.source})`)
     yield* Console.log(`evidence: ${result.evidenceDirectory}`)
+  })
+
+/**
+ * Store what the run's Interventions taught the Capability, and show the diff.
+ *
+ * ## Why this happens without a further confirmation
+ *
+ * Because the confirmation already happened. SPEC gives the operator interface
+ * one question, asked of the person who had just resolved the state, and this is
+ * what answering it *means*. A second "are you sure" at the terminal would put
+ * the decision back with whoever launched the run — who has not seen the screen —
+ * and turn a per-case judgement into an approval step, which is the upfront
+ * policy ADR-0004 exists to avoid.
+ *
+ * What protects the store is not a prompt. It is that the change is confined to
+ * one shape (`declareLearnedNoMatch`), lands in a *new immutable file* beside the
+ * old one, and is printed as a diff the moment it is written. Nothing is
+ * replaced, so nothing is lost, and the review the diff exists for happens before
+ * anybody promotes the new version rather than before it is stored.
+ *
+ * `--noAmend` is there for the case where somebody is demonstrating the handoff
+ * and does not want a version cut, not as a safety catch.
+ */
+const amend = (
+  artifact: CapabilityArtifact,
+  episodes: ReadonlyArray<InterventionRecord>,
+  scrub: (text: string) => string,
+  argv: Argv
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    if (argv.switches.has("noAmend")) return
+
+    for (const record of episodes) {
+      const proposal = proposeAmendment({
+        artifact,
+        record,
+        scrub,
+        ...(argv.options["amendTo"] === undefined
+          ? {}
+          : { version: argv.options["amendTo"] })
+      })
+
+      // Silent for the ordinary case. Most runs raise no Intervention, and most
+      // Interventions teach nothing; saying so every time would train everyone
+      // to stop reading the line that matters.
+      if (proposal._tag === "Unchanged") continue
+
+      if (proposal._tag === "Refused") {
+        yield* Console.error("")
+        yield* Console.error(`AMENDMENT REFUSED  ${proposal.refusal.message}`)
+        yield* Console.error(
+          "  the operator's answer was recorded in the evidence; the capability is unchanged"
+        )
+        continue
+      }
+
+      const stored = writeArtifact(ARTIFACTS_DIRECTORY, proposal.amended)
+      if (Result.isFailure(stored)) {
+        yield* Console.error("")
+        yield* Console.error(`AMENDMENT NOT STORED  ${stored.failure.message}`)
+        continue
+      }
+
+      yield* Console.log("")
+      yield* Console.log(
+        `LEARNED  ${proposal.amended.capability}@${proposal.amended.version} ` +
+          `(${proposal.learnedClass})`
+      )
+      yield* Console.log(`  ${proposal.because}`)
+      yield* Console.log(`  written to ${stored.success}`)
+      yield* Console.log("")
+      yield* Console.log(proposal.diff)
+      yield* Console.log("")
+      yield* Console.log(
+        `  both sides above are rendered by the same formatter, so this is a diff of what ` +
+          `the two versions mean rather than of how they are laid out`
+      )
+    }
   })
 
 const run = (
@@ -290,22 +381,36 @@ const run = (
       handoffSession.pipe(Layer.provideMerge(control))
     )
 
-    const result = yield* Effect.gen(function* () {
+    const ran = yield* Effect.gen(function* () {
       // Attaching the interface is what makes the run attended. An unattended
       // run has nobody to escalate to, so the engine reports a hard failure
       // rather than pausing for someone who is not coming.
+      const control = yield* SessionControl
       if (attended) {
         const operator = yield* serveOperator({
-          control: yield* SessionControl,
+          control,
           port: Number(argv.options["operatorPort"] ?? DEFAULT_OPERATOR_PORT)
         })
         yield* Console.log(`operator interface: ${operator.origin}`)
       }
 
-      return yield* replayCapability({ artifact, inputs: inputs.success, baseUrl, runId })
+      const result = yield* replayCapability({
+        artifact,
+        inputs: inputs.success,
+        baseUrl,
+        runId
+      })
+
+      // Every episode this Session closed, read once, after the run is over.
+      // The interventions are the input to the amendment below and nothing else
+      // in this file reads the Session, which is what keeps "what a person did"
+      // out of the executor's decisions.
+      return { result, episodes: (yield* control.snapshot).resolved }
     }).pipe(Effect.provide(services))
 
+    const { result } = ran
     yield* report(result, policy, argv.switches.has("json"))
+    yield* amend(artifact, ran.episodes, scrubberFor(inputs.success), argv)
 
     // A Business Outcome exits zero: the application answered and the answer is
     // the product. An Intervention does not, because nothing was produced and a

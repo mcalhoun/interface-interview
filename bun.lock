@@ -87,6 +87,7 @@
       "name": "@cua/session",
       "version": "0.0.0",
       "dependencies": {
+        "@cua/artifact": "workspace:*",
         "@cua/evidence": "workspace:*",
         "effect": "4.0.0-rc.112",
       },

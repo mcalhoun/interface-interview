@@ -142,8 +142,12 @@ describe("the catalog lists what is stored", () => {
       const good = writeArtifact(directory, shippedArtifact())
       if (Result.isFailure(good)) throw new Error(good.failure.message)
 
-      writeArtifact(directory, { ...shippedArtifact(), capability: "broken.capability" })
-      writeFileSync(join(directory, "broken.capability", "1.0.0.yaml"), "capability: {\n")
+      const broken = { ...shippedArtifact(), capability: "broken.capability" }
+      writeArtifact(directory, broken)
+      // Corrupt the version that was actually written. Hard-coding 1.0.0 here
+      // silently stopped corrupting anything once the shipped artifact moved to
+      // 1.1.0, leaving a loadable document beside the unloadable one.
+      writeFileSync(join(directory, "broken.capability", `${broken.version}.yaml`), "capability: {\n")
 
       const catalog = readCatalog(directory)
       // The working one still lists. A catalog that fell over entirely because

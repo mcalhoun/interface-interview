@@ -333,7 +333,11 @@ export const sessionControl = (
                   ...held,
                   returnedAt: now(),
                   classification: "unattended",
-                  detail: `no operator took control within ${waitMillis}ms`
+                  detail: `no operator took control within ${waitMillis}ms`,
+                  // Nobody arrived, so nobody was asked. Left explicit rather
+                  // than defaulted, so the record cannot be read as an interface
+                  // that forgot to ask.
+                  nextTime: "not_asked"
                 }
             return [
               { answered, closed },
@@ -357,7 +361,9 @@ export const sessionControl = (
               stepId: request.stepId,
               operator: "(nobody)",
               classification: "unattended",
-              detail: settled.closed.detail ?? "the wait expired"
+              detail: settled.closed.detail ?? "the wait expired",
+              // Nobody arrived, so the one question was never put to anybody.
+              nextTime: "not_asked"
             })
             return {
               resumed: false,
@@ -457,7 +463,11 @@ export const sessionControl = (
             operator: body.operator,
             returnedAt: now(),
             classification: body.classification,
-            detail: body.detail
+            detail: body.detail,
+            // The answer to the one question, recorded on the episode it was
+            // asked about. Ticket 13's Amendment reads it from here, together
+            // with `actions`, which is the other half of ADR-0004's table.
+            nextTime: body.nextTime
           },
           // Not `automation`. The Operator has finished; the automation has not
           // yet noticed. Those are two facts and this state keeps them apart.
@@ -470,7 +480,8 @@ export const sessionControl = (
               stepId: record.intervention.stepId,
               operator: body.operator,
               classification: body.classification,
-              detail: body.detail
+              detail: body.detail,
+              nextTime: body.nextTime
             })
           ),
           // Only now: the run wakes to a state that already says it may proceed.

@@ -16,8 +16,12 @@ export type {
   InterventionOutcome,
   InterventionRecord,
   InterventionRequest,
+  NextTimeAnswer,
   OperatorAction
 } from "./Intervention.ts"
+
+export type { Learned } from "./Learning.ts"
+export { classify, THE_QUESTION } from "./Learning.ts"
 
 export type { ControlOwner } from "./Session.ts"
 export {

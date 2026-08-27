@@ -6,6 +6,9 @@
  * loop fails to compile. See `engine.ts` and ADR-0003.
  */
 
+export type { AmendmentRequest, ProposedAmendment } from "./amend.ts"
+export { proposeAmendment } from "./amend.ts"
+
 export type { CheckpointOutcome, EvaluationContext, StepReadings } from "./checkpoint.ts"
 export { DEFAULT_CHECKPOINT_MILLIS, evaluate as evaluateCheckpoint, resolveValue } from "./checkpoint.ts"
 
