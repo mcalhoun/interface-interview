@@ -74,10 +74,10 @@ export type {
   StepOutcome,
   Trajectory
 } from "./Trajectory.ts"
-export { isCompilable, parameterNames } from "./Trajectory.ts"
+export { isCompilable, literalsTyped, parameterNames } from "./Trajectory.ts"
 
 export type { DiscoveredSecrets } from "./redaction.ts"
-export { asSecret, discoveredSecrets } from "./redaction.ts"
+export { asSecret, discoveredSecrets, literalToCheck } from "./redaction.ts"
 
 export type { ObservationOptions, StepSummary } from "./prompt.ts"
 export { SYSTEM_INSTRUCTIONS, decisionPrompt, observation } from "./prompt.ts"
@@ -96,6 +96,15 @@ export {
   isProviderName,
   providerFor
 } from "./provider.ts"
+
+export type { CompileOptions } from "./compile.ts"
+export {
+  CompilationRefused,
+  compileArtifact,
+  PRODUCT_UNIDENTIFIED,
+  shapeOf,
+  strategyFor
+} from "./compile.ts"
 
 export type { DiscoveryOptions } from "./loop.ts"
 export { DiscoveryFailed, discover } from "./loop.ts"
