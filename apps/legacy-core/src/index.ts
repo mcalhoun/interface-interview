@@ -5,8 +5,13 @@
  * hostility is a feature rather than set dressing. See `render.ts`.
  */
 
-export type { Account, Member } from "./members.ts"
-export { findAccount, findMember } from "./members.ts"
+export type { Account, AuthorizationAttempt, Member, Restriction } from "./members.ts"
+export {
+  authorizationAccepted,
+  authorizationAttempted,
+  findAccount,
+  findMember
+} from "./members.ts"
 export { handle } from "./routes.ts"
 export type { LegacyCore, LegacyCoreOptions } from "./server.ts"
 export { DEFAULT_PORT, serve } from "./server.ts"

@@ -21,7 +21,13 @@
  * See docs/adr/0001-accessibility-tree-is-the-only-observation-channel.md.
  */
 
-import type { Account, Member } from "./members.ts"
+import {
+  type Account,
+  type AuthorizationAttempt,
+  type Member,
+  authorizationAccepted,
+  authorizationAttempted
+} from "./members.ts"
 
 export const DOCTYPE =
   '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">'
@@ -191,15 +197,58 @@ export const accountDetailPage = (member: Member, account: Account): string => {
   )
 }
 
-/** The document that lives inside the Account Detail iframe. */
-export const accountDetailPanel = (member: Member, account: Account): string => `${DOCTYPE}
+/**
+ * The document that lives inside the Account Detail iframe.
+ *
+ * Two faces. Ordinarily it is the figures. When the account carries a
+ * supervisor hold and nobody has overridden it, it is the restriction panel
+ * instead — and crucially the words "Available Balance" and "Current Balance"
+ * are then *not on the page at all*. That is what a checkpoint asserting the
+ * balance cell is present actually meets, and it is why the failure looks
+ * nothing like an exception.
+ *
+ * The override form posts straight back here as a GET with the supervisor's
+ * credentials on the query string, so releasing the hold is a full page load
+ * inside the frame and Heritage Core keeps no server-side session state. The
+ * parent Account Detail page never navigates, which is exactly what a person
+ * clicking Authorize in the live window would produce.
+ */
+export const accountDetailPanel = (
+  member: Member,
+  account: Account,
+  attempt: AuthorizationAttempt = { supervisorId: "", authorizationCode: "" }
+): string => {
+  const withheld = account.restriction !== undefined && !authorizationAccepted(attempt)
+  const body = withheld
+    ? restrictionPanel(member, account, account.restriction!, attempt)
+    : balancePanel(member, account, attempt)
+  return `${DOCTYPE}
 <html>
 <head>
 <title>Account Detail Panel</title>
 <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
 </head>
 <body bgcolor="#ffffff" topmargin="4" leftmargin="4" marginwidth="0" marginheight="0">
-<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+${body}
+</body>
+</html>
+`
+}
+
+/** The ordinary panel: every figure an operator came for. */
+const balancePanel = (
+  member: Member,
+  account: Account,
+  attempt: AuthorizationAttempt
+): string => {
+  const released =
+    account.restriction === undefined
+      ? ""
+      : `<br>
+<font face="Arial" size="1" color="#404040">Restriction ${escape(
+          account.restriction.code
+        )} overridden by supervisor ${escape(attempt.supervisorId.trim())}.</font>`
+  return `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
 <tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>${escape(account.description)}</b></font></td></tr>
 <tr bgcolor="#ffffff"><td width="200">${caption("Account Number")}</td><td>${caption(account.accountNumber)}</td></tr>
 <tr bgcolor="#ffffff"><td>${caption("Account Type")}</td><td>${caption(account.type)}</td></tr>
@@ -208,10 +257,48 @@ export const accountDetailPanel = (member: Member, account: Account): string => 
 <tr bgcolor="#ffffff"><td>${caption("Current Balance")}</td><td>${caption(account.currentBalance)}</td></tr>
 <tr bgcolor="#ffffff"><td>${caption("Status")}</td><td>${caption(account.status)}</td></tr>
 <tr bgcolor="#ffffff"><td>${caption("Last Activity")}</td><td>${caption(account.lastActivityOn)}</td></tr>
+</table>${released}`
+}
+
+/**
+ * The withheld panel, plus the override a supervisor uses to release it.
+ *
+ * The account's identifying rows stay on screen, because the automation is not
+ * lost — it is on precisely the right account and has been told no. An Operator
+ * arriving at this screen needs to see which account they are authorizing.
+ */
+const restrictionPanel = (
+  member: Member,
+  account: Account,
+  restriction: Account["restriction"] & {},
+  attempt: AuthorizationAttempt
+): string => {
+  const rejected = authorizationAttempted(attempt)
+    ? `<tr bgcolor="#ffffff"><td colspan="2"><font face="Arial" size="2" color="#800000"><b>Authorization not accepted. The override code is four digits.</b></font></td></tr>`
+    : ""
+  return `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>${escape(account.description)}</b></font></td></tr>
+<tr bgcolor="#ffffff"><td width="200">${caption("Account Number")}</td><td>${caption(account.accountNumber)}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Account Type")}</td><td>${caption(account.type)}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Member Number")}</td><td>${caption(member.memberNumber)}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Status")}</td><td>${caption(account.status)}</td></tr>
 </table>
-</body>
-</html>
-`
+<br>
+<form method="get" action="/account/panel">
+<input type="hidden" name="memberNumber" value="${escape(member.memberNumber)}">
+<input type="hidden" name="accountNumber" value="${escape(account.accountNumber)}">
+<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>Account Restriction</b></font></td></tr>
+<tr bgcolor="#ffffff"><td colspan="2"><font face="Arial" size="2" color="#800000"><b>ACCOUNT RESTRICTED - SUPERVISOR AUTHORIZATION REQUIRED</b></font></td></tr>
+<tr bgcolor="#ffffff"><td width="200">${caption("Restriction Code")}</td><td>${caption(restriction.code)}</td></tr>
+<tr bgcolor="#ffffff"><td colspan="2">${caption(restriction.notice)}</td></tr>
+${rejected}
+<tr bgcolor="#ffffff"><td>${caption("Supervisor ID")}</td><td><input type="text" name="supervisorId" size="10" maxlength="8" title="Supervisor ID"></td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Authorization Code")}</td><td><input type="text" name="authorizationCode" size="8" maxlength="4" title="Authorization Code"></td></tr>
+<tr bgcolor="#ffffff"><td colspan="2"><input type="submit" value="Authorize"></td></tr>
+</table>
+</form>`
+}
 
 /**
  * Member Not Found: what Heritage Core shows when a well-formed member number is
