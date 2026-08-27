@@ -10,6 +10,7 @@
     "app": "bun run apps/legacy-core/src/main.ts",
     "surface": "bun run packages/surface/src/cli.ts",
     "replay": "bun run packages/replay/src/cli.ts",
+    "discover": "bun run packages/agent/src/cli.ts",
     "operator": "bun run apps/operator/src/main.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun run --bun vitest run"
@@ -24,6 +25,7 @@
     "@cua/replay": "workspace:*",
     "@cua/session": "workspace:*",
     "@cua/surface": "workspace:*",
+    "@effect/ai-openai": "4.0.0-rc.112",
     "effect": "4.0.0-rc.112"
   },
   "devDependencies": {
