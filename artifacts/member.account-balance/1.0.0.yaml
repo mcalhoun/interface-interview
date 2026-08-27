@@ -1,0 +1,603 @@
+# Capability Artifact — member.account-balance 1.0.0
+#
+# Read this document instead of the code. It is meant to be approvable on its own:
+# what the capability does, what it needs, what it returns, how each step verifies
+# itself, and why each control is identified the way it is.
+#
+# Immutable. A change is a new version file beside this one, so 1.0.0 and 1.1.0
+# can be diffed and the difference read directly.
+#
+# ON THIS BEING 1.0.0 AND NOT 1.1.0
+#
+# Ticket 09 replaced the step that opened the savings account, and ticket 06 added
+# the `recoverable:` section at the foot of this file. Both are corrections to a
+# hand-written document, made before anything ran against a production
+# installation, and neither is the kind of change the immutability rule is there
+# to make visible. The rule exists so that a *learned* change — an
+# outcome an Intervention taught the system — sits in its own file next to the
+# intervention record that justified it, which is what SPEC's scenario table
+# reserves v1.1.0 and v1.2.0 for. Cutting a version here would take one of those
+# slots and blur the one diff worth showing a reviewer. Which scenario each slot
+# belongs to is recorded in SPEC, not here: a member number has no business being
+# written into an Artifact, in a comment or anywhere else (ADR-0008), and the
+# evidence scanner enforces that without caring where in the file it appears.
+#
+# WHAT TICKET 06 CHANGED
+#
+# A `recoverable:` section declaring two transient states this capability can get
+# past unattended, with the bound on each written down in numbers; an optional
+# `operatorPassword` input used only by the re-authentication remedy and by
+# nothing on the happy path; and a `withinMillis` on two checkpoints, so a state
+# that will not settle by waiting reaches its recovery rule promptly instead of
+# burning the default. No step, target, output or strategy changed.
+#
+# WHAT TICKET 09 CHANGED
+#
+# One step and one input. `open-savings-account` clicked a link whose name was
+# written into this document — "Primary Savings" — which is a tenant's label
+# sitting in a vendor-level capability, and it was the least robust thing in the
+# flow. It is now `open-account`, a generic `selectFromList` that reads whatever
+# the account list currently offers and picks the item matching the `accountType`
+# parameter by token subset (ADR-0007).
+#
+# Three consequences a reviewer should check for themselves:
+#
+#   1. The capability now serves every account type, not just savings. The same
+#      six steps return the checking balance when called with `accountType`
+#      "Checking", with no second discovery run.
+#   2. A tenant labelling the account "Regular Savings" still matches "Savings",
+#      so most tenant variation needs no override at all.
+#   3. Nothing is hardcoded that was not hardcoded before — less, in fact. The
+#      legal values below were read off the account list during discovery, and
+#      the default records the goal's own word.
+
+capability: member.account-balance
+version: 1.0.0
+title: Read a member's account balance
+authored: hand-written
+
+summary: >
+  Looks a member up by number in Heritage Core Member Services, opens one of
+  their accounts, and reads back the available and current balances. Which
+  account is a parameter; omitted, it is the member's savings account, because
+  that is what the goal this capability was discovered from asked for.
+
+  Returns two balances when the member exists, and the MEMBER_NOT_FOUND outcome
+  when the number searched is not on file. Both are answers. A caller has to
+  handle both, and neither is an error — see the outcomes section below.
+
+  Read-only. Nothing in this capability changes anything in the core banking
+  system: every action is a navigation, a search field, a selection, or a
+  reading. That is what makes it safe to replay unattended.
+
+  Written by hand at ticket 03, before Discovery existed, so that the artifact
+  schema had to be genuinely executable before anything started generating one.
+  Ticket 11's compiler emits documents of exactly this shape from a real
+  discovery run.
+
+# Which kind of surface, and where the flow starts. Deliberately no origin: which
+# institution's installation this runs against is supplied at replay time, so the
+# same document serves every tenant running this vendor product.
+surface:
+  kind: web
+  product: Heritage Core Member Services (MSS 4.02.11)
+  entry: /
+
+inputs:
+  memberId:
+    type: string
+    description: >
+      The member's account number as an operator would read it off a statement.
+      Heritage Core's own member number, not a legacy cross-reference number.
+    # Sensitive by default. Stated explicitly here because a reviewer should not
+    # have to know the default to know the answer. See ADR-0008.
+    sensitive: true
+    required: true
+    pattern: "^[0-9]{4,10}$"
+    discoveredFrom: >
+      Hand-written. Ticket 11 derives this from the provenance the discovery
+      agent recorded against the value it typed into the search field.
+
+  accountType:
+    type: enum
+    description: >
+      Which of the member's accounts to read. Say as little as identifies it:
+      "Savings" and "Checking" are what a caller means, and the screen's own
+      wording for the same product varies between institutions.
+    # A screen label, not a runtime value. It names a product an institution
+    # offers, carries nothing about who the member is, and appears verbatim in
+    # every screenshot of the account list, so classifying it sensitive would
+    # scrub a word that is already public and make the record harder to read for
+    # no protection at all. Stated in writing because the default is `true`
+    # (ADR-0008).
+    sensitive: false
+    required: false
+    # Read off the account list on Member Detail during discovery, not written
+    # here by a human choosing what ought to be allowed. Legality is judged by
+    # the same token-subset rule selection uses, so "Savings" is a legal way to
+    # ask for "Primary Savings" while "Money Market" is refused before a browser
+    # opens.
+    values: ["Primary Savings", "Checking"]
+    # The goal said "savings", and the goal's own word is what gets recorded —
+    # not the label it happened to match here. That is what makes the default
+    # portable: a tenant labelling the account "Regular Savings" still matches
+    # it, so the capability's out-of-the-box behaviour survives the move with no
+    # override. Recording "Primary Savings" instead would have quietly turned
+    # one institution's vocabulary into the contract.
+    default: Savings
+    discoveredFrom: >
+      goal term 'savings' ⊂ label 'Primary Savings'. The account list offered
+      "Primary Savings" and "Checking"; the goal asked for the savings balance;
+      the only label carrying the token 'savings' was "Primary Savings". That
+      inference was made once, by the model, at discovery time, and recorded
+      here. Replay never repeats it — it matches tokens against the live list.
+
+  operatorPassword:
+    type: string
+    description: >
+      The password for the workstation's teller sign-on, used only if Heritage
+      Core times the session out part-way through the flow. Nothing on the happy
+      path touches it.
+
+      Optional, and deliberately without a default: an artifact is a document
+      people read and review, and a credential with a default value in one is a
+      credential in a git repository. A run that meets an expired session without
+      this supplied stops with a failure naming the remedy step that could not
+      run, which is the right outcome — automation that cannot prove who it is
+      should not be signing anything on.
+    sensitive: true
+    required: false
+    discoveredFrom: >
+      Hand-written, from the sign-on screen the session-expiry condition lands on.
+
+outputs:
+  availableBalance:
+    type: money
+    currency: USD
+    description: >
+      Funds the member can withdraw right now. This is the figure to quote to a
+      member asking what they can spend.
+    from:
+      step: read-available-balance
+
+  currentBalance:
+    type: money
+    currency: USD
+    description: >
+      The ledger balance, including deposits that have not yet cleared. Larger
+      than the available balance when a hold is in force.
+    from:
+      step: read-current-balance
+
+# The other half of this capability's signature. `outputs` above says what comes
+# back when the flow completes; this says what comes back when Heritage Core's own
+# domain answers something else instead.
+#
+# Every code here is reachable from an `orOutcome` branch on some step's
+# checkpoint below, and every branch's code appears here. The artifact is rejected
+# at parse time if either is untrue, so this list is the complete set of values a
+# caller can receive besides the balances — not a sample of them.
+outcomes:
+  MEMBER_NOT_FOUND:
+    title: No member record exists for the number searched.
+    summary: >
+      The search ran, Heritage Core understood it, and the answer is that the
+      credit union has no member with that number. Nothing is broken and nothing
+      needs looking at: this is a fact about the membership, and it is the answer
+      a caller asked for as much as a balance would have been.
+
+      A caller should treat this the way a teller does — tell the member the
+      number was not found and check it with them. It is not a condition to retry,
+      escalate or page anyone about, and a run that ends here has succeeded.
+
+      Worth knowing how invisible this is from outside the screen: Heritage Core
+      answers it with HTTP 200 and a perfectly well-formed page. Nothing throws,
+      nothing times out, and no status code distinguishes it from a member who
+      does exist. It is recognisable only by reading the screen, which is why the
+      recognition lives in a checkpoint branch and not in error handling.
+    discoveredFrom: >
+      Hand-written at 1.0.0 alongside the rest of this document. In the shape
+      ticket 11's compiler will emit, this field records the intervention that
+      produced the outcome: the operator who met this screen, observed it,
+      changed nothing and returned control, and the confirmation that made it
+      declarable rather than an escalation.
+
+steps:
+  # ---------------------------------------------------------------------------
+  - id: open-member-search
+    intent: Land on the Member Services search screen with an empty search form.
+    action:
+      type: navigate
+      path:
+        from: constant
+        text: /
+    checkpoint:
+      description: The Member Number Search panel is on screen and ready to accept a number.
+      expect:
+        - assert: textPresent
+          text: Member Number Search
+        - assert: targetPresent
+          target:
+            role: textbox
+            name: Member Number
+            within:
+              name: Member Number Search
+            strategy: scoped-accessible-name
+            robustness: >
+              Heritage Core has no labels, ids or test hooks; the accessible name
+              comes from the input's title attribute, which is what a screen
+              reader would announce and therefore the most stable thing about it.
+
+              The scope is load-bearing rather than decorative. The same screen
+              carries a Cross-Reference Lookup panel with a field named
+              "Member Number (Legacy)", and a partial name match returns both.
+              Scoping to the panel the caption "Member Number Search" heads picks
+              the right one. Choosing wrong submits to /xref, which returns a
+              perfectly valid page that is not Member Detail — a failure nothing
+              would raise an exception about.
+
+  # ---------------------------------------------------------------------------
+  - id: enter-member-number
+    intent: Type the member number into the search panel's own number field.
+    action:
+      type: fill
+      target:
+        role: textbox
+        name: Member Number
+        within:
+          name: Member Number Search
+        strategy: scoped-accessible-name
+        robustness: >
+          The same target as the checkpoint above, for the same reasons. The
+          field's neighbour in this panel is a Branch box that already carries a
+          default, so an ordinal would be fragile where the name is not.
+      value:
+        from: parameter
+        name: memberId
+    checkpoint:
+      description: The member number is sitting in the search field, not in the legacy one.
+      expect:
+        - assert: targetReads
+          target:
+            role: textbox
+            name: Member Number
+            within:
+              name: Member Number Search
+            strategy: scoped-accessible-name
+            robustness: >
+              Reading the value back out of the same control that was filled is
+              what makes the fill verifiable. Typing into the wrong field is the
+              failure a screen full of near-duplicate captions actually produces,
+              and it raises nothing at all.
+          equals:
+            from: parameter
+            name: memberId
+
+  # ---------------------------------------------------------------------------
+  - id: run-member-search
+    intent: Submit the search and arrive at the member's record.
+    action:
+      type: click
+      target:
+        role: button
+        name: Search
+        strategy: accessible-name
+        robustness: >
+          The submit control's accessible name comes from its value attribute.
+          The Cross-Reference panel's submit reads "Look Up", so no scope is
+          needed here — but note that a tenant whose button reads "Find" has no
+          token in common with "Search" and will not resolve. That is a genuine
+          incompatibility rather than a cosmetic one, and it is meant to surface
+          as an ordinary replay failure.
+    checkpoint:
+      description: Member Detail is showing, and the search screen is behind us.
+      expect:
+        - assert: textPresent
+          text: Member Detail
+        # Asserting the search screen is *gone* is how this step proves it
+        # navigated. Without it, a page that merely shares a caption with the
+        # previous one would pass.
+        - assert: textAbsent
+          text: Cross-Reference Lookup
+        - assert: targetPresent
+          target:
+            role: cell
+            name: Share and Deposit Accounts
+            strategy: accessible-name
+            robustness: >
+              The account list's own heading cell. Present on every member record
+              regardless of how many accounts the member holds, so it confirms we
+              are on Member Detail rather than confirming this member's data.
+      # Shorter than the default on purpose. Every screen in this application is
+      # server rendered and arrives whole, so a Member Detail that is not here
+      # within a second is not on its way — it is a different screen, and the
+      # sooner the outcome branch below and the recoverable conditions at the foot
+      # of this file get a look at it, the better.
+      withinMillis: 1000
+      # The other screen this submit legitimately reaches. Tried only when the
+      # expectation above does not hold, so a member record can never be re-read
+      # as an absence.
+      orOutcome:
+        - code: MEMBER_NOT_FOUND
+          when:
+            # The screen heading. Heritage Core's own words for this state, and
+            # the thing an operator reads first.
+            - assert: textPresent
+              text: Member Not Found
+            # And the message under it, so the branch cannot be satisfied by a
+            # heading alone on some future screen that borrows the phrase. The
+            # assertion stops before the number itself: the sentence opener is
+            # screen text, the number is this run's input, and an artifact carries
+            # no runtime data.
+            - assert: textPresent
+              text: No member record found for member number
+
+  # ---------------------------------------------------------------------------
+  - id: open-account
+    intent: Open the account the caller asked for, whichever of them that is.
+    action:
+      type: selectFromList
+      # Which items are on offer. Not which item is wanted — that is the
+      # parameter's job, and keeping the two apart is what makes this one step
+      # serve every account type.
+      list:
+        within:
+          name: Share and Deposit Accounts
+        itemRole: link
+      match:
+        against:
+          from: parameter
+          name: accountType
+        strategy: tokenSubset
+      # Both ways this can fail to land on exactly one item, declared rather than
+      # discovered at 3am. They are different facts about the world and they
+      # escalate under different codes.
+      onNoMatch:
+        escalate: NO_MATCHING_ITEM
+      onMultiple:
+        escalate: AMBIGUOUS_MATCH
+      robustness: >
+        The account list is a table headed by the caption "Share and Deposit
+        Accounts", and each account is a link whose accessible name is the
+        description the institution configured. Scoping to that table is what
+        keeps the "Return to Member Search" link at the foot of the page out of
+        the candidate set; the caption is a childless cell in the table's first
+        row, and the scope rule climbs from it to the table it heads.
+
+        Matching is token subset against the live labels, in one direction: every
+        token of the parameter must appear in the label. "Savings" therefore
+        selects "Primary Savings" here and "Regular Savings" at an institution
+        that names it that way, which is the whole reason this is a selection
+        rather than a click on a name written into this document. The previous
+        version clicked a link literally named "Primary Savings" and was the
+        least robust step in the flow.
+
+        What would break it: an institution that renames the panel heading, or
+        one that renders accounts as plain text rather than links. What will not
+        break it: a different label for the account itself, a different number of
+        accounts, or a different order. Two accounts whose labels both carry
+        every token of the parameter stop the run and list both, rather than
+        opening one of them and returning a balance for an account nobody asked
+        for.
+    checkpoint:
+      description: Account Detail is showing, with the balance panel loaded inside its frame.
+      expect:
+        - assert: textPresent
+          text: Account Detail
+        - assert: targetPresent
+          target:
+            role: cell
+            label: Available Balance
+            strategy: caption-label
+            robustness: >
+              Waiting for the balance cell itself, not merely for the page title,
+              because the figures live in a separate document inside an iframe
+              that loads after its parent. Asserting on the outer chrome would
+              pass while the panel was still blank.
+      # Longer than the outer page needs, because the figures arrive in a second
+      # document inside an iframe and some members' panels take most of a second.
+      #
+      # The right answer to lateness is waiting, and nothing here has to act to
+      # get it: the surface adapter settles on the page's load event before it
+      # reports what it sees, and this bound is the backstop for a panel that
+      # arrives after that. No recovery rule below covers lateness, and adding one
+      # would be a second mechanism for waiting.
+      #
+      # Bounds are not free in the other direction either: this is also how long
+      # a genuinely wrong screen sits here before anything says so, and before a
+      # recoverable condition gets its look at it. Roughly triple the slowest
+      # panel observed, and no more.
+      withinMillis: 2500
+
+  # ---------------------------------------------------------------------------
+  - id: read-available-balance
+    intent: Read the available balance out of the account panel.
+    action:
+      type: extract
+      target:
+        role: cell
+        label: Available Balance
+        strategy: caption-label
+        robustness: >
+          Heritage Core lays every figure out as a caption cell followed by a
+          value cell, with no markup relating the two. `label` is the strategy
+          that reads that pattern: it finds the value cell whose preceding
+          non-control leaf in the same row is the caption "Available Balance".
+
+          Frame-agnostic. This cell is inside an unnamed iframe and the target
+          says nothing about that, which is what lets a tenant that renders the
+          panel inline match the same description.
+    checkpoint:
+      description: A currency amount was read, not an empty cell or a system message.
+      expect:
+        # An extract that quietly returns "" or "N/A" is the silent failure mode
+        # of reading a screen. Asserting the shape of what came back is the only
+        # thing that catches it.
+        - assert: stepRead
+          step: read-available-balance
+          matches: "^\\$[0-9,]+\\.[0-9]{2}$"
+
+  # ---------------------------------------------------------------------------
+  - id: read-current-balance
+    intent: Read the current ledger balance out of the same panel.
+    action:
+      type: extract
+      target:
+        role: cell
+        label: Current Balance
+        strategy: caption-label
+        robustness: >
+          The same caption-cell pattern as the available balance, one row down.
+          Kept as a separate step rather than folded into the one above because a
+          step is the unit that carries a checkpoint, and each figure deserves
+          its own.
+    checkpoint:
+      description: A second currency amount was read.
+      expect:
+        - assert: stepRead
+          step: read-current-balance
+          matches: "^\\$[0-9,]+\\.[0-9]{2}$"
+
+# =============================================================================
+# Recoverable conditions
+# =============================================================================
+#
+# Transient states this capability knows how to get past with nobody involved.
+# Checked in the order written, against the screen that defeated a step's
+# checkpoint, and only ever after a checkpoint has already failed — none of this
+# runs on a flow that is going well.
+#
+# Every rule ends the same way: the step's own checkpoint is evaluated again. A
+# remedy is never believed on its own account. `attempts` is the point at which
+# the system stops calling this recoverable and fails the run with the condition
+# named, which is a number a reviewer can argue with rather than a behaviour
+# buried in an engine.
+recoverable:
+  # ---------------------------------------------------------------------------
+  - condition: TRANSIENT_OVERLAY
+    description: >
+      Heritage Core answers a member lookup with a "System Busy" interstitial
+      while the host is still fetching the record. HTTP 200, a perfectly
+      well-formed page, and not the one that was asked for.
+
+      Waiting does not help: the screen is static, with no script and no meta
+      refresh anywhere in this application, so it will sit there indefinitely.
+      The remedy is the Continue link, which asks the host for the same record
+      again. Two or three requests apart by a moment is normally enough; if it is
+      not, the host has a problem that retrying is not going to solve.
+    detect:
+      # "System Busy" is the interstitial's own panel heading and appears on no
+      # other screen. Detecting on a screen's own words rather than on the
+      # failure text of the checkpoint means a reworded error message somewhere
+      # else cannot make this rule fire.
+      - assert: textPresent
+        text: System Busy
+    remedy:
+      - intent: Ask the host for the member record again.
+        action:
+          type: click
+          target:
+            role: link
+            name: Continue
+            strategy: accessible-name
+            robustness: >
+              The interstitial offers exactly one Continue link and its
+              accessible name is its own text. The only other link on the screen
+              reads "Return to Member Search", which would abandon the flow, so
+              matching the wrong one would be visible immediately as the search
+              screen rather than as a silent wrong turn.
+    # Continue re-requests the very screen the step wanted, so there is nowhere
+    # to go back to: re-evaluate the checkpoint where we stand.
+    resume: here
+    # Required, and `resume: here` does not exempt it. The engine performs a
+    # rule's whole remedy at the top of every attempt and only then consults
+    # `resume`, so `attempts: 3` presses this link up to three times, and a
+    # `click` is classified risky. See `unsafeRepeats` in @cua/policy.
+    repeatable: >
+      The remedy is one link, and following it is a GET for the member record
+      the step already asked for. It posts nothing, writes nothing and starts no
+      workflow: Heritage Core keeps no server-side state across these requests,
+      so the second and third presses ask exactly the question the first one
+      asked and are answered from the same place. The worst a repeat can cost is
+      another read of a record this run is already authorised to read, which is
+      why retrying it is safe rather than merely usually harmless. A Continue
+      that confirmed a posting rather than re-requesting a screen would be a
+      different control and would not get this argument.
+    attempts: 3
+    backoffMillis: 250
+
+  # ---------------------------------------------------------------------------
+  - condition: SESSION_EXPIRED
+    description: >
+      The teller session timed out and every screen has become Sign On. This one
+      strands a run rather than delaying it: the step's action may have been
+      carried out against the sign-on screen, and signing back on returns the
+      operator to Member Search rather than to where they were.
+
+      So the remedy has two halves. Re-authenticating is the easy half. Getting
+      back to the step that was interrupted is the half that matters, and it is
+      why this rule resumes `at-step` rather than `here`.
+    detect:
+      - assert: textPresent
+        text: Session Expired
+      - assert: targetPresent
+        target:
+          role: button
+          name: Sign On
+          strategy: accessible-name
+          robustness: >
+            Asserting the sign-on control is actually present, not just the
+            words. A screen that merely mentioned an expired session — a help
+            page, an audit listing — would match the text and match nothing an
+            automation could act on, and a remedy fired against it would waste
+            the run's whole recovery budget on a page it could never fix.
+    remedy:
+      - intent: Enter the workstation's teller password.
+        action:
+          type: fill
+          target:
+            role: textbox
+            name: Password
+            strategy: accessible-name
+            robustness: >
+              The sign-on screen has one input and its accessible name comes from
+              the title attribute, as everywhere else in this application.
+              Chromium exposes a password input as a textbox, so this needs no
+              special handling; the value is a declared sensitive input and never
+              appears in this document.
+          value:
+            from: parameter
+            name: operatorPassword
+      - intent: Sign the session back on.
+        action:
+          type: click
+          target:
+            role: button
+            name: Sign On
+            strategy: accessible-name
+            robustness: >
+              The submit control's accessible name comes from its value
+              attribute, the same way the Search button's does. It is the only
+              button on the screen.
+    # Signing on lands on Member Search, nowhere near the interrupted step, so
+    # resuming means returning to where that step began and attempting it again.
+    resume: at-step
+    # Required, because `at-step` performs a step's own Action a second time and
+    # several of this capability's Actions are classified risky (a `fill`, a
+    # `click`, a `selectFromList`). The engine refuses an `at-step` rule that
+    # could repeat a risky Action without this written down — see
+    # `unsafeRepeats` in @cua/policy. Saying it here is what makes the retry a
+    # decision somebody made rather than a property of the engine.
+    repeatable: >
+      Every Action this capability performs is a read: a navigation, typing a
+      member number into a search field, pressing Search, or choosing an account
+      from a list. None of them posts a transaction, moves money, or changes a
+      record, so performing any of them twice returns the same screen it returned
+      the first time. Heritage Core keeps no server-side state across these
+      requests — the whole flow is GETs — which is what makes that true rather
+      than merely likely. A capability that submitted anything would need its own
+      justification here, and would not get one.
+    # Two, not more. A sign-on that does not take twice is a credential problem
+    # or an account problem, and neither gets better by trying a third time.
+    attempts: 2
+    backoffMillis: 300

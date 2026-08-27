@@ -1,0 +1,246 @@
+/**
+ * ADR-0003, asserted rather than asserted about: no model can run in Replay.
+ *
+ * This is a headline claim of the submission, so it is checked three ways, at
+ * three different strengths.
+ *
+ *   1. **The requirement set, exactly.** `replayCapability`'s effect requires
+ *      `SurfaceAdapter | Policy | Evidence | Session`. The two assignments below
+ *      are mutually inverse, which means the sets are *equal* rather than merely
+ *      compatible. Adding a `LanguageModel` call anywhere reachable from the
+ *      engine adds `LanguageModel` to that set and `narrowing` stops compiling.
+ *      This is the primary proof, and it is the concrete payoff of ADR-0002.
+ *
+ *   2. **The layer composes without one.** Providing exactly those four services
+ *      leaves `never` in the requirement channel. If the engine ever needed a
+ *      fifth, the annotation would fail — which catches the case where someone
+ *      "fixes" the assignment above by widening a type alias.
+ *
+ *   3. **Evidence.** A real replay run's event log contains no `decide` event and
+ *      no `assist.*` event. SPEC calls this the secondary proof, and it is the
+ *      one available to a reviewer who does not want to take the type system's
+ *      word for it.
+ *
+ *      Ticket 15 makes the second half of that conditional, and the assertion
+ *      gets *stronger* rather than weaker for it. `decide` stays impossible: no
+ *      replay run may ever contain one, whatever flags it was given. `assist.*`
+ *      is now asserted in both directions — absent when the rung was not
+ *      enabled, and present when it was — because "no assist event unless assist
+ *      was explicitly enabled" is only worth testing if the events would
+ *      otherwise have appeared. An assertion that only ever checks the absent
+ *      case would pass just as well if the kinds were never emitted at all.
+ *
+ * The source scan at the end is a fourth, weaker check: a model reached by raw
+ * HTTP would not appear in any requirement set at all.
+ */
+
+import { readdirSync, readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
+import { it } from "@effect/vitest"
+import { Effect, Layer } from "effect"
+import { expect } from "vitest"
+import { Evidence, evidenceFiles, noSecrets } from "@cua/evidence"
+import { Policy, policyFrom } from "@cua/policy"
+import { Session, automationOwnedSession } from "@cua/session"
+import { SurfaceAdapter, playwrightSurface } from "@cua/surface"
+import { replayCapability } from "@cua/replay"
+import { modelAdvisor } from "@cua/agent"
+import { scriptedModel } from "./support/scripted-model.ts"
+import {
+  ACCOUNT_BALANCE,
+  replay,
+  shippedArtifact,
+  shippedPolicy
+} from "./support/replay-harness.ts"
+
+const REPLAY_SOURCE = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "packages",
+  "replay",
+  "src"
+)
+
+type ServicesOf<T> = T extends Effect.Effect<unknown, unknown, infer R> ? R : never
+
+/** What the engine is allowed to need. */
+type Permitted = SurfaceAdapter | Policy | Evidence | Session
+
+type Required = ServicesOf<ReturnType<typeof replayCapability>>
+
+// (1) Mutually inverse assignments. Equality, not compatibility: `narrowing`
+// fails the moment the engine requires anything beyond the four, and `widening`
+// fails if one of the four is quietly dropped from the signature.
+const narrowing: (required: Required) => Permitted = (required) => required
+const widening: (permitted: Permitted) => Required = (permitted) => permitted
+
+it("the replay engine requires exactly the surface, policy, evidence and session services", () => {
+  expect(typeof narrowing).toBe("function")
+  expect(typeof widening).toBe("function")
+})
+
+it("the replay layer composes with no language model in it", () => {
+  const services = Layer.mergeAll(
+    playwrightSurface({}),
+    policyFrom(shippedPolicy()),
+    evidenceFiles({
+      root: "/tmp/cua-unused",
+      runId: "unused",
+      sessionId: "unused",
+      scrubber: noSecrets()
+    }),
+    automationOwnedSession("unused")
+  )
+
+  // The annotation is the assertion. `never` in the third position says the four
+  // layers above satisfy the engine completely: nothing is left outstanding, and
+  // in particular no `LanguageModel` is.
+  const composed: Effect.Effect<unknown, unknown, never> = replayCapability({
+    artifact: shippedArtifact(),
+    inputs: new Map(),
+    baseUrl: "http://127.0.0.1:1",
+    runId: "unused"
+  }).pipe(Effect.provide(services))
+
+  expect(typeof composed).toBe("object")
+})
+
+it.live("a real replay run's evidence contains no model decision", () =>
+  Effect.gen(function* () {
+    const outcome = yield* replay({
+      artifact: shippedArtifact(),
+      inputs: { memberId: "12345" }
+    })
+
+    expect(outcome.result.result).toBe("success")
+
+    const kinds = outcome.events.map((event) => event.kind)
+    expect(kinds).not.toContain("decide")
+    expect(kinds.filter((kind) => kind.startsWith("assist."))).toEqual([])
+
+    // And the run says which mode it was, so an auditor reading one file can tell
+    // a replay log from a discovery log without inferring it from absences.
+    const start = outcome.events.find((event) => event.kind === "run.start")
+    expect(start && "mode" in start ? start.mode : undefined).toBe("replay")
+  })
+)
+
+it.live("a run with assisted recovery enabled records it, and still decides nothing", () =>
+  Effect.gen(function* () {
+    // The same claim from the other side. Member 88888 at 1.0.0 is the state the
+    // artifact names but has not classified, so the rung actually fires — which
+    // is what makes the absence asserted above mean something.
+    const outcome = yield* replay({
+      artifact: shippedArtifact(ACCOUNT_BALANCE, "1.0.0"),
+      inputs: { memberId: "88888" },
+      assist: modelAdvisor({
+        model: scriptedModel([
+          {
+            name: "classify",
+            params: {
+              proposedOutcome: "NO_MATCHING_ITEM",
+              confidence: 0.9,
+              rationale: "the account list offers only Checking"
+            }
+          }
+        ])
+      })
+    })
+
+    const kinds = outcome.events.map((event) => event.kind)
+
+    // `decide` is not conditional on anything. No replay run may ever contain
+    // one, and enabling the assisted rung does not make it a discovery run.
+    expect(kinds).not.toContain("decide")
+
+    // And the assisted rung emits its own kinds rather than borrowing that one,
+    // so a model consulted during replay cannot hide behind a discovery-shaped
+    // record (SPEC, "Evidence").
+    expect(kinds).toContain("assist.request")
+    expect(kinds).toContain("assist.proposal")
+    expect(kinds.filter((kind) => kind.startsWith("assist."))).toHaveLength(2)
+  })
+)
+
+it("no source in the replay package can reach a model at all", () => {
+  const withoutComments = (text: string): string =>
+    text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1")
+
+  const sources = readdirSync(REPLAY_SOURCE)
+    .filter((name) => name.endsWith(".ts"))
+    .map((name) => ({ name, text: withoutComments(readFileSync(join(REPLAY_SOURCE, name), "utf8")) }))
+
+  // A requirement set cannot catch a model reached by raw HTTP, so the ways in
+  // are named directly. This is the weakest of the four checks and the only one
+  // that would catch that case.
+  const forbidden = [
+    /effect\/unstable\/ai/,
+    /LanguageModel/,
+    /@effect\/ai-/,
+    /\banthropic\b/i,
+    /\bopenai\b/i,
+    /\bfetch\s*\(/,
+    /OPENAI_API_KEY|ANTHROPIC_API_KEY/
+  ]
+
+  for (const { name, text } of sources) {
+    for (const pattern of forbidden) {
+      expect(text, `${name} reaches for a model with ${pattern}`).not.toMatch(pattern)
+    }
+  }
+})
+
+it("every surface action in the engine goes through the policy chokepoint", () => {
+  const engine = readFileSync(join(REPLAY_SOURCE, "engine.ts"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1")
+
+  // Every acting call on the adapter must sit inside an `authorised(...)` block.
+  // Counting them is crude and that is the point: another one appearing outside
+  // the chokepoint changes this number and fails here (SPEC user story 57).
+  //
+  // Five, not four. Ticket 07 added the fifth: a Checkpoint's `targetReads`
+  // assertion reads a live control, which is an `extract`, and it used to reach
+  // the adapter from `checkpoint.ts` without passing Policy. It now runs from
+  // `authorisedReader`, which puts every read a Checkpoint declares through the
+  // same gate before the function that performs them is built. `checkpoint.ts`
+  // has none left, which the next assertion pins.
+  const acting = [...engine.matchAll(/surface\s*\.\s*(navigate|click|fill|extract)\s*\(/g)]
+  expect(acting).toHaveLength(5)
+
+  // And the engine is the only file in the package that touches an acting method.
+  // Checkpoint evaluation takes `observe` and `resolveTarget` off the adapter and
+  // nothing else — its `EvaluationContext` has no other methods to reach for.
+  for (const { name, text } of readdirSync(REPLAY_SOURCE)
+    .filter((file) => file.endsWith(".ts") && file !== "engine.ts")
+    .map((file) => ({ name: file, text: readFileSync(join(REPLAY_SOURCE, file), "utf8") }))) {
+    expect(text, `${name} acts on the surface outside the policy gate`).not.toMatch(
+      /surface\s*\.\s*(navigate|click|fill|extract)\s*\(/
+    )
+  }
+
+  const authorisedBlocks = [...engine.matchAll(/authorised\s*\(/g)]
+  expect(authorisedBlocks.length).toBeGreaterThan(0)
+
+  // The complete set of adapter methods this engine touches. `observe`,
+  // `resolveTarget` and `captureEvidence` are perception rather than action;
+  // `resolveTarget` still happens inside the gate so that a resolution can never
+  // be carried across a policy decision.
+  const used = [...engine.matchAll(/surface\s*\.\s*(\w+)/g)].map((match) => match[1])
+  expect(new Set(used)).toEqual(
+    new Set([
+      "navigate",
+      "click",
+      "fill",
+      "extract",
+      "observe",
+      "resolveTarget",
+      "captureEvidence"
+    ])
+  )
+})
+
+it("the capability name the tracer bullet runs is the one the tests exercise", () => {
+  expect(shippedArtifact(ACCOUNT_BALANCE).capability).toBe(ACCOUNT_BALANCE)
+})

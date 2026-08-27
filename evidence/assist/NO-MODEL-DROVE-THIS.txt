@@ -1,0 +1,80 @@
+NO MODEL DROVE THE CLASSIFICATION IN THESE TWO RUNS
+===================================================
+
+Read this before reading the two run directories beside it.
+
+Produced by: bun run test/support/drive-the-assisted-rung.ts
+
+The classification in checking-only-with-assist/events.jsonl was written by a
+hand-authored stand-in at LanguageModel.make, which is the same seam
+@effect/ai-openai fills. That is a choice about what these two directories are
+for rather than a missing key: they exist to show the accepted path, and a live
+model returning a confidence below the 0.75 floor would record a declined
+consultation instead. A genuine model-driven run is committed elsewhere, at
+evidence/discovery/savings-balance-gpt-4-1/.
+
+Everything else in these two directories is real:
+
+  * a real headless Chromium, driven through the real Playwright adapter;
+  * the real Heritage Core fixture, on an ephemeral port;
+  * the shipped policies/default.yaml, including the assist: block that
+    permits a consultation at all;
+  * the real member.account-balance@1.0.0 artifact, unedited;
+  * the real evidence writer, including the scrubber — grep 88888 over either
+    events.jsonl returns nothing.
+
+The stand-in fills LanguageModel.make, so the toolkit, the JSON Schema the model
+is sent, and the Schema decoding of what comes back are all the production code
+path. What is simulated is the judgement, and only the judgement.
+
+What the two directories are for
+--------------------------------
+
+The same member, the same artifact, the same policy, the same browser, and the
+one difference is whether the assisted rung was enabled.
+
+  checking-only-without-assist/
+      No rung. The selection matches nothing, and an unattended run reports the
+      hard failure it always did:
+
+          failure at step open-account (no_matching_item)
+
+      `grep '"kind":"assist' events.jsonl` returns nothing at all, which is the
+      point: with the rung off there is no record of a consultation, because
+      there was no consultation. (Plain `grep assist` does match — the run id
+      says `without-assist` on every line.)
+
+  checking-only-with-assist/
+      The rung enabled. One assist.request, one policy.check with
+      action: assist allowing it under the default policy, one
+      assist.proposal at confidence 0.93 with accepted: true, and then an
+      outcome:
+
+          business outcome NO_MATCHING_ITEM ... (assisted: proposed at
+          confidence 0.93, not a deterministic result)
+
+      No intervention.raise. Nobody was paged. And no version was written to
+      artifacts/ — promoting a proposal into a capability still takes a person.
+
+Neither directory contains a decide event. A replay run never emits one,
+whatever flags it was given.
+
+The same thing with a live model
+--------------------------------
+
+With a key in OPENAI_API_KEY, and no code change:
+
+    bun run replay member.account-balance --memberId 88888 --version 1.0.0
+    bun run replay member.account-balance --memberId 88888 --version 1.0.0 --assist
+
+The second command builds the real provider Layer through the identical call
+site. What it records depends on what the model answers, which is why the
+committed pair above is scripted: a proposal below the confidence floor is a
+declined consultation, and the run then degrades to exactly the unassisted
+result. A rung whose job is to avoid an escalation can never cause one.
+
+Without a key the second command records
+
+    assist.declined: ... the model could not be reached
+
+and degrades the same way.

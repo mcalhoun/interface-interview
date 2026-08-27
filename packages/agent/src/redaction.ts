@@ -1,0 +1,118 @@
+/**
+ * Keeping a Discovery run's values out of its own Evidence.
+ *
+ * Replay knows its sensitive values before it starts: they are declared inputs,
+ * validated by `prepareInputs`, and `scrubberFor` builds one scrubber from them
+ * up front. **Discovery cannot do that.** Its only input is a sentence. Which
+ * parameters exist, and what their values are, is exactly what the run is there to
+ * find out — the first time anyone knows `memberId` is `12345` is the moment the
+ * model proposes typing it.
+ *
+ * So the scrubber grows. `discoveredSecrets()` returns a `Scrubber` that closes
+ * over a set the loop adds to as the model tags values, and the loop registers a
+ * value **at the moment it is proposed** — before the Policy check, before the
+ * action, and therefore before the `decide` event that first names it is written.
+ * Registration happening earlier than the first mention is the property that
+ * makes this work at all; it is asserted by a test rather than left to the order
+ * of statements in the loop.
+ *
+ * ## Sensitivity is not the model's call
+ *
+ * Every discovered parameter is sensitive (ADR-0008). Not "unless the model
+ * thinks otherwise" — we do not ask a model to classify PII in regulated
+ * financial data, and a document a model writes is not a control. Declassifying
+ * takes a Policy allowlist entry, and `sensitivityPolicy` ships empty, so in
+ * practice every value a Discovery run types is scrubbed.
+ *
+ * ## The unwrap site
+ *
+ * `Redacted.value(` appears in `packages/*​/src` in three files now. Two are
+ * Replay's, documented in `packages/replay/src/redaction.ts`. This is the third,
+ * and `test/sensitive-data.test.ts` names it explicitly so it could not have
+ * arrived unnoticed.
+ *
+ * It is unavoidable for the same reason Replay's is: a scrubber that does not
+ * know the characters cannot find them, and a `fill` that does not know them
+ * cannot type them. Both uses are as narrow as they can be made — the plaintext
+ * is a local, it is consumed immediately, and it is never stored on anything that
+ * gets serialised. What the loop holds and what the Trajectory carries is the
+ * `Redacted` wrapper.
+ */
+
+import type { SecretRegistry, Scrubber } from "@cua/evidence"
+import { secretRegistry } from "@cua/evidence"
+import { Redacted } from "effect"
+
+export interface DiscoveredSecrets {
+  /**
+   * The registry to hand to the Evidence writer.
+   *
+   * A stable object whose `scrub` consults the growing set on every call, rather
+   * than a scrubber rebuilt on each registration. The Evidence Layer is
+   * constructed once, at the start of the run, and cannot be swapped afterwards.
+   */
+  readonly registry: SecretRegistry
+  /** The `Scrubber` itself, for the text a consultation sends off the machine. */
+  readonly scrubber: Scrubber
+  /**
+   * Registers a value discovered mid-run. Idempotent per name.
+   *
+   * UNWRAP SITE. The characters become a needle in the scrubbing table and go
+   * nowhere else.
+   */
+  readonly remember: (label: string, value: Redacted.Redacted<string>) => void
+  /** The parameter names registered so far. Never their values. */
+  readonly names: () => ReadonlyArray<string>
+}
+
+export const discoveredSecrets = (): DiscoveredSecrets => {
+  // The growing set, and the rebuild-on-registration behaviour, now live in
+  // `@cua/evidence`'s `SecretRegistry`. Replay needs exactly the same thing --
+  // an Operator types values no Artifact declared, and a screen renders back
+  // values nobody parameterised -- and two implementations of "the scrubber can
+  // still learn" would be two places for it to stop being true.
+  const registry = secretRegistry()
+
+  return {
+    registry,
+    scrubber: registry.scrub,
+    remember: (label, value) => registry.remember([{ label, text: Redacted.value(value) }]),
+    names: registry.labels
+  }
+}
+
+/**
+ * The characters to type into a field.
+ *
+ * UNWRAP SITE. Called at exactly one place in the loop, immediately before
+ * `surface.fill`, and the result is not held afterwards.
+ */
+export const charactersToType = (value: Redacted.Redacted<string>): string =>
+  Redacted.value(value)
+
+/**
+ * The characters of a discovered value, as a needle for the baked-in-literal
+ * check.
+ *
+ * UNWRAP SITE. Ticket 11's compiler has to be able to ask "does this Artifact
+ * contain the member number this run typed", and a check that cannot see the
+ * characters cannot answer it — the same unavoidable reason the scrubber above
+ * unwraps. `bakedInLiterals` compares and discards; nothing keeps what it is
+ * given, and nothing it returns quotes the value it found.
+ *
+ * It lives here rather than in `compile.ts` so that this file stays the one place
+ * in the package where a literal is unwrapped, which is what
+ * `test/sensitive-data.test.ts` pins.
+ */
+export const literalToCheck = (value: Redacted.Redacted<string>): string =>
+  Redacted.value(value)
+
+/**
+ * Wraps a literal the model supplied, labelled with the parameter it named.
+ *
+ * The label is what a leak would announce itself as: an accidental serialisation
+ * renders `<redacted:memberId>`, which names the parameter that did not escape
+ * rather than merely saying something was hidden.
+ */
+export const asSecret = (label: string, literal: string): Redacted.Redacted<string> =>
+  Redacted.make(literal, { label })

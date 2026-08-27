@@ -1,0 +1,542 @@
+/**
+ * Heritage Core's markup.
+ *
+ * Every page here is deliberately hostile to automation, because this app is the
+ * fixture every later ticket is tested against. The rules, all of which are load
+ * bearing:
+ *
+ *   - HTML 4.01 Transitional, `<font>` tags and `bgcolor`, nested layout tables.
+ *   - No `id`, `class`, `data-*`, `aria-*` or `role` attribute anywhere, so there
+ *     is nothing a test-id or CSS strategy could grab hold of.
+ *   - No `<script>` on any page. Nothing renders client side; every transition is
+ *     a full page load driven by a GET form or an `<a href>`.
+ *   - No `<label>`. Form controls get their accessible name from `title`, the way
+ *     a 1990s tooltip would have supplied it, and the visible caption beside a
+ *     control is an unassociated `<td>`.
+ *   - Content sits several layout tables deep. Chromium exposes those layout
+ *     tables as real `table`/`row`/`cell` nodes too, so an observed accessibility
+ *     tree carries the same text repeated at every enclosing level. A Target has
+ *     to survive that noise rather than a tidy tree, which is the realistic case.
+ *
+ * See docs/adr/0001-accessibility-tree-is-the-only-observation-channel.md.
+ */
+
+import {
+  type Account,
+  type AuthorizationAttempt,
+  type Member,
+  authorizationAccepted,
+  authorizationAttempted
+} from "./members.ts"
+import { type Tenant, HERITAGE_CORE, accountNameFor } from "./tenants.ts"
+
+export const DOCTYPE =
+  '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">'
+
+export const escape = (value: string): string =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+
+const query = (params: Record<string, string>): string =>
+  Object.entries(params)
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&amp;")
+
+/** Small grey caption text, the way the whole application labels things. */
+export const caption = (text: string): string =>
+  `<font face="Arial" size="2" color="#000000">${escape(text)}</font>`
+
+/**
+ * The banner and status strip wrapped around every full page.
+ *
+ * `tenant` defaults to Heritage Core, so every existing call site renders the
+ * byte-identical page it always did. The second institution is additive rather
+ * than a rewrite of the fixture every other ticket is tested against.
+ */
+export const shell = (title: string, body: string, tenant: Tenant = HERITAGE_CORE): string => `${DOCTYPE}
+<html>
+<head>
+<title>${escape(title)}</title>
+<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+</head>
+<body bgcolor="#d4d0c8" topmargin="0" leftmargin="0" marginwidth="0" marginheight="0">
+<table width="780" border="0" cellpadding="0" cellspacing="0">
+<tr><td bgcolor="#000080" height="26">&nbsp;<font face="Arial" size="3" color="#ffffff"><b>${escape(tenant.institution)}</b></font>&nbsp;&nbsp;<font face="Arial" size="2" color="#c0c0c0">Member Services</font></td></tr>
+<tr><td bgcolor="#808080" height="18">&nbsp;<font face="Arial" size="1" color="#ffffff">${tenant.statusStrip}</font></td></tr>
+<tr><td height="10">&nbsp;</td></tr>
+<tr><td>
+<table width="100%" border="0" cellpadding="6" cellspacing="0"><tr><td>
+${body}
+</td></tr></table>
+</td></tr>
+<tr><td height="14">&nbsp;</td></tr>
+<tr><td bgcolor="#808080" height="18">&nbsp;<font face="Arial" size="1" color="#ffffff">${tenant.footer}</font></td></tr>
+</table>
+</body>
+</html>
+`
+
+/**
+ * Member Search.
+ *
+ * Two panels, on purpose. `Member Number` in the search panel is the field that
+ * works; `Member Number (Legacy)` in the cross-reference panel is a near
+ * duplicate that a name match on "Member Number" also hits. A Target that says
+ * only `textbox "Member Number"` is genuinely ambiguous here, which is what
+ * gives `within` and `nth` disambiguation something real to resolve.
+ */
+export const memberSearchPage = (tenant: Tenant = HERITAGE_CORE): string =>
+  shell(
+    `${tenant.titlePrefix} - Member Search`,
+    `<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>
+<font face="Arial" size="2"><b>Member Search</b></font>
+</td></tr></table>
+<br>
+<form method="get" action="/member">
+<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td colspan="3"><font face="Arial" size="2"><b>Member Number Search</b></font></td></tr>
+<tr bgcolor="#ffffff">
+<td width="180">${caption(tenant.memberNumberLabel)}</td>
+<td><input type="text" name="memberNumber" size="14" maxlength="10" title="${escape(
+      tenant.memberNumberLabel
+    )}"></td>
+<td width="140"><input type="submit" value="${escape(tenant.searchButtonLabel)}"></td>
+</tr>
+<tr bgcolor="#ffffff">
+<td>${caption("Branch")}</td>
+<td><input type="text" name="branch" size="6" maxlength="3" value="001" title="Branch"></td>
+<td>&nbsp;</td>
+</tr>
+</table>
+</form>
+<br>
+<form method="get" action="/xref">
+<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td colspan="3"><font face="Arial" size="2"><b>Cross-Reference Lookup</b></font></td></tr>
+<tr bgcolor="#ffffff">
+<td width="180">${caption("Member Number (Legacy)")}</td>
+<td><input type="text" name="legacyMemberNumber" size="14" maxlength="12" title="Member Number (Legacy)"></td>
+<td width="140"><input type="submit" value="Look Up"></td>
+</tr>
+</table>
+</form>
+<br>
+<font face="Arial" size="1" color="#404040">Legacy member numbers were retired at conversion. Use Member Number Search for all current members.</font>`,
+    tenant
+  )
+
+/** Member Detail. Accounts are links; balances are not shown until Account Detail. */
+export const memberDetailPage = (member: Member, tenant: Tenant = HERITAGE_CORE): string =>
+  shell(
+    `${tenant.titlePrefix} - Member ${member.memberNumber}`,
+    `<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>
+<font face="Arial" size="2"><b>Member Detail</b></font>
+</td></tr></table>
+<br>
+<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td colspan="4"><font face="Arial" size="2"><b>Member Record</b></font></td></tr>
+<tr bgcolor="#ffffff">
+<td width="140">${caption("Member Number")}</td><td width="240">${caption(member.memberNumber)}</td>
+<td width="140">${caption("Member Name")}</td><td>${caption(member.name)}</td>
+</tr>
+<tr bgcolor="#ffffff">
+<td>${caption("Member Since")}</td><td>${caption(member.memberSince)}</td>
+<td>${caption("Status")}</td><td>${caption(member.status)}</td>
+</tr>
+<tr bgcolor="#ffffff">
+<td>${caption("Tax ID")}</td><td>${caption(member.taxIdMasked)}</td>
+<td>${caption("Branch")}</td><td>${caption(member.branch)}</td>
+</tr>
+</table>
+<br>
+<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td colspan="5"><font face="Arial" size="2"><b>Share and Deposit Accounts</b></font></td></tr>
+<tr bgcolor="#e0e0e0">
+<td width="220">${caption("Account")}</td>
+<td width="180">${caption("Account Number")}</td>
+<td width="100">${caption("Type")}</td>
+<td width="110">${caption("Opened")}</td>
+<td>${caption("Status")}</td>
+</tr>
+${member.accounts.map((account) => accountRow(member, account, tenant)).join("\n")}
+</table>
+<br>
+<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`,
+    tenant
+  )
+
+const accountRow = (member: Member, account: Account, tenant: Tenant): string => {
+  const href = `/account?${query({
+    memberNumber: member.memberNumber,
+    accountNumber: account.accountNumber
+  })}`
+  return `<tr bgcolor="#ffffff">
+<td><font face="Arial" size="2"><a href="${href}">${escape(
+    accountNameFor(tenant, account.description)
+  )}</a></font></td>
+<td>${caption(account.accountNumber)}</td>
+<td>${caption(account.type)}</td>
+<td>${caption(account.openedOn)}</td>
+<td>${caption(account.status)}</td>
+</tr>`
+}
+
+/**
+ * Account Detail. The outer page carries only chrome; every figure an operator
+ * came for lives in a separate document inside the iframe, so nothing about this
+ * screen is readable without traversing a frame boundary.
+ */
+export const accountDetailPage = (
+  member: Member,
+  account: Account,
+  tenant: Tenant = HERITAGE_CORE,
+  attempt: AuthorizationAttempt = { supervisorId: "", authorizationCode: "" }
+): string => {
+  const src = `/account/panel?${query({
+    memberNumber: member.memberNumber,
+    accountNumber: account.accountNumber
+  })}`
+
+  /**
+   * The framed panel is an installation option, and the second tenant declined
+   * it. The figures are then in the main document rather than a child one, at
+   * the same place on the screen, under the same captions.
+   *
+   * Nothing in a Capability's Targets says anything about frames — a Target has
+   * no field in which a frame could be named — so the two render identically as
+   * far as targeting is concerned. That is the claim this branch exists to make
+   * falsifiable: one capability, both layouts, no override.
+   */
+  const panel = tenant.accountDetailInFrame
+    ? `<iframe src="${src}" name="acctdetail" width="100%" height="270" frameborder="1" scrolling="auto" marginwidth="0" marginheight="0"></iframe>`
+    : accountDetailBody(member, account, attempt, tenant, "/account")
+
+  return shell(
+    `${tenant.titlePrefix} - Account ${account.accountNumber}`,
+    `<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>
+<font face="Arial" size="2"><b>Account Detail</b></font>
+</td></tr></table>
+<br>
+<table width="100%" border="0" cellpadding="0" cellspacing="0">
+<tr><td>
+${panel}
+</td></tr>
+</table>
+<br>
+<font face="Arial" size="2"><a href="/member?${query({ memberNumber: member.memberNumber })}">Return to Member Detail</a></font>`,
+    tenant
+  )
+}
+
+/**
+ * The document that lives inside the Account Detail iframe.
+ *
+ * Two faces. Ordinarily it is the figures. When the account carries a
+ * supervisor hold and nobody has overridden it, it is the restriction panel
+ * instead — and crucially the words "Available Balance" and "Current Balance"
+ * are then *not on the page at all*. That is what a checkpoint asserting the
+ * balance cell is present actually meets, and it is why the failure looks
+ * nothing like an exception.
+ *
+ * The override form posts straight back here, and the response is this panel
+ * again: releasing the hold is a full page load *inside the frame*, Heritage
+ * Core keeps no server-side session state, and the parent Account Detail page
+ * never navigates -- exactly what a person clicking Authorize in the live window
+ * would produce.
+ *
+ * It is a POST rather than a GET, and that is a correction rather than a
+ * preference. A GET form serialises what was typed into the address bar, so the
+ * supervisor id and the override code ended up in `page.url()`, in Evidence, in
+ * browser history and in any `Referer` the page went on to send. Answering the
+ * POST with the panel keeps both properties the GET was chosen for -- no server
+ * state, no navigation of the outer page -- and costs only that the panel can no
+ * longer be reached in its released state by pasting a URL, which was never
+ * something to want.
+ */
+export const accountDetailPanel = (
+  member: Member,
+  account: Account,
+  attempt: AuthorizationAttempt = { supervisorId: "", authorizationCode: "" },
+  tenant: Tenant = HERITAGE_CORE
+): string => {
+  const body = accountDetailBody(member, account, attempt, tenant, "/account/panel")
+  return `${DOCTYPE}
+<html>
+<head>
+<title>Account Detail Panel</title>
+<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+</head>
+<body bgcolor="#ffffff" topmargin="4" leftmargin="4" marginwidth="0" marginheight="0">
+${body}
+</body>
+</html>
+`
+}
+
+/**
+ * The figures, or the refusal — the part that is the same whether it arrives in
+ * a frame or in the page itself.
+ *
+ * `formAction` is where the supervisor override posts back to, and it differs
+ * between the two layouts for the obvious reason: a framed panel reloads itself,
+ * and an inline one reloads the page it is part of. Everything a Capability
+ * looks at is identical either way.
+ *
+ * Both are POSTs. On the inline layout that matters twice over: the form target
+ * *is* the top-level document, so a GET would have put a supervisor override
+ * code straight into the address bar of the page the run reads `page.url()` from.
+ */
+const accountDetailBody = (
+  member: Member,
+  account: Account,
+  attempt: AuthorizationAttempt,
+  tenant: Tenant,
+  formAction: string
+): string => {
+  const withheld = account.restriction !== undefined && !authorizationAccepted(attempt)
+  return withheld
+    ? restrictionPanel(member, account, account.restriction!, attempt, tenant, formAction)
+    : balancePanel(member, account, attempt, tenant)
+}
+
+/** The ordinary panel: every figure an operator came for. */
+const balancePanel = (
+  member: Member,
+  account: Account,
+  attempt: AuthorizationAttempt,
+  tenant: Tenant
+): string => {
+  const released =
+    account.restriction === undefined
+      ? ""
+      : `<br>
+<font face="Arial" size="1" color="#404040">Restriction ${escape(
+          account.restriction.code
+        )} overridden by supervisor ${escape(attempt.supervisorId.trim())}.</font>`
+  return `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>${escape(
+    accountNameFor(tenant, account.description)
+  )}</b></font></td></tr>
+<tr bgcolor="#ffffff"><td width="200">${caption("Account Number")}</td><td>${caption(account.accountNumber)}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Account Type")}</td><td>${caption(account.type)}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Member Number")}</td><td>${caption(member.memberNumber)}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Available Balance")}</td><td>${caption(account.availableBalance)}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Current Balance")}</td><td>${caption(account.currentBalance)}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Status")}</td><td>${caption(account.status)}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Last Activity")}</td><td>${caption(account.lastActivityOn)}</td></tr>
+</table>${released}`
+}
+
+/**
+ * The withheld panel, plus the override a supervisor uses to release it.
+ *
+ * The account's identifying rows stay on screen, because the automation is not
+ * lost — it is on precisely the right account and has been told no. An Operator
+ * arriving at this screen needs to see which account they are authorizing.
+ */
+const restrictionPanel = (
+  member: Member,
+  account: Account,
+  restriction: Account["restriction"] & {},
+  attempt: AuthorizationAttempt,
+  tenant: Tenant,
+  formAction: string
+): string => {
+  const rejected = authorizationAttempted(attempt)
+    ? `<tr bgcolor="#ffffff"><td colspan="2"><font face="Arial" size="2" color="#800000"><b>Authorization not accepted. The override code is four digits.</b></font></td></tr>`
+    : ""
+  return `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>${escape(
+    accountNameFor(tenant, account.description)
+  )}</b></font></td></tr>
+<tr bgcolor="#ffffff"><td width="200">${caption("Account Number")}</td><td>${caption(account.accountNumber)}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Account Type")}</td><td>${caption(account.type)}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Member Number")}</td><td>${caption(member.memberNumber)}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Status")}</td><td>${caption(account.status)}</td></tr>
+</table>
+<br>
+<form method="post" action="${formAction}">
+<input type="hidden" name="memberNumber" value="${escape(member.memberNumber)}">
+<input type="hidden" name="accountNumber" value="${escape(account.accountNumber)}">
+<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>Account Restriction</b></font></td></tr>
+<tr bgcolor="#ffffff"><td colspan="2"><font face="Arial" size="2" color="#800000"><b>ACCOUNT RESTRICTED - SUPERVISOR AUTHORIZATION REQUIRED</b></font></td></tr>
+<tr bgcolor="#ffffff"><td width="200">${caption("Restriction Code")}</td><td>${caption(restriction.code)}</td></tr>
+<tr bgcolor="#ffffff"><td colspan="2">${caption(restriction.notice)}</td></tr>
+${rejected}
+<tr bgcolor="#ffffff"><td>${caption("Supervisor ID")}</td><td><input type="text" name="supervisorId" size="10" maxlength="8" title="Supervisor ID"></td></tr>
+<tr bgcolor="#ffffff"><td>${caption("Authorization Code")}</td><td><input type="text" name="authorizationCode" size="8" maxlength="4" title="Authorization Code"></td></tr>
+<tr bgcolor="#ffffff"><td colspan="2"><input type="submit" value="Authorize"></td></tr>
+</table>
+</form>`
+}
+
+/**
+ * Member Not Found: what Heritage Core shows when a well-formed member number is
+ * not on file.
+ *
+ * This screen is the fixture for the distinction the whole system turns on. The
+ * search worked. The application understood the request and answered it. The
+ * answer is "there is no such member", which is a fact about the credit union's
+ * members rather than a fault in anything — so it arrives as a normal screen with
+ * **HTTP 200**, exactly the way the real thing does. A caller who treats this as
+ * an error is wrong about the domain, not defensive.
+ *
+ * Two consequences follow from the 200, and both are the point:
+ *
+ *   - Nothing at the transport layer signals it. Anyone hoping to classify this
+ *     by status code, thrown exception or `response.ok` gets "success" and a page
+ *     full of the wrong data.
+ *   - It is only distinguishable by *reading the screen*, which is what makes a
+ *     Checkpoint's declared outcome branch the mechanism that recognises it.
+ *
+ * The message names the number searched, so a real operator can see they typed
+ * what they meant to. The stable part — the screen heading and the sentence
+ * opener — carries no runtime value, so an Artifact can assert on it.
+ */
+export const memberNotFoundPage = (
+  memberNumber: string,
+  tenant: Tenant = HERITAGE_CORE
+): string =>
+  shell(
+    `${tenant.titlePrefix} - Member Not Found`,
+    `<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>
+<font face="Arial" size="2"><b>Member Not Found</b></font>
+</td></tr></table>
+<br>
+<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td><font face="Arial" size="2"><b>Member Number Search Results</b></font></td></tr>
+<tr bgcolor="#ffffff"><td>${caption(
+      `No member record found for member number ${memberNumber}.`
+    )}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption(
+      "Verify the number and search again. Numbers issued before the 1998 conversion are not member numbers and will not be found on this screen."
+    )}</td></tr>
+</table>
+<br>
+<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`,
+    tenant
+  )
+
+/** Cross-reference lookup result. Legacy numbers were retired at conversion. */
+export const crossReferencePage = (
+  legacyMemberNumber: string,
+  tenant: Tenant = HERITAGE_CORE
+): string =>
+  shell(
+    `${tenant.titlePrefix} - Cross-Reference Lookup`,
+    `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td><font face="Arial" size="2"><b>Cross-Reference Lookup</b></font></td></tr>
+<tr bgcolor="#ffffff"><td>${caption(
+      legacyMemberNumber.trim() === ""
+        ? "No legacy member number entered."
+        : `No cross-reference record on file for legacy member number ${legacyMemberNumber.trim()}.`
+    )}</td></tr>
+</table>
+<br>
+<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`,
+    tenant
+  )
+
+/**
+ * The interstitial Heritage Core shows while it is still fetching a record.
+ *
+ * Static, like every other page here: no script, no meta refresh, nothing that
+ * clears on its own. Waiting on this screen waits forever. The only way past it
+ * is the Continue link, which asks for the same record again — so it is a
+ * transient condition that needs an *action* rather than patience, and that is
+ * what makes it worth having next to the slow panel that needs the opposite.
+ *
+ * `System Busy` is the phrase an automation detects. It appears nowhere else.
+ */
+export const systemBusyPage = (
+  memberNumber: string,
+  tenant: Tenant = HERITAGE_CORE
+): string =>
+  shell(
+    `${tenant.titlePrefix} - Please Wait`,
+    `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td><font face="Arial" size="2"><b>System Busy</b></font></td></tr>
+<tr bgcolor="#ffffff"><td>${caption(
+      "The member record is being retrieved from the host. This can take a moment at peak. Press Continue to ask again."
+    )}</td></tr>
+<tr bgcolor="#ffffff"><td><font face="Arial" size="2"><a href="/member?${query({
+      memberNumber
+    })}">Continue</a></font></td></tr>
+</table>
+<br>
+<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`,
+    tenant
+  )
+
+/**
+ * Sign On. What every screen becomes once the teller session has timed out.
+ *
+ * The operator id is fixed to the workstation and shown rather than typed, the
+ * way a teller terminal signs a session back on; only the password is asked for.
+ * The control's accessible name comes from `title`, as everywhere else, and
+ * Chromium exposes a password input as a `textbox`, so this needs no special
+ * handling on the automation side.
+ *
+ * Submitting returns the operator to Member Search rather than to the screen they
+ * were on. That is deliberate and it is the hard half of ticket 06: getting
+ * signed back in is easy, and getting back to where the run was is not.
+ */
+export const signOnPage = (tenant: Tenant = HERITAGE_CORE): string =>
+  shell(
+    `${tenant.titlePrefix} - Sign On`,
+    `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>Session Expired</b></font></td></tr>
+<tr bgcolor="#ffffff"><td colspan="2">${caption(
+      "Your teller session has timed out for inactivity. Sign on to continue."
+    )}</td></tr>
+</table>
+<br>
+<form method="post" action="/signon">
+<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td colspan="3"><font face="Arial" size="2"><b>Operator Sign On</b></font></td></tr>
+<tr bgcolor="#ffffff">
+<td width="180">${caption("Operator ID")}</td>
+<td>${caption("OPR001")}</td>
+<td width="140">&nbsp;</td>
+</tr>
+<tr bgcolor="#ffffff">
+<td>${caption("Password")}</td>
+<td><input type="password" name="password" size="14" maxlength="16" title="Password"></td>
+<td><input type="submit" value="Sign On"></td>
+</tr>
+</table>
+</form>
+<br>
+<font face="Arial" size="1" color="#404040">Sessions time out after a period of inactivity. Signing on returns you to Member Search.</font>`,
+    tenant
+  )
+
+/**
+ * The system message page. Heritage Core answers every *unusable* request this
+ * way: a transaction code that is not mapped, a search submitted with nothing in
+ * it, an account number that does not belong to the member on the URL.
+ *
+ * Deliberately not what an absent member gets. A request that could not be
+ * carried out and a request that was carried out and came back empty are
+ * different things, and collapsing them onto one screen is the mistake that makes
+ * a legitimate domain answer look like a fault. Absent members get
+ * `memberNotFoundPage` instead.
+ */
+export const systemMessagePage = (
+  message: string,
+  tenant: Tenant = HERITAGE_CORE
+): string =>
+  shell(
+    `${tenant.titlePrefix} - System Message`,
+    `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td><font face="Arial" size="2"><b>System Message</b></font></td></tr>
+<tr bgcolor="#ffffff"><td>${caption(message)}</td></tr>
+</table>
+<br>
+<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`,
+    tenant
+  )

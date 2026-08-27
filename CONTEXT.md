@@ -28,6 +28,10 @@ _Avoid_: skill, tool, automation, macro
 The typed, versioned, human-readable document describing how a Capability is carried out: its inputs, outputs, steps, checkpoints and known outcomes. Immutable once written.
 _Avoid_: script, recording, flow, playbook, definition
 
+**Capability Catalog**:
+The agent-facing list of every stored Capability, each as a callable signature: what it takes, what it returns, which Business Outcomes it can answer with instead, and the exact line that invokes it. A view over the Capability Artifacts on disk, never a second store. Shows a parameter's domain and withholds a sensitive parameter's value.
+_Avoid_: registry, index, manifest, directory
+
 **Step**:
 One named unit within a Capability Artifact, pairing an Action with the Checkpoint that confirms it landed.
 _Avoid_: instruction, command, node
@@ -62,10 +66,14 @@ _Avoid_: selector, locator, element, node
 What the system perceives of a Surface at one moment: its accessibility structure, location and frames. The only thing Discovery ever sees.
 _Avoid_: snapshot, DOM, page state, screen
 
+**Selection**:
+Choosing one of the items a Surface currently offers by matching a parameter against their labels by token subset. Distinct from resolving a Target: a Target says which control, a Selection works out which control from a list read at Replay time. The legal values are read off the page during Discovery, never written into source.
+_Avoid_: filter, lookup, search, pick
+
 ### Outcomes
 
 **Business Outcome**:
-An expected result of the application's own domain that the caller needs to know about, such as a member not existing. A legitimate answer, never a failure.
+An expected result of the application's own domain that the caller needs to know about, such as a member not existing. A legitimate answer, never a failure. Always declared in the Capability Artifact and recognised by a condition written there in advance, never inferred at run time from the shape of a screen.
 _Avoid_: error, exception, negative result
 
 **Recoverable Condition**:

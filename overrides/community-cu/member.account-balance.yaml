@@ -1,0 +1,21 @@
+tenant: community-cu
+capability: member.account-balance
+baseVersion: 1.2.0
+targets:
+- step: run-member-search
+  was: Search
+  name: Find
+  discoveredFrom: |-
+    Discovered by replay failing. Run community-cu-onboarding executed member.account-balance@1.2.0 against run-member-search and could not resolve the control it names; that is an ordinary replay failure, and it is the only way tenant drift is detected here (ADR-0006).
+
+    Assisted recovery was consulted once about that screen and proposed the control "Find" at confidence 0.90. The proposal is at events.jsonl#assist-1 in that run's evidence.
+
+    In its own words: "the search panel offers one submit control and it reads Find; the other button on the screen belongs to the Cross-Reference Lookup panel"
+
+    ADR-0005: the consultation could name a control and could not press one. Nothing was acted on, and this document exists because a person then agreed with it.
+  confirmedBy: |-
+    a.reyes took the live session at 2026-08-27T09:48:30.537Z (intervention session-community-cu-onboarding-intervention-1, session session-community-cu-onboarding) and returned it at 2026-08-27T09:48:30.538Z.
+
+    Asked "Assisted recovery could not find one control and proposes a correspondent. Is it right?", they answered yes.
+
+    What they said about it: "looked at the search panel. This installation labels the submit control Find; it is the same control Heritage Core labels Search, and there is nothing else on the panel it could be"

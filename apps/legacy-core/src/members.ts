@@ -1,0 +1,361 @@
+/**
+ * The member book Heritage Core serves from.
+ *
+ * | Number  | What the screen does                            | Added at  |
+ * | ------- | ----------------------------------------------- | --------- |
+ * | `12345` | A normal member with two accounts               | ticket 01 |
+ * | `22222` | Accounts labelled `Regular Savings`             | ticket 09 |
+ * | `33333` | Two savings accounts, so selection is ambiguous | ticket 09 |
+ * | `55555` | Slow load behind a transient overlay            | ticket 06 |
+ * | `77777` | Savings held pending supervisor authorisation   | ticket 12 |
+ * | `99999` | Not on file: the Member Not Found screen        | ticket 04 |
+ * | `88888` | Checking only, no savings                       | ticket 13 |
+ *
+ * `22222` and `33333` differ from the happy path only in how their accounts are
+ * *labelled*, which is the point: label variation is what a second Tenant
+ * actually looks like, and the claim under test is that token-subset selection
+ * absorbs it with no Override and no second Artifact.
+ *
+ * `55555` holds exactly the same shape of record as the happy path and differs
+ * only in how the application *serves* it — behind a transient interstitial and
+ * with a late balance panel — so a run against it exercises the same Capability
+ * Artifact and can only differ in what it had to get past. See `conditions.ts`.
+ *
+ * `77777`'s savings account sits under a supervisor hold, so the figures the
+ * automation came for are not on the screen at all until somebody with authority
+ * releases them. The shape of that state is the whole reason it is the
+ * Intervention trigger: it is not a broken page and not a missing record, it is
+ * the application working correctly and refusing. Getting past it needs
+ * *authority*, not better perception, so no amount of waiting, retrying or
+ * cleverer target matching resolves it. That is what separates it from a
+ * Recoverable Condition and from a Business Outcome, and it is why a person has
+ * to hold the Session.
+ *
+ * `99999` is not an entry below and never will be. It is well-formed, it passes
+ * the search field's own validation, and it is simply not a member — which is
+ * what the search is being asked. The book answers that question with `undefined`
+ * and the route turns it into a screen; there is no "known absent" list, because
+ * a real core has no such thing either and a typo has to reach the same answer.
+ * `99999` is the number SPEC names for the scenario and the one the tests use.
+ */
+
+export interface Account {
+  /** Displayed verbatim; the value an operator would read back over the phone. */
+  readonly accountNumber: string
+  /** What the account is called on screen, e.g. `Primary Savings`. */
+  readonly description: string
+  readonly type: string
+  readonly openedOn: string
+  readonly status: string
+  readonly availableBalance: string
+  readonly currentBalance: string
+  readonly lastActivityOn: string
+  /** Present when the figures are withheld pending supervisor authorization. */
+  readonly restriction?: Restriction
+}
+
+/**
+ * A supervisor hold on one account.
+ *
+ * Per account rather than per member, deliberately: `77777`'s checking account
+ * is perfectly ordinary. That stops "this member is restricted" from being a
+ * shortcut readable at the Member Detail screen, so the run has to get all the
+ * way to the last screen before it discovers it cannot finish — which is where
+ * flows actually fail.
+ */
+export interface Restriction {
+  /** What the institution calls this hold. The Operator quotes it back. */
+  readonly code: string
+  /** The sentence the screen shows in place of the figures. */
+  readonly notice: string
+}
+
+export interface Member {
+  readonly memberNumber: string
+  readonly name: string
+  readonly memberSince: string
+  readonly status: string
+  /** Already masked at rest. Heritage Core never renders a full tax id. */
+  readonly taxIdMasked: string
+  readonly branch: string
+  readonly accounts: ReadonlyArray<Account>
+}
+
+const HAPPY_PATH: Member = {
+  memberNumber: "12345",
+  name: "MARGARET T HOLLOWAY",
+  memberSince: "03/14/1998",
+  status: "Active",
+  taxIdMasked: "xxx-xx-4419",
+  branch: "001 - MAIN OFFICE",
+  accounts: [
+    {
+      accountNumber: "0000012345-S01",
+      description: "Primary Savings",
+      type: "SAVINGS",
+      openedOn: "03/14/1998",
+      status: "Active",
+      availableBalance: "$4,182.55",
+      currentBalance: "$4,382.55",
+      lastActivityOn: "08/24/2026"
+    },
+    {
+      accountNumber: "0000012345-D10",
+      description: "Checking",
+      type: "DRAFT",
+      openedOn: "06/02/2004",
+      status: "Active",
+      availableBalance: "$1,204.18",
+      currentBalance: "$1,204.18",
+      lastActivityOn: "08/26/2026"
+    }
+  ]
+}
+
+/**
+ * A member whose institution names the same products differently.
+ *
+ * `Regular Savings` where the happy path says `Primary Savings`, and
+ * `Checking Account` where it says `Checking`. Nothing else about the screen
+ * changes — which is exactly the situation ticket 16 will meet with a second
+ * Tenant, arriving early so the matching rule can be shown to handle it before
+ * anything is built on the assumption that it does.
+ *
+ * `savings` is a token of `Regular Savings`, so the shipped Artifact's recorded
+ * default selects this member's savings account with no configuration anywhere.
+ * `Primary Savings` is *not* a token subset of it, and is a clean no-match.
+ */
+const LABEL_VARIANT: Member = {
+  memberNumber: "22222",
+  name: "DESMOND A OKAFOR",
+  memberSince: "11/02/2011",
+  status: "Active",
+  taxIdMasked: "xxx-xx-7730",
+  branch: "004 - EASTGATE",
+  accounts: [
+    {
+      accountNumber: "0000022222-S01",
+      description: "Regular Savings",
+      type: "SAVINGS",
+      openedOn: "11/02/2011",
+      status: "Active",
+      availableBalance: "$812.40",
+      currentBalance: "$812.40",
+      lastActivityOn: "08/21/2026"
+    },
+    {
+      accountNumber: "0000022222-D10",
+      description: "Checking Account",
+      type: "DRAFT",
+      openedOn: "11/02/2011",
+      status: "Active",
+      availableBalance: "$3,905.62",
+      currentBalance: "$3,955.62",
+      lastActivityOn: "08/25/2026"
+    }
+  ]
+}
+
+/**
+ * A member holding two savings accounts.
+ *
+ * Ordinary in a credit union and fatal to a matching rule that guesses:
+ * `savings` is a token subset of both `Primary Savings` and `Regular Savings`,
+ * so there is no defensible way to pick one. ADR-0007 makes that a Hard Failure
+ * listing both candidates rather than a coin flip, and this member is what
+ * proves the rule is enforced rather than asserted.
+ */
+const TWO_SAVINGS: Member = {
+  memberNumber: "33333",
+  name: "PRISCILLA J VANTERPOOL",
+  memberSince: "07/19/1989",
+  status: "Active",
+  taxIdMasked: "xxx-xx-2064",
+  branch: "001 - MAIN OFFICE",
+  accounts: [
+    {
+      accountNumber: "0000033333-S01",
+      description: "Primary Savings",
+      type: "SAVINGS",
+      openedOn: "07/19/1989",
+      status: "Active",
+      availableBalance: "$15,004.00",
+      currentBalance: "$15,004.00",
+      lastActivityOn: "08/12/2026"
+    },
+    {
+      accountNumber: "0000033333-S02",
+      description: "Regular Savings",
+      type: "SAVINGS",
+      openedOn: "02/28/2003",
+      status: "Active",
+      availableBalance: "$260.13",
+      currentBalance: "$260.13",
+      lastActivityOn: "07/30/2026"
+    },
+    {
+      accountNumber: "0000033333-D10",
+      description: "Checking",
+      type: "DRAFT",
+      openedOn: "02/28/2003",
+      status: "Active",
+      availableBalance: "$78.91",
+      currentBalance: "$78.91",
+      lastActivityOn: "08/26/2026"
+    }
+  ]
+}
+
+/**
+ * Ticket 12's member: savings held, checking not.
+ *
+ * Everything up to and including Account Detail behaves exactly as it does for
+ * `12345`. The screen that finally differs is the one inside the iframe.
+ */
+const SUPERVISOR_HOLD: Member = {
+  memberNumber: "77777",
+  name: "DOUGLAS R FAIRWEATHER",
+  memberSince: "11/09/2011",
+  status: "Active",
+  taxIdMasked: "xxx-xx-8802",
+  branch: "004 - RIVERSIDE",
+  accounts: [
+    {
+      accountNumber: "0000077777-S01",
+      description: "Primary Savings",
+      type: "SAVINGS",
+      openedOn: "11/09/2011",
+      status: "Restricted",
+      availableBalance: "$2,730.11",
+      currentBalance: "$2,905.60",
+      lastActivityOn: "08/21/2026",
+      restriction: {
+        code: "SUP-HOLD-02",
+        notice:
+          "Balances are withheld on this account pending supervisor authorization. A supervisor must enter an override code to display the account."
+      }
+    },
+    {
+      accountNumber: "0000077777-D10",
+      description: "Checking",
+      type: "DRAFT",
+      openedOn: "02/17/2015",
+      status: "Active",
+      availableBalance: "$318.42",
+      currentBalance: "$318.42",
+      lastActivityOn: "08/25/2026"
+    }
+  ]
+}
+
+/**
+ * Ticket 13's member: a checking account, and no savings account at all.
+ *
+ * The most important thing about this record is how *ordinary* it is. Nothing is
+ * held, nothing is restricted, nothing is slow, and every screen renders exactly
+ * as it does for `12345`. The account list is a perfectly good account list; it
+ * simply has one row in it.
+ *
+ * That is what makes it the fixture for the distinction the brief calls the most
+ * common design mistake in this problem. A capability asked for the savings
+ * balance finds no savings account, and there is nothing on the screen to
+ * distinguish "the domain said no" from "the automation cannot see it". The
+ * difference is not observable at all — which is why it has to be *learned* from
+ * what a person did when they met it, rather than inferred from the page.
+ *
+ * Deliberately not a second restriction, a second empty table or a "no accounts"
+ * message. Any of those would give the system something to recognise, and
+ * recognising it would be the answer smuggled in as perception.
+ */
+const CHECKING_ONLY: Member = {
+  memberNumber: "88888",
+  name: "MARGUERITE A ELLSWORTH",
+  memberSince: "06/14/2019",
+  status: "Active",
+  taxIdMasked: "xxx-xx-4417",
+  branch: "002 - NORTHGATE",
+  accounts: [
+    {
+      accountNumber: "0000088888-D10",
+      description: "Checking",
+      type: "DRAFT",
+      openedOn: "06/14/2019",
+      status: "Active",
+      availableBalance: "$1,046.73",
+      currentBalance: "$1,046.73",
+      lastActivityOn: "08/24/2026"
+    }
+  ]
+}
+
+/**
+ * The member whose record the application is slow and awkward about serving.
+ *
+ * Nothing here says so: the record is ordinary, and the difficulty lives entirely
+ * in `conditions.ts`. That separation is the point. A transient condition is a
+ * property of a moment, not of a member, and a fixture that baked it into the
+ * data would be testing a different thing.
+ */
+const TRANSIENT: Member = {
+  memberNumber: "55555",
+  name: "DELPHINE R OKONKWO",
+  memberSince: "11/02/2011",
+  status: "Active",
+  taxIdMasked: "xxx-xx-7730",
+  branch: "004 - RIVERSIDE",
+  accounts: [
+    {
+      accountNumber: "0000055555-S01",
+      description: "Primary Savings",
+      type: "SAVINGS",
+      openedOn: "11/02/2011",
+      status: "Active",
+      availableBalance: "$917.40",
+      currentBalance: "$1,117.40",
+      lastActivityOn: "08/25/2026"
+    },
+    {
+      accountNumber: "0000055555-D10",
+      description: "Checking",
+      type: "DRAFT",
+      openedOn: "01/19/2016",
+      status: "Active",
+      availableBalance: "$233.06",
+      currentBalance: "$233.06",
+      lastActivityOn: "08/26/2026"
+    }
+  ]
+}
+
+const MEMBERS: ReadonlyMap<string, Member> = new Map(
+  [HAPPY_PATH, LABEL_VARIANT, TWO_SAVINGS, TRANSIENT, SUPERVISOR_HOLD, CHECKING_ONLY].map((member) => [
+    member.memberNumber,
+    member
+  ])
+)
+
+/** What a supervisor typed into the override panel. Both halves are required. */
+export interface AuthorizationAttempt {
+  readonly supervisorId: string
+  readonly authorizationCode: string
+}
+
+/**
+ * Whether an override attempt releases the hold.
+ *
+ * A non-empty supervisor id and a four-digit code. Heritage Core validates the
+ * shape and nothing else: what the fixture has to demonstrate is that *a person
+ * holding a code* is required, not that the code is interesting.
+ */
+export const authorizationAccepted = (attempt: AuthorizationAttempt): boolean =>
+  attempt.supervisorId.trim() !== "" && /^[0-9]{4}$/.test(attempt.authorizationCode.trim())
+
+/** Whether an override was attempted at all, well formed or not. */
+export const authorizationAttempted = (attempt: AuthorizationAttempt): boolean =>
+  attempt.supervisorId.trim() !== "" || attempt.authorizationCode.trim() !== ""
+
+export const findMember = (memberNumber: string): Member | undefined =>
+  MEMBERS.get(memberNumber.trim())
+
+export const findAccount = (member: Member, accountNumber: string): Account | undefined =>
+  member.accounts.find((account) => account.accountNumber === accountNumber.trim())
