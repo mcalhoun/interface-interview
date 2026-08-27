@@ -251,6 +251,41 @@ const referentialProblems = (artifact: CapabilityArtifact): ReadonlyArray<string
     }
   }
 
+  // The states this Capability has learned it must never handle itself.
+  //
+  // Three checks, and each one is a rule that would otherwise live only in the
+  // Amendment that writes these entries. A hand-edited document has to obey them
+  // too, which is the whole reason they are here: the write-once rule is a
+  // property of the *Artifact*, not of the mechanism that happened to produce one.
+  const humanSteps = new Map<string, string>()
+  for (const [code, entry] of Object.entries(artifact.requiresHuman ?? {})) {
+    const where = `requires-human state ${code}`
+    if (!stepIds.has(entry.step)) {
+      problems.push(`${where} names step ${entry.step}, which this capability does not have`)
+    }
+    // A code in both sections is a downgrade half-performed, and it is refused
+    // rather than resolved: a document that classifies one state twice does not
+    // say which classification is in force, and the safe reading of a
+    // requires-human entry is the only reading there can be.
+    if (declared.has(code)) {
+      problems.push(
+        `${where} is also declared as a business outcome. A learned classification only ever ` +
+          `tightens, so a code is in one section or the other and never in both`
+      )
+    }
+    // One Step's checkpoint reaches one classified state, because the Step is the
+    // whole of how that state is recognised (see `RequiresHuman.ts`). Two entries
+    // would make which one applies depend on key order.
+    const already = humanSteps.get(entry.step)
+    if (already !== undefined) {
+      problems.push(
+        `${where} and ${already} both classify step ${entry.step}, and a step's checkpoint ` +
+          `reaches one classified state`
+      )
+    }
+    humanSteps.set(entry.step, code)
+  }
+
   // Recovery rules. A rule can fire at any Step, so unlike a Step's own values
   // its references are checked against the inputs alone: `{ from: step, ... }`
   // would mean something different depending on where the condition happened to

@@ -16,14 +16,22 @@
  *
  * ## What this module will and will not write
  *
- * It writes exactly one kind of change: a state the Capability previously
- * escalated becomes a state it declares. Nothing else. It cannot add a Step,
- * change a Target, retune a bound or touch a `robustness` paragraph, because
- * those are things a person decides and this is a mechanism a person's *answer*
- * drives. The narrowness is the safety property: an Amendment that could rewrite
- * anything would be a code generator with a human rubber stamp, and the reviewer
- * reading the diff would have to check the whole document rather than one
- * addition.
+ * It writes exactly two kinds of change, and they are the same change seen from
+ * two sides: a state the Capability previously escalated **without knowing what
+ * it was** becomes a state it declares. `declareLearnedNoMatch` declares one as a
+ * Business Outcome the run may answer with; `declareRequiresHuman` declares one
+ * as a state that always stops for a person. Nothing else. Neither can add a
+ * Step, change a Target, retune a bound or touch a `robustness` paragraph,
+ * because those are things a person decides and this is a mechanism a person's
+ * *answer* drives. The narrowness is the safety property: an Amendment that could
+ * rewrite anything would be a code generator with a human rubber stamp, and the
+ * reviewer reading the diff would have to check the whole document rather than
+ * one addition.
+ *
+ * The two are not symmetrical, and must not be. Learning a Business Outcome makes
+ * a run finish unattended that previously stopped; learning a requires-human state
+ * makes a run stop *better* — sooner, with a name for what it met, and routed to
+ * somebody who can act — and never makes it proceed.
  *
  * ## The ratchet
  *
@@ -31,12 +39,20 @@
  * Amendment has to pass. SPEC: "These entries are write-once: no later
  * intervention can downgrade one to `business_outcome`. The rule only tightens."
  *
- * Ticket 13 only ever travels in the `business_outcome` direction, since
- * `requires_human` is the section ticket 14 adds. The rule is written and tested
- * in full anyway — `classificationOf` is the one function that has to learn
- * about a new section, and the refusal it feeds already exists — so that
- * tightening becomes a matter of a document gaining a field rather than an
- * engine gaining a rule.
+ * Ticket 13 could only ever travel in the `business_outcome` direction, because
+ * `requiresHuman:` did not exist to be read yet. It wrote and tested the rule in
+ * full anyway, and predicted that `classificationOf` was the single function a
+ * new section would have to teach. That turned out to be exactly true: ticket 14
+ * added one lookup there and changed nothing else in this file's refusals, and
+ * the downgrade SPEC actually names became reachable.
+ *
+ * **The direction that matters is unreachable from below.** There is no argument
+ * a caller of `declareLearnedNoMatch` can make — no answer, no operator, no
+ * number of repetitions — that turns a code classified `requires_human` into a
+ * Business Outcome. It is not a warning and not a default that could be
+ * overridden; there is no parameter to override it with. Frequency is not
+ * evidence of safety, so seeing a privileged decision a hundred times reaches the
+ * same refusal it reached the first time.
  *
  * ## Nothing here quotes a value
  *
@@ -52,6 +68,7 @@ import { noMatchCode, noMatchOutcome } from "./Action.ts"
 import type { OutcomeDeclaration } from "./BusinessOutcomes.ts"
 import type { CapabilityArtifact, Step } from "./CapabilityArtifact.ts"
 import { formatArtifact } from "./parse.ts"
+import { type RequiresHumanDeclaration, requiresHumanCode } from "./RequiresHuman.ts"
 
 /**
  * The three classes a state can be learned into, in ascending strictness.
@@ -86,15 +103,27 @@ export const atLeastAsStrictAs = (
 /**
  * What this Artifact already says about one code, if anything.
  *
- * The single place the ratchet reads from, and the single function ticket 14
- * extends: when `requiresHuman:` exists, it is one more lookup here, and every
- * refusal below starts enforcing it without changing.
+ * The single place the ratchet reads from, and — as ticket 13 wrote it would be —
+ * the single function ticket 14 had to extend. One more lookup, and every refusal
+ * below started enforcing the downgrade rule with no other change anywhere.
+ *
+ * **`requiresHuman` is consulted first, and the order is load-bearing.** A
+ * document that somehow carried a code in both sections is malformed —
+ * `parseArtifact` refuses one — but this function is also called on documents
+ * being *built*, before anything has parsed them, and on a malformed one the only
+ * safe answer is the stricter of the two. Reading `outcomes` first would make a
+ * requires-human entry invisible to the ratchet in exactly the case where a
+ * downgrade is being attempted, which is the one case it exists for.
  */
 export const classificationOf = (
   artifact: CapabilityArtifact,
   code: string
 ): LearnedClass | undefined =>
-  artifact.outcomes?.[code] !== undefined ? "business_outcome" : undefined
+  artifact.requiresHuman?.[code] !== undefined
+    ? "requires_human"
+    : artifact.outcomes?.[code] !== undefined
+      ? "business_outcome"
+      : undefined
 
 /** The Amendment was refused. Nothing was written and nothing was changed. */
 export class AmendmentRefused extends Schema.TaggedError<AmendmentRefused>()("AmendmentRefused", {
@@ -238,10 +267,146 @@ export const declareLearnedNoMatch = (
     )
   }
 
-  // The scan is over the *finished document*, not over the fields that went into
-  // it. Prose is assembled from several places, and a check that looked at each
-  // one separately would miss a value that only exists once they are joined.
-  // Ticket 11's third gate is here for the same reason.
+  return carriesNothingSensitive(amended, options, refuse)
+}
+
+/**
+ * What an Operator's confirmation turns into on the other side of the ladder.
+ *
+ * The same five fields `LearnedBusinessOutcome` carries, and deliberately so:
+ * what an Operator supplies is one bit either way, and everything else is derived
+ * from the Artifact and the Intervention record. A shape that asked for more here
+ * than there would be an interface admitting that this decision needs more
+ * thought than the other one, which is backwards — this is the decision that can
+ * never be taken back.
+ */
+export interface LearnedRequiresHuman {
+  /** The version being cut. A new file; never one that already exists. */
+  readonly version: string
+  /** Which Step's Checkpoint reaches the state. The whole recognition rule. */
+  readonly stepId: string
+  /** One line, in the caller's terms. What is true of the domain. */
+  readonly title: string
+  /** Prose for whoever approves this version: what the state is, and why. */
+  readonly summary: string
+  /** The Intervention that justified it, in a sentence naming the record. */
+  readonly discoveredFrom: string
+}
+
+/**
+ * Declare that a Step's Checkpoint reaches a state automation must never handle
+ * itself, at a new version.
+ *
+ * One section appears and nothing else moves: `requiresHuman:` gains an entry
+ * naming the Step, with the prose and the provenance. No Target, no bound, no
+ * assertion changes, because nothing about *how the Capability works* was
+ * learned. What was learned is what the state it already stopped on means.
+ *
+ * ## What this does not do, and it is the point
+ *
+ * It does not make the state automatable, and there is no version of it that
+ * could. The entry has no remedy, no branch and no outcome code a run can return
+ * as an answer; the only thing Replay does with one is stop sooner and say a
+ * better sentence. SPEC: "The system learns that it must escalate and why. It
+ * never learns to proceed."
+ *
+ * ## Why an existing classification is refused in both directions
+ *
+ * A code already under `requiresHuman:` is refused because these entries are
+ * write-once and a second episode teaches nothing the document does not already
+ * say. A code already under `outcomes:` is refused too — even though the ratchet
+ * permits that direction — because tightening a declared Business Outcome takes a
+ * *value out of the Capability's published contract*, and a caller may already
+ * have a branch on it. That is a breaking change to a signature, which is a
+ * hand-written version cut by whoever owns the Capability, not something an
+ * Intervention performs while nobody is looking. The mechanism refuses to make
+ * it and says so rather than quietly declining.
+ */
+export const declareRequiresHuman = (
+  artifact: CapabilityArtifact,
+  learned: LearnedRequiresHuman,
+  options: AmendmentOptions = {}
+): Result.Result<CapabilityArtifact, AmendmentRefused> => {
+  const refuse = (reason: string) =>
+    Result.fail(new AmendmentRefused({ capability: artifact.capability, reason }))
+
+  if (learned.version === artifact.version) {
+    return refuse(
+      `version ${learned.version} is the version being amended. An amendment is a new ` +
+        `version beside the old one, so that the two can be diffed`
+    )
+  }
+
+  const step = artifact.steps.find((candidate) => candidate.id === learned.stepId)
+  if (step === undefined) return refuse(`there is no step ${learned.stepId}`)
+
+  // Derived, never supplied. See `RequiresHuman.ts`: an Intervention teaches a
+  // state's classification, not a capability's vocabulary, and the one place a
+  // name for this state can come from is the Step the author already named.
+  const code = requiresHumanCode(step.id)
+
+  const existing = classificationOf(artifact, code)
+  if (existing === "requires_human") {
+    return refuse(
+      `${code} is already declared as a state this capability always stops on. These ` +
+        `entries are write-once, and a second episode demonstrating the same thing changes ` +
+        `nothing about what the document already says`
+    )
+  }
+  if (existing !== undefined) {
+    return refuse(
+      `${code} is already classified as ${existing} in this capability. Tightening a declared ` +
+        `outcome removes a value a caller may already branch on, which is a change to a ` +
+        `published contract and belongs in a hand-written version`
+    )
+  }
+  // The same fact from the other side: an Artifact may only classify a Step's
+  // checkpoint state once, and `parseArtifact` refuses a document that does it
+  // twice. Catching it here means the refusal names the step rather than
+  // surfacing as an unparseable document two calls later.
+  const alreadyClassified = Object.entries(artifact.requiresHuman ?? {}).find(
+    ([, entry]) => entry.step === step.id
+  )
+  if (alreadyClassified !== undefined) {
+    return refuse(
+      `step ${step.id} is already classified as ${alreadyClassified[0]}, and a step's ` +
+        `checkpoint reaches one classified state`
+    )
+  }
+
+  const declaration: RequiresHumanDeclaration = {
+    step: step.id,
+    title: learned.title,
+    summary: learned.summary,
+    discoveredFrom: learned.discoveredFrom
+  }
+
+  const amended: CapabilityArtifact = {
+    ...artifact,
+    version: learned.version,
+    requiresHuman: { ...(artifact.requiresHuman ?? {}), [code]: declaration }
+  }
+
+  return carriesNothingSensitive(amended, options, refuse)
+}
+
+/**
+ * The last gate both Amendments pass, and the only one that reads the finished
+ * document.
+ *
+ * The scan is over the *finished document*, not over the fields that went into
+ * it. Prose is assembled from several places, and a check that looked at each one
+ * separately would miss a value that only exists once they are joined. Ticket
+ * 11's third gate is here for the same reason.
+ *
+ * Shared rather than repeated, so there is one answer to "what does an Amendment
+ * refuse to carry" no matter which kind is being written.
+ */
+const carriesNothingSensitive = (
+  amended: CapabilityArtifact,
+  options: AmendmentOptions,
+  refuse: (reason: string) => Result.Result<never, AmendmentRefused>
+): Result.Result<CapabilityArtifact, AmendmentRefused> => {
   const yaml = formatArtifact(amended)
   const scrubbed = options.scrub?.(yaml) ?? yaml
   if (scrubbed !== yaml) {
@@ -251,7 +416,6 @@ export const declareLearnedNoMatch = (
         `and carries no runtime data (ADR-0008). Rewrite the intervention detail without it`
     )
   }
-
   return Result.succeed(amended)
 }
 

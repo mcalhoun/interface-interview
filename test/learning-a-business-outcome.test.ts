@@ -564,8 +564,13 @@ it.live("a state nobody has classified still escalates after the amendment", () 
 it("will not turn a checkpoint failure into a business outcome", () => {
   // Ticket 12's `77777` is a supervisor hold: the Action landed, the Checkpoint
   // failed, and an Operator got past it by *acting* with authority. `classify`
-  // returns `requires_human` for that, and this mechanism refuses to write it as
-  // anything else — which is ticket 14's section of the artifact, not this one.
+  // returns `requires_human` for that, and this mechanism will not write it as
+  // anything else.
+  //
+  // Ticket 14 gave that class somewhere to go, so what used to be `Unchanged`
+  // here is now an amendment — into `requiresHuman:`, never into `outcomes:`.
+  // What this test is for is unchanged: the state the operator had to *act* to
+  // resolve does not become an answer this capability may return.
   const held = record({
     actions: [{ at: "2026-08-27T00:00:15.000Z", detail: "entered supervisor override" }],
     nextTime: "always_stop_here",
@@ -573,9 +578,16 @@ it("will not turn a checkpoint failure into a business outcome", () => {
   })
 
   const proposal = proposeAmendment({ artifact: beforeLearning(), record: held })
-  expect(proposal._tag).toBe("Unchanged")
-  if (proposal._tag !== "Unchanged") throw new Error("unreachable")
-  expect(proposal.why).toContain("requires_human")
+  if (proposal._tag !== "Amended") throw new Error(`expected an amendment, got ${proposal._tag}`)
+  expect(proposal.learnedClass).toBe("requires_human")
+
+  // The document gained an always-escalating entry and no business outcome. The
+  // no-match state at this same step is still an escalation at this version,
+  // which is the assertion that the two learned states stayed separate.
+  expect(proposal.amended.outcomes?.["NO_MATCHING_ITEM"]).toBeUndefined()
+  expect(Object.keys(proposal.amended.requiresHuman ?? {})).toEqual([
+    "OPEN_ACCOUNT_REQUIRES_HUMAN"
+  ])
 })
 
 it("will not amend on the strength of a question nobody answered", () => {

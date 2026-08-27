@@ -1,0 +1,38 @@
+--- member.account-balance@1.1.0
++++ member.account-balance@1.2.0
+@@ -1,5 +1,5 @@
+ capability: member.account-balance
+-version: 1.1.0
++version: 1.2.0
+ title: Read a member's account balance
+ summary: |
+   Looks a member up by number in Heritage Core Member Services, opens one of their accounts, and reads back the available and current balances. Which account is a parameter; omitted, it is the member's savings account, because that is what the goal this capability was discovered from asked for.
+@@ -96,6 +96,28 @@
+       Asked "Next time automation meets this state, should it handle it itself?", they answered yes. j.okafor took control, observed the screen, changed nothing, and confirmed that automation should treat this state as an answer next time.
+ 
+       ADR-0004: an operator who resolves a state without acting has demonstrated that it is terminal and observational, which is what makes it declarable. The classification comes from what they did, not from what anyone wrote in advance, and it only ever tightens from here.
++requiresHuman:
++  OPEN_ACCOUNT_REQUIRES_HUMAN:
++    step: open-account
++    title: >-
++      A person with authority is required: Open the account the caller asked for, whichever of
++      them that is.
++    summary: |-
++      Automation reached this step and the checkpoint "Account Detail is showing, with the balance panel loaded inside its frame" did not hold. Somebody took the live session and resolved it, and resolving it took 1 action(s) on that session — not a longer wait, not a second look, and not a better description of a control. That is what makes this a permissions problem rather than a user interface one (ADR-0004).
++
++      From this version on, a run that meets this state stops under a code and says this, rather than reporting a checkpoint that would not hold and leaving whoever arrives to work out what they are looking at. Every declared recovery rule still gets its one look first, because a transient condition can be met at this step too and getting past one of those unattended is worth more than appearing to fail faster; what changes is that when none of them recognises the screen, the answer is a lookup rather than an inference from having run out of things to try.
++
++      What it does not do is get past it. Nothing was learned about how to resolve this state, because what resolved it was authority, and authority is not a thing a capability can be given in a document. This entry is write-once: no later intervention can downgrade it to a business outcome, however many times somebody resolves it, because frequency is not evidence of safety.
++
++      What that person said about it, in their own words: "released the supervisor hold on this account as an authorized supervisor. Nothing about the screen was wrong and nothing was waiting to load; the application was refusing, correctly, until somebody with the authority to override it said so"
++    discoveredFrom: |-
++      Learned from intervention session-supervisor-hold-intervention-1 (session session-supervisor-hold, run supervisor-hold, step open-account), raised at 2026-08-27T08:52:22.992Z.
++
++      r.mensah took control at 2026-08-27T08:52:22.999Z, recorded 1 action(s) on the live session (entered supervisor override for SUP-HOLD-02), and returned it at 2026-08-27T08:52:23.039Z.
++
++      Asked "Next time automation meets this state, should it handle it itself?", they answered no: automation should always stop here. r.mensah resolved this by acting on the live session and confirmed that automation should always stop here rather than repeat what they did.
++
++      ADR-0004: an operator who resolves a state by exercising authority has demonstrated a permissions problem rather than a user interface one, and a capability cannot be given authority by a document. The classification comes from what they did, not from what anyone wrote in advance, and it never moves back down: no later intervention can downgrade this to a business outcome.
+ steps:
+ - id: open-member-search
+   intent: Land on the Member Services search screen with an empty search form.

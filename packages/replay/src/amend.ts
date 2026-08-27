@@ -22,14 +22,27 @@
  * refuses. What they supply is a judgement; what a document says is derived from
  * a judgement plus what is already written down.
  *
- * ## What it will not amend
+ * ## Two branches, and the asymmetry between them
  *
- * A Checkpoint that failed. Ticket 12's `77777` is one of those, and the answer
- * to it is a `requiresHuman:` section (ticket 14) rather than a Business Outcome
- * — an Operator who released a supervisor hold *acted*, so `classify` returns
- * `requires_human` and this module refuses to write it as anything else. The
- * refusal names the class it derived, so ticket 14 lands as a second branch here
- * beside a first one that already says what it is waiting for.
+ * `classify` returns one of three classes and this module writes two of them.
+ *
+ *   - `business_outcome` — an Operator observed a state and changed nothing, so
+ *     the state is terminal and observational, and the Capability learns to
+ *     *answer* with it. Ticket 13.
+ *   - `requires_human` — an Operator resolved it by acting, and said automation
+ *     should always stop here. The Capability learns to *stop better*: sooner,
+ *     under a name, routed to somebody who can act. Ticket 14. It never learns to
+ *     proceed, and there is no shape of change here that could teach it to.
+ *   - `recoverable` — an Operator acted and said automation should do the same
+ *     thing itself. Writing a remedy down is a different mechanism from either of
+ *     these, and it is ticket 15's; this returns `Unchanged` naming the class.
+ *
+ * The two it does write are not mirror images, and the difference is the whole
+ * safety argument. Which of them an episode demonstrated is decided by `classify`
+ * from **what the Operator did**, not from what they answered — and an Operator
+ * who had to act cannot produce a `business_outcome` from any answer at all. So
+ * the direction that costs a person forever is reachable by a radio button, and
+ * the direction that makes a run unattended is not.
  */
 
 import {
@@ -37,6 +50,7 @@ import {
   type LearnedClass,
   AmendmentRefused,
   declareLearnedNoMatch,
+  declareRequiresHuman,
   describeItemList,
   describeValueRef,
   diffArtifacts,
@@ -98,16 +112,24 @@ export const proposeAmendment = (request: AmendmentRequest): ProposedAmendment =
     return { _tag: "Unchanged", why: learned.why }
   }
 
-  // Ticket 14 and ticket 15's promotions land as further branches here. Named
-  // rather than lumped into a generic refusal, because "this episode taught a
-  // requires-human state and nothing yet writes those down" is a different thing
-  // for a person to read than "no".
+  // Ticket 14's branch. It comes first because it is the one that must never be
+  // reached by accident: everything below assumes a Business Outcome is being
+  // written, and a `requires_human` episode falling through to it would be the
+  // one bug in this file that matters.
+  if (learned.learnedClass === "requires_human") {
+    return requiresHumanAmendment(request, learned.because)
+  }
+
+  // Ticket 15's promotion lands as a further branch here. Named rather than
+  // lumped into a generic refusal, because "this episode taught a recoverable
+  // state and nothing yet writes those down" is a different thing for a person to
+  // read than "no".
   if (learned.learnedClass !== "business_outcome") {
     return {
       _tag: "Unchanged",
       why:
         `this intervention demonstrated a ${learned.learnedClass} state, and only a business ` +
-        `outcome can be declared today. ${learned.because}`
+        `outcome or a requires-human state can be declared today. ${learned.because}`
     }
   }
 
@@ -144,6 +166,60 @@ export const proposeAmendment = (request: AmendmentRequest): ProposedAmendment =
     amended: amended.success,
     learnedClass: learned.learnedClass,
     because: learned.because,
+    diff: diffArtifacts(artifact, amended.success)
+  }
+}
+
+/**
+ * A Checkpoint that would not hold, and an Operator who got past it with
+ * authority.
+ *
+ * Separate from the Business Outcome path rather than folded into it, because
+ * almost nothing is shared: there is no selection to reclassify, no list to
+ * describe, and the state is recognised by the Step rather than by a code the
+ * author wrote. What the two do share is the shape of the transaction — one
+ * derived declaration, one required provenance sentence, one scrubbed document —
+ * and that is `Amendment.ts`'s job on both sides.
+ *
+ * The Step is not required to be any particular kind of Action. A Checkpoint can
+ * fail after any of them, and "what kind of gesture preceded the state a person
+ * had to have authority to resolve" is not a question with a useful answer.
+ */
+const requiresHumanAmendment = (
+  request: AmendmentRequest,
+  because: string
+): ProposedAmendment => {
+  const { artifact, record } = request
+
+  const step = artifact.steps.find((candidate) => candidate.id === record.intervention.stepId)
+  if (step === undefined) {
+    return {
+      _tag: "Unchanged",
+      why:
+        `this intervention was raised at step ${record.intervention.stepId}, which this ` +
+        `version of the capability does not have`
+    }
+  }
+
+  const amended = declareRequiresHuman(
+    artifact,
+    {
+      version: request.version ?? nextMinorVersion(artifact.version),
+      stepId: step.id,
+      title: requiresHumanTitleFor(step.intent),
+      summary: requiresHumanSummaryFor(record, step.checkpoint.description),
+      discoveredFrom: requiresHumanProvenanceFor(record, because)
+    },
+    { scrub: request.scrub ?? ((text) => text) }
+  )
+
+  if (Result.isFailure(amended)) return { _tag: "Refused", refusal: amended.failure }
+
+  return {
+    _tag: "Amended",
+    amended: amended.success,
+    learnedClass: "requires_human",
+    because,
     diff: diffArtifacts(artifact, amended.success)
   }
 }
@@ -211,5 +287,79 @@ const provenanceFor = (record: InterventionRecord, because: string): string => {
       `terminal and observational, which is what makes it declarable. The classification ` +
       `comes from what they did, not from what anyone wrote in advance, and it only ever ` +
       `tightens from here.`
+  ].join("\n")
+}
+
+/**
+ * The caller-facing line for a state that always stops, built from the Step's own
+ * `intent` — the same source, and for the same reason, as its Business Outcome
+ * counterpart above.
+ *
+ * It says what automation was *trying* to do, not what the screen said, because
+ * the screen is the one thing the system is not allowed to interpret. "A person
+ * with authority is required" is the class, and the class is what was learned.
+ */
+const requiresHumanTitleFor = (intent: string): string =>
+  `A person with authority is required: ${withoutTrailingStop(intent)}.`
+
+const requiresHumanSummaryFor = (record: InterventionRecord, checkpoint: string): string =>
+  [
+    `Automation reached this step and the checkpoint "${withoutTrailingStop(checkpoint)}" did ` +
+      `not hold. Somebody took the live session and resolved it, and resolving it took ` +
+      `${record.actions.length} action(s) on that session — not a longer wait, not a second ` +
+      `look, and not a better description of a control. That is what makes this a permissions ` +
+      `problem rather than a user interface one (ADR-0004).`,
+    ``,
+    `From this version on, a run that meets this state stops under a code and says this, ` +
+      `rather than reporting a checkpoint that would not hold and leaving whoever arrives to ` +
+      `work out what they are looking at. Every declared recovery rule still gets its one ` +
+      `look first, because a transient condition can be met at this step too and getting past ` +
+      `one of those unattended is worth more than appearing to fail faster; what changes is ` +
+      `that when none of them recognises the screen, the answer is a lookup rather than an ` +
+      `inference from having run out of things to try.`,
+    ``,
+    `What it does not do is get past it. Nothing was learned about how to resolve this state, ` +
+      `because what resolved it was authority, and authority is not a thing a capability can ` +
+      `be given in a document. This entry is write-once: no later intervention can downgrade ` +
+      `it to a business outcome, however many times somebody resolves it, because frequency ` +
+      `is not evidence of safety.`,
+    ``,
+    `What that person said about it, in their own words: ` +
+      `${JSON.stringify(withoutTrailingStop(record.detail ?? "(nothing recorded)"))}`
+  ].join("\n")
+
+/**
+ * The link back to the Intervention, and the argument that it justified this.
+ *
+ * The same identifiers the Business Outcome provenance carries, and one sentence
+ * that is different in the way that matters: it names the **actions**, because
+ * the actions are the evidence. An Operator's answer to the one question could
+ * have been a mis-click; that they had to do something to the live session is a
+ * fact the system recorded without asking, and it is the half of the
+ * classification nobody can fake.
+ */
+const requiresHumanProvenanceFor = (record: InterventionRecord, because: string): string => {
+  const it = record.intervention
+  const actions = record.actions.length === 0
+    ? "recorded no actions on the live session"
+    : `recorded ${record.actions.length} action(s) on the live session (${
+      record.actions.map((action) => withoutTrailingStop(action.detail)).join("; ")
+    })`
+
+  return [
+    `Learned from intervention ${it.interventionId} (session ${it.sessionId}, run ${it.runId}, ` +
+      `step ${it.stepId}), raised at ${it.raisedAt}.`,
+    ``,
+    `${record.operator ?? "(unnamed)"} took control at ${record.tookControlAt ?? "(unknown)"}, ` +
+      `${actions}, and returned it at ${record.returnedAt ?? "(unknown)"}.`,
+    ``,
+    `Asked "${THE_QUESTION}", they answered no: automation should always stop here. ` +
+      `${because}.`,
+    ``,
+    `ADR-0004: an operator who resolves a state by exercising authority has demonstrated a ` +
+      `permissions problem rather than a user interface one, and a capability cannot be given ` +
+      `authority by a document. The classification comes from what they did, not from what ` +
+      `anyone wrote in advance, and it never moves back down: no later intervention can ` +
+      `downgrade this to a business outcome.`
   ].join("\n")
 }
