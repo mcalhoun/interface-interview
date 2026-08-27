@@ -180,6 +180,14 @@ const report = (
         break
       case "intervention_required":
         yield* Console.log(`${result.capability}@${result.version}  INTERVENTION REQUIRED`)
+        // A state the capability has *learned* always needs a person carries the
+        // code it declared for it, and a caller routes on that rather than on the
+        // sentence after it. Absent means this is a state nothing has classified,
+        // which is a different thing to do with — so it is printed only when
+        // there is one.
+        if (result.code !== undefined) {
+          yield* Console.log(`  escalate: ${result.code}`)
+        }
         yield* Console.log(`  at step ${result.stepId}: ${result.reason}`)
         yield* Console.log(`  session:  ${result.sessionId}`)
         break

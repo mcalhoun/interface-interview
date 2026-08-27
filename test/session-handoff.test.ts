@@ -40,6 +40,23 @@ const RESTRICTED = "77777"
 // became a selection; the Step that meets the supervisor hold is the same one.
 const HELD_STEP = "open-account"
 
+/**
+ * The last version at which this state is still *unclassified*.
+ *
+ * Ticket 14's intervention taught 1.2.0 that the supervisor hold always needs a
+ * person, so at `latest` the run escalates under a declared code with the
+ * sentence somebody wrote for it, and an unattended run reports
+ * `intervention_required` rather than a Hard Failure. Both of those are the
+ * point of that ticket and both are asserted in
+ * `test/learning-that-a-state-needs-a-human.test.ts`.
+ *
+ * The tests below are about the *mechanism* — that control genuinely transfers,
+ * that the run resumes rather than restarts, that an unattended run escalates to
+ * nobody — and none of that changed. Pinning them here keeps them testing the
+ * handoff instead of quietly re-testing what the document has since learned.
+ */
+const BEFORE_LEARNING = "1.1.0"
+
 /** What a supervisor does at the live browser window to release the hold. */
 const releaseTheHold = (desk: {
   surface: {
@@ -260,7 +277,7 @@ it.live(
   () =>
     Effect.gen(function* () {
       const outcome = yield* attendedReplay({
-        artifact: shippedArtifact(),
+        artifact: shippedArtifact(undefined, BEFORE_LEARNING),
         inputs: { memberId: RESTRICTED },
         runId: "handoff-resolved",
         operate: (desk) =>
@@ -498,7 +515,7 @@ it.live(
   () =>
     Effect.gen(function* () {
       const outcome = yield* attendedReplay({
-        artifact: shippedArtifact(),
+        artifact: shippedArtifact(undefined, BEFORE_LEARNING),
         inputs: { memberId: RESTRICTED },
         runId: "handoff-unattended",
         attended: false

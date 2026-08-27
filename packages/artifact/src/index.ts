@@ -10,6 +10,7 @@
 export type {
   Catalog,
   CatalogEntry,
+  CatalogEscalation,
   CatalogOutcome,
   CatalogParameter,
   CatalogReturn
@@ -41,13 +42,15 @@ export {
 export type {
   AmendmentOptions,
   LearnedBusinessOutcome,
-  LearnedClass
+  LearnedClass,
+  LearnedRequiresHuman
 } from "./Amendment.ts"
 export {
   AmendmentRefused,
   atLeastAsStrictAs,
   classificationOf,
   declareLearnedNoMatch,
+  declareRequiresHuman,
   nextMinorVersion
 } from "./Amendment.ts"
 
@@ -76,10 +79,22 @@ export {
   capabilityRef,
   declaredOutcome,
   declaredOutcomeCodes,
+  declaredRequiresHumanCodes,
   recoverableConditions,
+  requiresHumanAtStep,
   Step as StepSchema,
   SurfaceDeclaration as SurfaceDeclarationSchema
 } from "./CapabilityArtifact.ts"
+
+export type {
+  RequiresHumanDeclaration,
+  RequiresHumanDeclarations
+} from "./RequiresHuman.ts"
+export {
+  requiresHumanCode,
+  RequiresHumanDeclaration as RequiresHumanDeclarationSchema,
+  RequiresHumanDeclarations as RequiresHumanDeclarationsSchema
+} from "./RequiresHuman.ts"
 
 export type { RecoverableCondition, RecoveryResume, RemedyStep } from "./Recovery.ts"
 export {

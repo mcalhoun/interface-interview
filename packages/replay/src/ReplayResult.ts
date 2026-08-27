@@ -318,6 +318,21 @@ const InterventionRequired = Schema.Struct({
   ...Common,
   reason: Schema.String,
   stepId: Schema.String,
+  /**
+   * The Artifact's declared code for a state it has *learned* always needs a
+   * person (ticket 14), when this is one of those.
+   *
+   * Optional, and its absence is information rather than a gap: no code means the
+   * run met a state nothing has classified, which is a different thing for a
+   * caller to route than a state the document names. With a code, a caller can
+   * branch — send it to whoever holds the authority this state needs — without
+   * parsing `reason`, which is a sentence for a person.
+   *
+   * Never a Business Outcome code, and the two can never collide: this one comes
+   * from `requiresHuman:`, `BusinessOutcome.code` comes from `outcomes:`, and
+   * `parseArtifact` refuses a document where one code is in both.
+   */
+  code: Schema.optional(Schema.String),
   /** What the screen showed when it stopped, so an Operator has context. */
   accessibility: Schema.String
 })
@@ -347,7 +362,9 @@ export const describeResult = (result: ReplayResult): string => {
     case "business_outcome":
       return `business outcome ${result.code}: ${result.detail}`
     case "intervention_required":
-      return `intervention required at step ${result.stepId}: ${result.reason}`
+      return result.code === undefined
+        ? `intervention required at step ${result.stepId}: ${result.reason}`
+        : `intervention required (${result.code}) at step ${result.stepId}: ${result.reason}`
     case "failure":
       return `failure at step ${result.failure.stepId} (${result.failure.reason}): expected ${result.failure.expected}, observed ${result.failure.observed}`
   }

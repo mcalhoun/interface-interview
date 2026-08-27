@@ -107,6 +107,23 @@ export interface CatalogOutcome {
   readonly title: string
 }
 
+/**
+ * One state this Capability has learned it will always stop on.
+ *
+ * Deliberately not folded into `outcomes`. A Business Outcome is something a
+ * caller *receives*; this is something a caller has to know it may never receive
+ * anything for, because a run that meets it ends needing a person. An agent
+ * deciding whether to invoke this capability unattended needs both halves of
+ * that, and a list that showed only the first would be a contract with the
+ * expensive half missing.
+ */
+export interface CatalogEscalation {
+  readonly code: string
+  readonly title: string
+  /** Which Step reaches it, so a reader can find it in the document. */
+  readonly step: string
+}
+
 /** One callable Capability, at the version the catalog resolved to. */
 export interface CatalogEntry {
   readonly capability: string
@@ -123,6 +140,8 @@ export interface CatalogEntry {
   readonly parameters: ReadonlyArray<CatalogParameter>
   readonly returns: ReadonlyArray<CatalogReturn>
   readonly outcomes: ReadonlyArray<CatalogOutcome>
+  /** States a run always stops on, learned from an Intervention. Usually empty. */
+  readonly escalations: ReadonlyArray<CatalogEscalation>
   /** The exact command line that runs this Capability. */
   readonly invocation: string
 }
@@ -220,6 +239,11 @@ export const catalogEntry = (
     outcomes: Object.entries(artifact.outcomes ?? {}).map(([code, declaration]) => ({
       code,
       title: declaration.title
+    })),
+    escalations: Object.entries(artifact.requiresHuman ?? {}).map(([code, declaration]) => ({
+      code,
+      title: declaration.title,
+      step: declaration.step
     })),
     invocation: invocationOf(artifact.capability, parameters)
   }
@@ -377,6 +401,16 @@ export const describeCatalogEntry = (entry: CatalogEntry, full = false): string 
     lines.push("", "  or, instead of returning:")
     for (const outcome of entry.outcomes) {
       lines.push(`    ${pad(outcome.code, codeWidth)}  ${firstParagraph(outcome.title)}`)
+    }
+  }
+
+  if (entry.escalations.length > 0) {
+    const codeWidth = Math.max(...entry.escalations.map((escalation) => escalation.code.length))
+    lines.push("", "  or, stopping for a person (learned, and never automated):")
+    for (const escalation of entry.escalations) {
+      lines.push(
+        `    ${pad(escalation.code, codeWidth)}  ${firstParagraph(escalation.title)}`
+      )
     }
   }
 

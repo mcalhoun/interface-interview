@@ -421,11 +421,11 @@ it("resolves the latest stored version, and lists what is callable", () => {
   const versions = listVersions(ARTIFACTS_DIRECTORY, "member.account-balance")
   expect(versions).toContain("1.0.0")
 
-  // 1.1.0 since ticket 13: `latest` follows the amendment, which is the point of
-  // amending rather than editing. A caller who wants the version from before the
-  // intervention asks for it by name, below.
+  // 1.2.0 since ticket 14, 1.1.0 since ticket 13: `latest` follows the
+  // amendments, which is the point of amending rather than editing. A caller who
+  // wants the version from before an intervention asks for it by name, below.
   expect(expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance")).version).toBe(
-    "1.1.0"
+    "1.2.0"
   )
   // A pinned version still resolves to itself; `latest` is a convenience, not
   // the only way in.
@@ -445,40 +445,55 @@ it("the shipped artifact declares the recovery rules it can get past unattended"
   ])
 })
 
-it("v1.1.0 was claimed by an intervention, and v1.2.0 is still free for one", () => {
-  // SPEC's scenario table reserves those two for changes a human confirmed, each
-  // landing in its own file beside the intervention record that justified it.
-  //
-  // v1.1.0 has now been claimed, and claimed the way it was meant to be: not by
-  // hand, but by an Operator meeting `88888`'s account list, changing nothing,
-  // and answering the one question at return-of-control. Ticket 09's selection
-  // and ticket 06's recovery rules stayed in 1.0.0 precisely so this slot would
-  // be free for that, and the assertion below is what the two of them were
-  // protecting.
-  //
-  // v1.2.0 is untouched and stays reserved for ticket 14's requires-human state.
+it("both versions SPEC reserved were claimed by interventions, and by nothing else", () => {
+  // SPEC's scenario table reserves exactly two versions for changes a human
+  // confirmed, each landing in its own file beside the intervention record that
+  // justified it. Both are now claimed, and claimed the way they were meant to
+  // be: not by hand, but by an Operator meeting a state and answering the one
+  // question at return-of-control. Ticket 09's selection and ticket 06's recovery
+  // rules stayed in 1.0.0 precisely so these two slots would be free for that,
+  // and this is what the two of them were protecting.
   const versions = listVersions(ARTIFACTS_DIRECTORY, "member.account-balance")
-  expect(versions).toContain("1.1.0")
-  expect(versions).not.toContain("1.2.0")
+  expect(versions).toEqual(["1.2.0", "1.1.0", "1.0.0"])
 
-  // And it is a *learned* version, not a hand-written one. The two things that
-  // make it so, both visible in the file: the state that used to escalate is now
-  // declared, and its declaration says which intervention taught it.
-  const learned = expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance", "1.1.0"))
-  const selection = learned.steps.flatMap((step) =>
+  // v1.1.0: `88888`, an operator who changed nothing, and a business outcome.
+  const outcome = expectSuccess(
+    loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance", "1.1.0")
+  )
+  const selection = outcome.steps.flatMap((step) =>
     step.action.type === "selectFromList" ? [step.action] : []
   )[0]!
   expect(selection.onNoMatch).toEqual({ outcome: "NO_MATCHING_ITEM" })
 
-  const declaration = learned.outcomes?.["NO_MATCHING_ITEM"]
+  const declaration = outcome.outcomes?.["NO_MATCHING_ITEM"]
   expect(declaration?.discoveredFrom).toContain("Learned from intervention")
   expect(declaration?.discoveredFrom).toContain("recorded no actions on the live session")
   expect(declaration?.discoveredFrom).toContain("ADR-0004")
 
-  // 1.0.0 is untouched. An amendment is a new file, never an edit, which is the
-  // whole reason the diff between the two is worth anything.
+  // v1.2.0: `77777`, an operator who had to *act* with authority, and a state
+  // this capability will never handle itself. The two versions are the same
+  // mechanism reaching opposite conclusions, and the fields that make them
+  // opposite are both about what the person did rather than what they answered.
+  const human = expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance", "1.2.0"))
+  const entry = human.requiresHuman?.["OPEN_ACCOUNT_REQUIRES_HUMAN"]
+  expect(entry?.step).toBe("open-account")
+  expect(entry?.discoveredFrom).toContain("Learned from intervention")
+  expect(entry?.discoveredFrom).toContain("action(s) on the live session")
+  expect(entry?.discoveredFrom).toContain("they answered no")
+
+  // And it declared nothing a caller can be *returned*. Learning that a state
+  // needs a person adds no business outcome, changes no step, and leaves the
+  // capability's answers exactly as they were at 1.1.0.
+  expect(human.outcomes).toEqual(outcome.outcomes)
+  expect(human.steps).toEqual(outcome.steps)
+  expect(human.recoverable).toEqual(outcome.recoverable)
+
+  // 1.0.0 is untouched, and knows about neither. An amendment is a new file,
+  // never an edit, which is the whole reason the diffs are worth anything.
   const before = expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance", "1.0.0"))
   expect(before.outcomes?.["NO_MATCHING_ITEM"]).toBeUndefined()
+  expect(before.requiresHuman).toBeUndefined()
+  expect(outcome.requiresHuman).toBeUndefined()
 })
 
 it("turns a scraped amount into money, and refuses one in the wrong currency", () => {

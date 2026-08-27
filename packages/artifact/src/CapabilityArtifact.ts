@@ -46,6 +46,7 @@ import { Checkpoint } from "./Checkpoint.ts"
 import { InputDeclarations } from "./Inputs.ts"
 import { OutputDeclarations } from "./Outputs.ts"
 import { RecoverableCondition } from "./Recovery.ts"
+import { type RequiresHumanDeclaration, RequiresHumanDeclarations } from "./RequiresHuman.ts"
 
 /**
  * One named unit of work, pairing an Action with the Checkpoint that confirms it
@@ -113,6 +114,20 @@ export const CapabilityArtifact = Schema.Struct({
    * code has to appear here; `parseArtifact` enforces both directions.
    */
   outcomes: Schema.optional(OutcomeDeclarations),
+  /**
+   * The states this Capability has learned it must never handle itself.
+   *
+   * The other half of the domain contract, and the half that only ever tightens.
+   * `outcomes` says what the application answers; this says where it refuses, in
+   * a way no amount of waiting, retrying or better perception gets past, because
+   * getting past it takes authority (SPEC's error taxonomy, ADR-0004).
+   *
+   * Optional and empty on a Capability nobody has met one of these on. Entries
+   * are write-once: `Amendment.ts` holds the ratchet, and `parseArtifact` refuses
+   * a document where a code appears both here and under `outcomes`, so a
+   * downgrade cannot be spelled even by hand.
+   */
+  requiresHuman: Schema.optional(RequiresHumanDeclarations),
   steps: Schema.Array(Step).check(Schema.isMinLength(1)),
   /**
    * Transient states this Capability declares it can get past unattended, in
@@ -159,3 +174,29 @@ export const declaredOutcome = (
 export const declaredOutcomeCodes = (
   artifact: CapabilityArtifact
 ): ReadonlyArray<string> => Object.keys(artifact.outcomes ?? {})
+
+/** Every always-escalating code this Capability declares, in document order. */
+export const declaredRequiresHumanCodes = (
+  artifact: CapabilityArtifact
+): ReadonlyArray<string> => Object.keys(artifact.requiresHuman ?? {})
+
+/**
+ * What this Capability has learned about a Step whose Checkpoint will not hold,
+ * or `undefined` if it has learned nothing.
+ *
+ * The single lookup Replay does. It is by Step rather than by code because the
+ * engine meets the *state* before anything has a name for it — see the module
+ * note in `RequiresHuman.ts` on why the Step is the whole recognition rule.
+ *
+ * `parseArtifact` refuses a document with two entries for one Step, so the first
+ * match is the only match.
+ */
+export const requiresHumanAtStep = (
+  artifact: CapabilityArtifact,
+  stepId: string
+): { readonly code: string; readonly declaration: RequiresHumanDeclaration } | undefined => {
+  for (const [code, declaration] of Object.entries(artifact.requiresHuman ?? {})) {
+    if (declaration.step === stepId) return { code, declaration }
+  }
+  return undefined
+}

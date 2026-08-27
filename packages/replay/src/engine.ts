@@ -98,6 +98,7 @@ import {
   type CapabilityArtifact,
   type Checkpoint,
   type OutputValue,
+  type RequiresHumanDeclaration,
   type ResolvedInputs,
   type Step,
   type ValueRef,
@@ -106,6 +107,7 @@ import {
   describeValueRef,
   parseOutput,
   recoverableConditions,
+  requiresHumanAtStep,
   toSurfaceTarget
 } from "@cua/artifact"
 import { Evidence, type EvidenceUnwritable } from "@cua/evidence"
@@ -475,7 +477,40 @@ export const replayCapability = (
             // Rung 4, the human one. Everything above it — waiting, the
             // Artifact's own declared outcomes, and every declared recovery rule —
             // has had its turn by now.
-            const handed = yield* handOff(step, attempted)
+            //
+            // Ticket 14 changes *what this rung says*, not where it is. A state
+            // this Capability has learned always needs a person is announced
+            // under its declared code, with the sentence somebody who already
+            // solved it wrote, instead of as a Checkpoint that would not hold.
+            //
+            // `attempted: false` is the condition, and it is the right one: it
+            // means no declared recovery rule recognised this screen at all.
+            // Deliberately **not** consulted earlier. A rule's `detect` is one
+            // look with no waiting, and skipping it would mean a session expiry
+            // met at a classified Step stopped recovering — trading a real
+            // unattended recovery for the appearance of failing faster. What the
+            // classification saves is the *diagnosis*, not the look: the run
+            // stops knowing what it met, and nobody has to work it out from an
+            // expected/observed pair at 3am.
+            //
+            // A rule that was attempted and ran out keeps its own answer.
+            // `recovery_exhausted` says the system knew exactly what it was
+            // looking at, did the declared thing, and the state stayed — which is
+            // a question about the environment and not about authority.
+            const classified = attempted.recovery.attempted
+              ? undefined
+              : requiresHumanAtStep(artifact, step.id)
+            const stalled: Stalled =
+              classified === undefined
+                ? attempted
+                : {
+                    _tag: "HumanRequired",
+                    code: classified.code,
+                    declaration: classified.declaration,
+                    outcome: attempted.outcome
+                  }
+
+            const handed = yield* handOff(step, stalled)
             if (handed.resumed) {
               afterHandoff = true
 
@@ -930,7 +965,23 @@ export const replayCapability = (
         const said = describeStall(step, stalled)
 
         if (!(yield* session.handoffAvailable)) {
-          return { resumed: false, escalation: undefined }
+          // A state nobody has classified reports the Hard Failure it always did:
+          // with nobody watching, the system genuinely cannot tell a broken
+          // capability from a state that needs authority, and naming a person as
+          // responsible for a run no person can see is the wrong answer to that.
+          //
+          // A state the Artifact has *learned* always needs a person is not that
+          // question any more. The ambiguity was settled by an episode a reviewer
+          // approved, so saying so into an empty room is the honest report rather
+          // than a summons: it never pauses, nothing waits, and the caller gets
+          // the class that means "route this to a person" instead of the class
+          // that means "page an engineer". SPEC's "right reason and routing".
+          return stalled._tag === "HumanRequired"
+            ? {
+                resumed: false,
+                escalation: escalated(step, said.accessibility, said.reason, stalled.code)
+              }
+            : { resumed: false, escalation: undefined }
         }
 
         const episode = yield* session.pause({
@@ -949,7 +1000,12 @@ export const replayCapability = (
           ? { resumed: true, escalation: undefined }
           : {
               resumed: false,
-              escalation: escalated(step, said.accessibility, episode.reason)
+              escalation: escalated(
+                step,
+                said.accessibility,
+                episode.reason,
+                stalled._tag === "HumanRequired" ? stalled.code : undefined
+              )
             }
       })
 
@@ -972,6 +1028,23 @@ export const replayCapability = (
       readonly url: string
       readonly accessibility: string
     } => {
+      if (stalled._tag === "HumanRequired") {
+        // The whole payoff of having learned this. An Operator meeting an
+        // unclassified stall is handed "the checkpoint did not hold" and a
+        // diagnosis to perform; an Operator meeting this one is handed the
+        // sentence somebody who already solved it wrote down, under a code, with
+        // the diagnostic still attached underneath.
+        const outcome = stalled.outcome
+        return {
+          reason: stalled.declaration.title,
+          detail:
+            `${stalled.declaration.summary}\n\n` +
+            `The checkpoint that reached it: expected ${outcome.expected}; observed ` +
+            `${outcome.observed}.`,
+          url: outcome.state.url,
+          accessibility: outcome.state.accessibility
+        }
+      }
       if (stalled._tag === "Unrecovered") {
         const outcome = stalled.outcome
         return {
@@ -993,11 +1066,22 @@ export const replayCapability = (
       }
     }
 
-    const escalated = (step: Step, accessibility: string, reason: string): Escalated => ({
+    const escalated = (
+      step: Step,
+      accessibility: string,
+      reason: string,
+      code?: string
+    ): Escalated => ({
       _tag: "Escalated",
-      reason: `${step.checkpoint.description}: ${reason}`,
+      // A stall nobody has classified is named by the Checkpoint that would not
+      // hold, because that is the only name it has. A classified one is named by
+      // the declaration, and prefixing the checkpoint onto it would bury the
+      // sentence somebody wrote for exactly this moment under the sentence the
+      // author wrote for every other one. The checkpoint is still in the detail.
+      reason: code === undefined ? `${step.checkpoint.description}: ${reason}` : reason,
       stepId: step.id,
-      accessibility
+      accessibility,
+      ...(code === undefined ? {} : { code })
     })
 
     /**
@@ -1291,6 +1375,7 @@ export const replayCapability = (
                 steps,
                 reason: problem.reason,
                 stepId: problem.stepId,
+                ...(problem.code === undefined ? {} : { code: problem.code }),
                 accessibility: problem.accessibility
               }
             : {
@@ -1437,6 +1522,13 @@ interface Escalated {
   /** Why the run is not continuing, in a sentence a caller can be given. */
   readonly reason: string
   readonly stepId: string
+  /**
+   * The Artifact's declared code, when the state is one it has learned always
+   * needs a person. Absent for a state nothing has classified — which is a
+   * distinction a caller routes on, so it stays a field rather than a phrase
+   * inside `reason`.
+   */
+  readonly code?: string
   /** What the screen showed when it stopped, so an Operator has context. */
   readonly accessibility: string
 }
@@ -1480,9 +1572,17 @@ interface Blocked {
 }
 
 /**
- * Both ways a Step stalls badly enough to want a person.
+ * Every way a Step stalls badly enough to want a person.
  *
  * One union, so there is one `session.pause` in this engine. See `handOff`.
+ *
+ * The three arms are three different things to say to whoever arrives, and the
+ * type is what keeps them from being said interchangeably. `Unrecovered`: the
+ * Checkpoint would not hold and nothing declared got past it. `ActionBlocked`:
+ * the Action never ran, because its subject was not on the screen.
+ * `HumanRequired`: the document already knows what this is, and it is the one
+ * arm reachable without recovery having had a turn — deliberately, because
+ * recovery is what it exists to skip.
  */
 type Stalled =
   | Unrecovered
@@ -1491,6 +1591,14 @@ type Stalled =
       readonly failure: ZeroMatchFailure
       /** The screen the Action was attempted against. What the Operator is shown. */
       readonly state: SurfaceState
+    }
+  | {
+      readonly _tag: "HumanRequired"
+      /** The Artifact's code for this state. Derived from the Step, never named. */
+      readonly code: string
+      readonly declaration: RequiresHumanDeclaration
+      /** The Checkpoint failure that reached it, kept for the diagnostic half. */
+      readonly outcome: FailedCheckpoint
     }
 
 /**
