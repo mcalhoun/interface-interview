@@ -26,12 +26,15 @@ export {
 } from "./CapabilityArtifact.ts"
 
 export type {
+  Declassifier,
   InputDeclaration,
   InputDeclarations,
   ResolvedInput,
   ResolvedInputs
 } from "./Inputs.ts"
 export {
+  classifySensitive,
+  declassifiesNothing,
   InputDeclaration as InputDeclarationSchema,
   InputDeclarations as InputDeclarationsSchema,
   InputsInvalid,
@@ -60,7 +63,7 @@ export {
   parseOutput
 } from "./Outputs.ts"
 
-export { ArtifactInvalid, formatArtifact, parseArtifact } from "./parse.ts"
+export { ArtifactInvalid, bakedInLiterals, formatArtifact, parseArtifact } from "./parse.ts"
 
 export type { CapabilityTarget } from "./Target.ts"
 export { CapabilityTarget as CapabilityTargetSchema, toSurfaceTarget } from "./Target.ts"

@@ -9,7 +9,7 @@
  */
 
 import { expect, it } from "vitest"
-import { Effect, Result } from "effect"
+import { Effect, Redacted, Result } from "effect"
 import { prepareInputs } from "@cua/artifact"
 import { shippedArtifact } from "./support/replay-harness.ts"
 
@@ -28,11 +28,12 @@ it("validation is a pure Result, so it cannot have touched a surface", () => {
 
   expect(Result.isSuccess(validated)).toBe(true)
   if (!Result.isSuccess(validated)) return
-  expect(validated.success.get("memberId")).toEqual({
-    name: "memberId",
-    text: "12345",
-    sensitive: true
-  })
+  const memberId = validated.success.get("memberId")
+  expect(memberId?.name).toBe("memberId")
+  expect(memberId?.sensitive).toBe(true)
+  // The value is a `Redacted<string>` (ticket 08), so getting the characters back
+  // takes the explicit unwrap. `test/sensitive-data.test.ts` owns that claim.
+  expect(memberId === undefined ? undefined : Redacted.value(memberId.text)).toBe("12345")
 })
 
 it("rejects a missing required input, a malformed one, and an unknown one", () => {
@@ -80,7 +81,14 @@ it("fills an omitted optional input from its declared default", () => {
   const defaulted = prepareInputs("selection", declarations, {})
   expect(Result.isSuccess(defaulted)).toBe(true)
   if (Result.isSuccess(defaulted)) {
-    expect(defaulted.success.get("accountType")?.text).toBe("Primary Savings")
+    const accountType = defaulted.success.get("accountType")
+    expect(accountType === undefined ? undefined : Redacted.value(accountType.text)).toBe(
+      "Primary Savings"
+    )
+    // `sensitive: false` in the declaration is only half the decision. No policy
+    // declassifier was passed, so the value is still treated as sensitive —
+    // deny-first, per ADR-0008. `test/sensitive-data.test.ts` pins the full table.
+    expect(accountType?.sensitive).toBe(true)
   }
 
   // And an enum value that is not one of the discovered ones is refused, which is

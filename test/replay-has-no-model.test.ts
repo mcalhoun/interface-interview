@@ -31,7 +31,7 @@ import { fileURLToPath } from "node:url"
 import { it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import { expect } from "vitest"
-import { Evidence, evidenceFiles } from "@cua/evidence"
+import { Evidence, evidenceFiles, noScrubbing } from "@cua/evidence"
 import { Policy, permissivePolicy } from "@cua/policy"
 import { Session, automationOwnedSession } from "@cua/session"
 import { SurfaceAdapter, playwrightSurface } from "@cua/surface"
@@ -68,7 +68,7 @@ it("the replay layer composes with no language model in it", () => {
   const services = Layer.mergeAll(
     playwrightSurface({}),
     permissivePolicy,
-    evidenceFiles({ root: "/tmp/cua-unused", runId: "unused", sessionId: "unused" }),
+    evidenceFiles({ root: "/tmp/cua-unused", runId: "unused", sessionId: "unused", scrubber: noScrubbing }),
     automationOwnedSession("unused")
   )
 

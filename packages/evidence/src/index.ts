@@ -10,10 +10,8 @@ export {
   KINDS_FORBIDDEN_IN_REPLAY
 } from "./Event.ts"
 
-export type { EvidenceOptions, Scrubber } from "./EvidenceWriter.ts"
-export {
-  Evidence,
-  EvidenceUnwritable,
-  layer as evidenceFiles,
-  noScrubbing
-} from "./EvidenceWriter.ts"
+export type { EvidenceOptions } from "./EvidenceWriter.ts"
+export { Evidence, EvidenceUnwritable, layer as evidenceFiles } from "./EvidenceWriter.ts"
+
+export type { Scrubber, SensitiveText } from "./Scrub.ts"
+export { noScrubbing, placeholderFor, scrubbing } from "./Scrub.ts"

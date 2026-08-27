@@ -31,13 +31,13 @@ import {
   loadArtifact,
   prepareInputs
 } from "@cua/artifact"
-import { type EvidenceUnwritable, evidenceFiles } from "@cua/evidence"
-import { permissivePolicy } from "@cua/policy"
+import type { EvidenceUnwritable } from "@cua/evidence"
+import { declassifierFor, permissivePolicy, sensitivityPolicy } from "@cua/policy"
 import { automationOwnedSession } from "@cua/session"
 import { type SurfaceUnavailable, playwrightSurface } from "@cua/surface"
 import { Console, Effect, Layer, Result } from "effect"
 import type { Scope } from "effect/Scope"
-import { type ReplayResult, replayCapability } from "./index.ts"
+import { type ReplayResult, evidenceForRun, replayCapability } from "./index.ts"
 
 const EVIDENCE_ROOT = "evidence/replay"
 
@@ -136,10 +136,20 @@ const run = (
 ): Effect.Effect<void, SurfaceUnavailable | EvidenceUnwritable, Scope> =>
   Effect.gen(function* () {
     // Pure, service-free, browser-free. A rejection here costs nothing.
+    //
+    // Policy's sensitivity allowlist is consulted here rather than inside the
+    // engine, because this is the moment a value becomes a `ResolvedInput` and
+    // its classification is fixed for the rest of the run. It ships empty
+    // (ADR-0008), so every parameter comes out sensitive.
     const supplied = Object.fromEntries(
       Object.entries(argv.options).filter(([key]) => !RESERVED.has(key))
     )
-    const inputs = prepareInputs(artifact.capability, artifact.inputs, supplied)
+    const inputs = prepareInputs(
+      artifact.capability,
+      artifact.inputs,
+      supplied,
+      declassifierFor(sensitivityPolicy, artifact.capability)
+    )
     if (Result.isFailure(inputs)) {
       yield* Console.error(`bad call: ${inputs.failure.message}`)
       process.exitCode = 2
@@ -158,7 +168,15 @@ const run = (
     const services = Layer.mergeAll(
       playwrightSurface({ headless: !argv.switches.has("headed") }),
       permissivePolicy,
-      evidenceFiles({ root: EVIDENCE_ROOT, runId, sessionId }),
+      // Evidence for a run is built from the run's inputs, so the scrubber cannot
+      // be left off by forgetting to pass one.
+      evidenceForRun({
+        root: EVIDENCE_ROOT,
+        runId,
+        sessionId,
+        inputs: inputs.success,
+        policy: `Sensitivity policy: ${sensitivityPolicy.summary}`
+      }),
       automationOwnedSession(sessionId)
     )
 

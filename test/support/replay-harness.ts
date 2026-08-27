@@ -21,11 +21,11 @@ import {
   loadArtifact,
   prepareInputs
 } from "@cua/artifact"
-import { type EvidenceEvent, evidenceFiles } from "@cua/evidence"
-import { permissivePolicy } from "@cua/policy"
+import type { EvidenceEvent } from "@cua/evidence"
+import { declassifierFor, permissivePolicy, sensitivityPolicy } from "@cua/policy"
 import { automationOwnedSession } from "@cua/session"
 import { playwrightSurface } from "@cua/surface"
-import { type ReplayResult, replayCapability } from "@cua/replay"
+import { type ReplayResult, evidenceForRun, replayCapability } from "@cua/replay"
 import { Effect, Layer, Result } from "effect"
 
 /** The capability this ticket's tracer bullet runs. */
@@ -57,10 +57,13 @@ export const replay = (options: {
 }): Effect.Effect<ReplayOutcome, unknown> =>
   Effect.gen(function* () {
     const core = yield* serve({ port: 0 })
+    // The same sensitivity policy the CLI runs under, so what the tests read off
+    // disk is the redaction real runs get rather than a test-only arrangement.
     const prepared = prepareInputs(
       options.artifact.capability,
       options.artifact.inputs,
-      options.inputs
+      options.inputs,
+      declassifierFor(sensitivityPolicy, options.artifact.capability)
     )
     if (Result.isFailure(prepared)) return yield* Effect.fail(prepared.failure)
 
@@ -78,7 +81,13 @@ export const replay = (options: {
         Layer.mergeAll(
           playwrightSurface({}),
           permissivePolicy,
-          evidenceFiles({ root, runId, sessionId }),
+          evidenceForRun({
+            root,
+            runId,
+            sessionId,
+            inputs: prepared.success,
+            policy: `Sensitivity policy: ${sensitivityPolicy.summary}`
+          }),
           automationOwnedSession(sessionId)
         )
       )
