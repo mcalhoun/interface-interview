@@ -6,6 +6,14 @@
  * a page, which is the point: this stands in for a system with no API.
  */
 
+import {
+  dualLedgerPage,
+  duplicateLabelsPage,
+  fixtureIndexPage,
+  isLedgerKey,
+  ledgerPanel,
+  nestedTablesPage
+} from "./fixtures.ts"
 import { findAccount, findMember } from "./members.ts"
 import {
   accountDetailPage,
@@ -69,6 +77,28 @@ export const handle = (request: Request): Response => {
           ? accountDetailPage(member, account)
           : accountDetailPanel(member, account)
       )
+    }
+
+    // The diagnostic screens. Deliberately not linked from any product page: see
+    // the module comment in `fixtures.ts`.
+    case "/fixtures":
+      return html(fixtureIndexPage())
+
+    case "/fixtures/duplicate-labels":
+      return html(duplicateLabelsPage())
+
+    case "/fixtures/nested-tables":
+      return html(nestedTablesPage())
+
+    case "/fixtures/frames":
+      return html(dualLedgerPage())
+
+    case "/fixtures/frames/panel": {
+      const ledger = url.searchParams.get("ledger") ?? ""
+      if (!isLedgerKey(ledger)) {
+        return html(systemMessagePage(`No ledger ${ledger} is defined.`), 404)
+      }
+      return html(ledgerPanel(ledger))
     }
 
     default:

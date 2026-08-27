@@ -103,13 +103,30 @@ const CheckpointFailed = failure("checkpoint_failed", {
  */
 const TargetMissing = failure("target_missing", {
   target: Schema.String,
+  /**
+   * Which part of the Target ran out of candidates — `role`, `name`, `label`,
+   * `within`, `textNear`, `ordinal`. `role` emptying the set means the screen is
+   * not the one expected; `name` emptying it means the control was renamed.
+   * That is the distinction a Recovery Ladder branches on, so it is a field
+   * rather than a phrase inside `observed`.
+   */
+  narrowedBy: Schema.optional(Schema.String),
   url: Schema.String
 })
 
-/** Two or more controls answer to a Target. Never a coin flip; all are listed. */
+/**
+ * Two or more controls answer to a Target. Never a coin flip; all are listed.
+ *
+ * Each candidate is named by its ordinal and the region it sits in, not by role
+ * and accessible name alone, because those are not always distinct — three
+ * panels on `/fixtures/duplicate-labels` hold a control identical in both. A
+ * list that cannot tell its own entries apart is not a report. `remedy` says
+ * what to add to the Target, in the Target's own vocabulary.
+ */
 const TargetAmbiguous = failure("target_ambiguous", {
   target: Schema.String,
   candidates: Schema.Array(Schema.String),
+  remedy: Schema.String,
   url: Schema.String
 })
 

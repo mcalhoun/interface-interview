@@ -59,6 +59,13 @@ export interface TargetResolution {
   readonly strategies: ReadonlyArray<TargetStrategy>
   readonly rationale: string
   readonly considered: number
+  /**
+   * How many other controls this Target also matched. `0` is the confidence
+   * claim: the Target named exactly one control. Above zero means several
+   * answered and an ordinal chose, which is a weaker thing for an Artifact to
+   * rest on and is worth being able to see without reading the rationale.
+   */
+  readonly alternatives: number
 }
 
 /**
@@ -126,28 +133,49 @@ export class SurfaceUnavailable extends Schema.TaggedError<SurfaceUnavailable>()
   }
 ) {}
 
-/** Nothing on the screen answers to the Target. A Hard Failure. */
+/**
+ * Nothing on the screen answers to the Target.
+ *
+ * A distinct failure from ambiguity on purpose, and not merely a different
+ * message: a control that is absent is as likely to be the application telling
+ * the truth about its own domain as it is to be breakage, so this is the one a
+ * recovery ladder is allowed to consider before giving up. `narrowedBy` says
+ * which part of the Target ran out of candidates, which is what such a ladder
+ * would branch on.
+ */
 export class TargetNotFound extends Schema.TaggedError<TargetNotFound>()("TargetNotFound", {
   target: Schema.String,
   rationale: Schema.String,
   /** How many accessibility nodes the screen offered. */
-  considered: Schema.Int
+  considered: Schema.Int,
+  /** The narrowing step that emptied the candidate set, when one did. */
+  narrowedBy: Schema.optional(Schema.String)
 }) {}
 
 /**
  * More than one control answers to the Target and nothing chooses between them.
  * A Hard Failure rather than a coin flip: on Heritage Core the wrong choice
  * lands on the Cross-Reference Lookup, which quietly is not Member Detail.
+ *
+ * Every candidate is listed, and each carries the two things that separate it
+ * from its neighbours — its `ordinal` and the `region` it sits in — because on
+ * `/fixtures/duplicate-labels` role, name and ancestor trail are identical
+ * three times over, and a list of three identical lines answers nobody's
+ * question. `remedy` says, in the Target's own vocabulary, what would fix it.
  */
 export class TargetAmbiguous extends Schema.TaggedError<TargetAmbiguous>()("TargetAmbiguous", {
   target: Schema.String,
   rationale: Schema.String,
+  /** What to add to the Target so it names exactly one control. */
+  remedy: Schema.String,
   matches: Schema.Array(
     Schema.Struct({
       description: Schema.String,
       path: Schema.String,
       frame: Schema.String,
-      text: Schema.String
+      text: Schema.String,
+      ordinal: Schema.Int,
+      region: Schema.String
     })
   )
 }) {}

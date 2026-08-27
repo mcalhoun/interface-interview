@@ -89,7 +89,15 @@ it.effect("every page is server-rendered hostile markup", () =>
       "/member?memberNumber=12345",
       `/account?memberNumber=12345&accountNumber=${SAVINGS}`,
       `/account/panel?memberNumber=12345&accountNumber=${SAVINGS}`,
-      "/xref?legacyMemberNumber=ABC123"
+      "/xref?legacyMemberNumber=ABC123",
+      // The diagnostic screens are served by the same application and obey the
+      // same rules. A fixture that quietly allowed itself an `id` would be
+      // testing a system this repository does not have.
+      "/fixtures",
+      "/fixtures/duplicate-labels",
+      "/fixtures/nested-tables",
+      "/fixtures/frames",
+      "/fixtures/frames/panel?ledger=A"
     ]
 
     for (const path of paths) {
@@ -101,6 +109,52 @@ it.effect("every page is server-rendered hostile markup", () =>
         /<(label|th|main|nav|header|footer|section|article|aside)[\s>]/i
       )
       expect(page, `${path} is not table based`).toMatch(/<table/i)
+    }
+  })
+)
+
+it.effect("the diagnostic screens carry the hazards they exist for", () =>
+  Effect.gen(function* () {
+    const { get } = yield* openCore
+
+    // Duplicate labels: three controls with the same role, the same accessible
+    // name and the same caption. Nothing in the name can separate them.
+    const transfers = yield* get("/fixtures/duplicate-labels")
+    expect(transfers.match(/title="Amount"/g)).toHaveLength(3)
+    expect(transfers.match(/value="Post"/g)).toHaveLength(3)
+    for (const heading of ["Scheduled Transfer", "Recurring Transfer", "One-Time Transfer"]) {
+      expect(transfers).toContain(heading)
+    }
+    // One per-panel fact, so a test can prove which panel it acted on.
+    expect(transfers).toContain("REC-2002")
+
+    // Nested tables: the figure sits several layout tables below its panel.
+    const settlement = yield* get("/fixtures/nested-tables")
+    expect(settlement).toContain("$18,204.36")
+    expect((settlement.match(/<table/g) ?? []).length).toBeGreaterThan(20)
+
+    // Frame-crossing: two documents, each with its own copy of the captions.
+    const ledgers = yield* get("/fixtures/frames")
+    expect(ledgers).toContain('name="ledgerone"')
+    expect(ledgers).toContain('name="ledgertwo"')
+    for (const key of ["A", "B"]) {
+      const panel = yield* get(`/fixtures/frames/panel?ledger=${key}`)
+      expect(panel).toContain("Posted Balance")
+      expect(panel).toContain('title="Adjustment"')
+    }
+  })
+)
+
+it.effect("nothing an operator can reach links to a diagnostic screen", () =>
+  Effect.gen(function* () {
+    const { get } = yield* openCore
+
+    // The fixtures are reachable by URL and nowhere else. If Member Search grew
+    // a link to them, observing it would no longer be observing the application
+    // ticket 01 built, and every screen assertion downstream would be measuring
+    // the fixture instead.
+    for (const path of ["/", "/member?memberNumber=12345", "/xref"]) {
+      expect(yield* get(path), `${path} links to a diagnostic screen`).not.toContain("/fixtures")
     }
   })
 )

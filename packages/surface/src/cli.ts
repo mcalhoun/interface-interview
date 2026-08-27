@@ -5,6 +5,13 @@
  *   bun run surface observe "/account?memberNumber=12345&accountNumber=0000012345-S01"
  *   bun run surface resolve / --role textbox --name "Member Number" --within "Member Number Search"
  *
+ * The diagnostic screens are where a Target has to work for its living. Each of
+ * these fails, and says what would make it succeed:
+ *
+ *   bun run surface resolve /fixtures/duplicate-labels --role textbox --name Amount
+ *   bun run surface resolve /fixtures/frames --role cell --label "Posted Balance"
+ *   bun run surface resolve /fixtures/nested-tables --name "Clearing Bat"
+ *
  * Two subcommands, because those are the two things worth being able to see by
  * hand: what a screen looks like as an accessibility tree, and which control a
  * Target picks out of it and why. The second one prints the reasoning, since a
@@ -25,6 +32,7 @@ import {
   SurfaceAdapter,
   TargetAmbiguous,
   TargetNotFound,
+  describeMatch,
   describeTarget,
   playwrightSurface
 } from "./index.ts"
@@ -120,13 +128,21 @@ const resolveCommand = Effect.fn("cli.resolve")(function* (target: Target) {
           failure instanceof TargetAmbiguous
             ? [
                 "",
-                `AMBIGUOUS: ${failure.rationale}`,
+                `AMBIGUOUS: ${failure.matches.length} controls answer to this Target.`,
                 ...failure.matches.map(
-                  (match) => `  - ${match.description}  [${match.frame}]  ${match.path}`
-                )
+                  (match) => `  ${describeMatch(match)}  reads ${JSON.stringify(match.text)}`
+                ),
+                "",
+                `to fix:  ${failure.remedy}`,
+                `because: ${failure.rationale}`
               ].join("\n")
             : failure instanceof TargetNotFound
-              ? `\nNOT FOUND: ${failure.rationale} (${failure.considered} nodes considered)`
+              ? [
+                  "",
+                  `NOT FOUND: nothing answers to this Target.`,
+                  `emptied by: ${failure.narrowedBy ?? "the screen offered nothing to narrow"}`,
+                  `because:    ${failure.rationale} (${failure.considered} nodes considered)`
+                ].join("\n")
               : `\nSURFACE UNAVAILABLE: ${failure.reason}`
         )
         process.exitCode = 1
@@ -138,12 +154,19 @@ const resolveCommand = Effect.fn("cli.resolve")(function* (target: Target) {
 
   yield* Console.log("")
   yield* Console.log(`found:      ${resolution.match.description}`)
+  yield* Console.log(`region:     ${resolution.match.region}`)
   yield* Console.log(`frame:      ${resolution.match.frame}`)
   yield* Console.log(`path:       ${resolution.match.path}`)
   yield* Console.log(`reads:      ${resolution.match.text}`)
   yield* Console.log(`strategies: ${resolution.strategies.join(" -> ")}`)
   yield* Console.log(`because:    ${resolution.rationale}`)
   yield* Console.log(`considered: ${resolution.considered} accessibility nodes`)
+  // The headline: whether this Target named one control or merely counted to one.
+  yield* Console.log(
+    resolution.alternatives === 0
+      ? "unique:     yes, exactly one control answered"
+      : `unique:     no, ${resolution.alternatives} other control(s) also answered and nth chose`
+  )
 })
 
 const program = Effect.gen(function* () {

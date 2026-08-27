@@ -23,7 +23,7 @@
 
 import type { Account, Member } from "./members.ts"
 
-const DOCTYPE =
+export const DOCTYPE =
   '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">'
 
 export const escape = (value: string): string =>
@@ -39,11 +39,11 @@ const query = (params: Record<string, string>): string =>
     .join("&amp;")
 
 /** Small grey caption text, the way the whole application labels things. */
-const caption = (text: string): string =>
+export const caption = (text: string): string =>
   `<font face="Arial" size="2" color="#000000">${escape(text)}</font>`
 
 /** The banner and status strip wrapped around every full page. */
-const shell = (title: string, body: string): string => `${DOCTYPE}
+export const shell = (title: string, body: string): string => `${DOCTYPE}
 <html>
 <head>
 <title>${escape(title)}</title>

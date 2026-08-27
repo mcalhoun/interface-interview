@@ -52,6 +52,7 @@ import {
   type SurfaceAdapterService,
   type TargetFailure,
   SurfaceAdapter,
+  describeMatch,
   describeTarget
 } from "@cua/surface"
 import { type StepReadings, evaluate, resolveValue } from "./checkpoint.ts"
@@ -434,21 +435,25 @@ const targetFailed =
   ) =>
   (problem: TargetFailure): Effect.Effect<never, ReplayFailure> => {
     switch (problem._tag) {
-      case "TargetAmbiguous":
+      case "TargetAmbiguous": {
         // Never a coin flip. Every candidate is listed, because "which one did it
         // mean" is the only useful question at that point (SPEC user story 28).
+        // Each is described by its ordinal and region rather than by role and
+        // name alone: on a screen where three panels hold the same control, a
+        // list of three identical names answers nobody.
+        const candidates = problem.matches.map(describeMatch)
         return Effect.fail(
           fail({
             reason: "target_ambiguous",
             expected: `exactly one ${target}`,
-            observed: `${problem.matches.length} controls matched: ${
-              problem.matches.map((match) => match.description).join(", ")
-            }`,
+            observed: `${candidates.length} controls matched: ${candidates.join("; ")}`,
             target,
-            candidates: problem.matches.map((match) => match.description),
+            candidates,
+            remedy: problem.remedy,
             url
           })
         )
+      }
       case "TargetNotFound":
         return Effect.fail(
           fail({
@@ -456,6 +461,10 @@ const targetFailed =
             expected: `a control matching ${target}`,
             observed: problem.rationale,
             target,
+            // Which part of the Target ran out of candidates. A missing control
+            // is as likely to be domain truth as breakage, and this is what a
+            // Recovery Ladder branches on.
+            ...(problem.narrowedBy === undefined ? {} : { narrowedBy: problem.narrowedBy }),
             url
           })
         )
