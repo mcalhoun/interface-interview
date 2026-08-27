@@ -31,7 +31,6 @@
  * ## Seams
  *
  *   - ticket 04 adds `outcomes:` here and a branch to `Checkpoint`.
- *   - ticket 06 adds `recoverable:` rules here.
  *   - ticket 14 adds `requiresHuman:` entries, write-once.
  *   - ticket 16 adds Tenant Overrides as scoped deltas *against* this document,
  *     never as edits to it.
@@ -42,6 +41,7 @@ import { Action } from "./Action.ts"
 import { Checkpoint } from "./Checkpoint.ts"
 import { InputDeclarations } from "./Inputs.ts"
 import { OutputDeclarations } from "./Outputs.ts"
+import { RecoverableCondition } from "./Recovery.ts"
 
 /**
  * One named unit of work, pairing an Action with the Checkpoint that confirms it
@@ -94,9 +94,23 @@ export const CapabilityArtifact = Schema.Struct({
   surface: SurfaceDeclaration,
   inputs: InputDeclarations,
   outputs: OutputDeclarations,
-  steps: Schema.Array(Step).check(Schema.isMinLength(1))
+  steps: Schema.Array(Step).check(Schema.isMinLength(1)),
+  /**
+   * Transient states this Capability declares it can get past unattended, in
+   * priority order: the first whose `detect` holds is the one that applies.
+   *
+   * Optional, and an Artifact without it recovers from nothing — which is the
+   * honest default, because a state is only recoverable once somebody has seen it
+   * and said what to do. See `Recovery.ts`.
+   */
+  recoverable: Schema.optional(Schema.Array(RecoverableCondition))
 })
 export type CapabilityArtifact = typeof CapabilityArtifact.Type
+
+/** The declared rules, in priority order. Empty when the Artifact declares none. */
+export const recoverableConditions = (
+  artifact: CapabilityArtifact
+): ReadonlyArray<RecoverableCondition> => artifact.recoverable ?? []
 
 /** `member.account-balance@1.0.0`, the way Evidence and the catalog name a run. */
 export const capabilityRef = (artifact: CapabilityArtifact): string =>

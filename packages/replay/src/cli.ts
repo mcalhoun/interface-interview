@@ -52,6 +52,10 @@ const usage = (): string =>
     "  --version <ver>   a specific artifact version (default: the latest stored)",
     "  --headed          watch it happen in a visible browser",
     "  --json            print the whole ReplayResult rather than a summary",
+    "  --expireSessionAfter <n>",
+    "                    arm Heritage Core's one-shot session-expiry toggle after",
+    "                    n page requests, to watch a mid-flow expiry be recovered",
+    "                    from (ignored when --baseUrl points somewhere else)",
     "",
     "capabilities:",
     ...listCapabilities(ARTIFACTS_DIRECTORY).map((name) => `  ${name}`)
@@ -86,7 +90,7 @@ const parse = (argv: ReadonlyArray<string>): Argv => {
 }
 
 /** Everything the CLI consumes itself, so the rest is the capability's inputs. */
-const RESERVED = new Set(["baseUrl", "version"])
+const RESERVED = new Set(["baseUrl", "version", "expireSessionAfter"])
 
 const report = (result: ReplayResult, asJson: boolean): Effect.Effect<void> =>
   Effect.gen(function* () {
@@ -124,7 +128,11 @@ const report = (result: ReplayResult, asJson: boolean): Effect.Effect<void> =>
     yield* Console.log("steps:")
     for (const step of result.steps) {
       const read = step.read === undefined ? "" : `  -> ${step.read}`
-      yield* Console.log(`  [${step.checkpoint}] ${step.id}  ${step.intent}${read}`)
+      // A step that held on the second attempt still held, and a caller reading
+      // this should be able to see both facts at once.
+      const recovered =
+        step.recovered === undefined ? "" : `  (recovered from ${step.recovered})`
+      yield* Console.log(`  [${step.checkpoint}] ${step.id}  ${step.intent}${read}${recovered}`)
     }
     yield* Console.log("")
     yield* Console.log(`evidence: ${result.evidenceDirectory}`)
@@ -146,7 +154,15 @@ const run = (
       return
     }
 
-    const baseUrl = argv.options["baseUrl"] ?? (yield* serve({ port: 0 })).origin
+    const expireSessionAfter = argv.options["expireSessionAfter"]
+    const baseUrl =
+      argv.options["baseUrl"] ??
+      (yield* serve({
+        port: 0,
+        ...(expireSessionAfter === undefined
+          ? {}
+          : { expireSessionAfter: Number(expireSessionAfter) })
+      })).origin
     const runId = `${artifact.capability}-${new Date().toISOString().replaceAll(/[:.]/g, "-")}-${
       randomUUID().slice(0, 8)
     }`

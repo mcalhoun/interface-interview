@@ -121,6 +121,35 @@ const referentialProblems = (artifact: CapabilityArtifact): ReadonlyArray<string
     )
   }
 
+  // Recovery rules. A rule can fire at any Step, so unlike a Step's own values
+  // its references are checked against the inputs alone: `{ from: step, ... }`
+  // would mean something different depending on where the condition happened to
+  // be met, and a rule whose meaning depends on when it fires is not reviewable.
+  const conditions = new Set<string>()
+  for (const rule of artifact.recoverable ?? []) {
+    const where = `recoverable condition ${rule.condition}`
+    if (conditions.has(rule.condition)) {
+      problems.push(`${where} is declared more than once`)
+    }
+    conditions.add(rule.condition)
+
+    rule.remedy.forEach((remedy, index) => {
+      const at = `${where}'s remedy ${index}`
+      const ref =
+        remedy.action.type === "navigate"
+          ? remedy.action.path
+          : remedy.action.type === "fill"
+            ? remedy.action.value
+            : undefined
+      if (ref === undefined) return
+      if (ref.from === "step") {
+        problems.push(`${at} refers to what a step read, which a remedy may not depend on`)
+        return
+      }
+      checkValue(at, ref)
+    })
+  }
+
   for (const [name, output] of Object.entries(artifact.outputs)) {
     if (!readBefore.has(output.from.step)) {
       problems.push(

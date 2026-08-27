@@ -33,8 +33,10 @@
  * the caller branches on, which is the entire point of the result contract.
  */
 
-import { Effect, Result } from "effect"
+import { Effect, Ref, Result } from "effect"
 import {
+  type Action,
+  type Assertion,
   type CapabilityArtifact,
   type OutputValue,
   type ResolvedInputs,
@@ -43,6 +45,7 @@ import {
   capabilityRef,
   describeValueRef,
   parseOutput,
+  recoverableConditions,
   toSurfaceTarget
 } from "@cua/artifact"
 import { Evidence, type EvidenceUnwritable } from "@cua/evidence"
@@ -54,7 +57,14 @@ import {
   SurfaceAdapter,
   describeTarget
 } from "@cua/surface"
-import { type StepReadings, evaluate, resolveValue } from "./checkpoint.ts"
+import { type CheckpointOutcome, type StepReadings, evaluate, resolveValue } from "./checkpoint.ts"
+import {
+  type RecoveryOutcome,
+  type RecoveryPort,
+  type RemedyReport,
+  RECOVERY_BUDGET_PER_RUN,
+  recover
+} from "./recovery.ts"
 import type { ReplayFailure, ReplayFailureBody, ReplayResult, StepRecord } from "./ReplayResult.ts"
 import { describeResult } from "./ReplayResult.ts"
 
@@ -89,6 +99,9 @@ export const replayCapability = (
     const startedAt = Date.now()
     const steps: Array<StepRecord> = []
     const readings = new Map<string, string>()
+    const conditions = recoverableConditions(artifact)
+    /** Shared across every Step, so a whole flow cannot retry itself forever. */
+    const budget = yield* Ref.make(RECOVERY_BUDGET_PER_RUN)
 
     /** The half of a result that is the same whatever class it turns out to be. */
     const common = {
@@ -192,10 +205,10 @@ export const replayCapability = (
           accessibility: before.accessibility
         })
 
-        const read = yield* performAction(step, before.url)
+        const read = yield* performAction(step, step.action, before.url)
         if (read !== undefined) readings.set(step.id, read)
 
-        const outcome = yield* evaluate({ surface, inputs, readings }, step.checkpoint).pipe(
+        const verify = evaluate({ surface, inputs, readings }, step.checkpoint).pipe(
           Effect.catch((unavailable) =>
             Effect.fail(
               fail({
@@ -207,38 +220,198 @@ export const replayCapability = (
           )
         )
 
-        yield* evidence.record({
-          kind: "checkpoint",
-          stepId: step.id,
-          description: step.checkpoint.description,
-          verdict: outcome.held ? "held" : "failed",
-          expected: outcome.held ? step.checkpoint.description : outcome.expected,
-          observed: outcome.held ? "the intended state was reached" : outcome.observed,
-          waitedMillis: outcome.waitedMillis
-        })
+        const recordVerdict = (result: CheckpointOutcome) =>
+          evidence.record({
+            kind: "checkpoint",
+            stepId: step.id,
+            description: step.checkpoint.description,
+            verdict: result.held ? "held" : "failed",
+            expected: result.held ? step.checkpoint.description : result.expected,
+            observed: result.held ? "the intended state was reached" : result.observed,
+            waitedMillis: result.waitedMillis
+          })
 
+        const first = yield* verify
+        yield* recordVerdict(first)
+
+        // A Checkpoint that did not hold is where a Recoverable Condition gets its
+        // chance, and the *only* place: recovery reads the state that defeated the
+        // Checkpoint, and re-evaluating that same Checkpoint is how it finds out
+        // whether it worked. Nothing here believes the remedy on its own account.
+        //
+        // ORDER, when tickets 04 and 12 merge into this block. It is:
+        //
+        //     expect  ->  declared Business Outcomes  ->  recovery  ->  hand off
+        //
+        // Business Outcomes go *above* recovery, not below. A declared outcome is
+        // the application answering, and an answer is not a condition to get past:
+        // a recovery rule whose `detect` happened to also match the
+        // member-not-found screen would spend the run's whole budget retrying a
+        // question that was already answered, and report a Hard Failure for a run
+        // that succeeded. Recovery earns its place only once nothing declared
+        // explains the screen.
+        //
+        // Handing off goes below recovery, for the mirror-image reason: waking a
+        // person for a state the system can get past on its own is what the
+        // recovery ladder exists to avoid.
+        const attemptRecovery: Effect.Effect<
+          RecoveryOutcome,
+          ReplayFailure | EvidenceUnwritable
+        > = first.held
+          ? Effect.succeed<RecoveryOutcome>({ attempted: false })
+          : recover({
+              conditions,
+              checkpoint: step.checkpoint.description,
+              failed: first,
+              budget,
+              port: recoveryPort(step, before.url)
+            }).pipe(
+              Effect.catch(
+                (
+                  problem
+                ): Effect.Effect<never, ReplayFailure | EvidenceUnwritable> =>
+                  isEvidenceProblem(problem)
+                    ? Effect.fail(problem)
+                    : Effect.fail(
+                        fail({
+                          reason: "surface_failed",
+                          expected: `to recover: ${step.checkpoint.description}`,
+                          observed: problem.reason
+                        })
+                      )
+              )
+            )
+        const recovery = yield* attemptRecovery
+
+        const outcome = recovery.attempted ? recovery.outcome : first
+        if (recovery.attempted) yield* recordVerdict(outcome)
+
+        const readAfter = readings.get(step.id)
         steps.push({
           id: step.id,
           intent: step.intent,
           action: step.action.type,
           checkpoint: outcome.held ? "held" : "failed",
-          ...(read === undefined ? {} : { read })
+          ...(readAfter === undefined ? {} : { read: readAfter }),
+          ...(recovery.attempted && outcome.held
+            ? { recovered: recovery.condition.condition }
+            : {})
         })
 
-        if (!outcome.held) {
-          return yield* Effect.fail(
-            fail({
-              reason: "checkpoint_failed",
-              expected: outcome.expected,
-              observed: outcome.observed,
-              checkpoint: step.checkpoint.description,
-              waitedMillis: outcome.waitedMillis,
-              accessibility: outcome.state.accessibility,
-              url: outcome.state.url
-            })
-          )
-        }
+        if (outcome.held) return
+
+        // A condition that was recognised and would not clear is a different
+        // problem from a Checkpoint that never matched anything known, and the two
+        // are reported as such. SPEC: past its bound it stops being recoverable.
+        return yield* Effect.fail(
+          recovery.attempted
+            ? fail({
+                reason: "recovery_exhausted",
+                expected: outcome.expected,
+                observed: `${outcome.observed}; ${recovery.condition.condition} did not clear after ${recovery.attempts} attempt(s)`,
+                condition: recovery.condition.condition,
+                checkpoint: step.checkpoint.description,
+                attempts: recovery.attempts,
+                waitedMillis: outcome.waitedMillis,
+                accessibility: outcome.state.accessibility,
+                url: outcome.state.url
+              })
+            : fail({
+                reason: "checkpoint_failed",
+                expected: outcome.expected,
+                observed: outcome.observed,
+                checkpoint: step.checkpoint.description,
+                waitedMillis: outcome.waitedMillis,
+                accessibility: outcome.state.accessibility,
+                url: outcome.state.url
+              })
+        )
       })
+
+    // -----------------------------------------------------------------------
+    // Recovery, wired to the same chokepoint everything else goes through
+    // -----------------------------------------------------------------------
+
+    /**
+     * The closures `recover` is allowed to have.
+     *
+     * A remedy's Actions run through `performAction`, which runs through
+     * `authorised`, which is Session guard then Policy then act. Recovery is not a
+     * privileged path, and the way that is kept true is that `recovery.ts` imports
+     * no adapter — there is nowhere in it to put a `click`.
+     */
+    const recoveryPort = (step: Step, beforeUrl: string): RecoveryPort => {
+      const attempt = (
+        action: Action,
+        what: string,
+        bindReading: boolean
+      ): Effect.Effect<RemedyReport, EvidenceUnwritable> =>
+        performAction(step, action, beforeUrl).pipe(
+          Effect.flatMap((read) =>
+            Effect.sync((): RemedyReport => {
+              if (bindReading && read !== undefined) readings.set(step.id, read)
+              return { done: true, what }
+            })
+          ),
+          Effect.catch((problem) =>
+            isEvidenceProblem(problem)
+              ? Effect.fail(problem)
+              : Effect.succeed<RemedyReport>({ done: false, what, why: problem.observed })
+          )
+        )
+
+      return {
+        perform: (remedy) => attempt(remedy.action, remedy.intent, false),
+
+        /**
+         * Put the run back where this Step began, then attempt the Step again.
+         *
+         * The location came from the observation this Step made before it acted,
+         * so "where the step began" is a fact the run recorded rather than one it
+         * reconstructs. Going back there is an ordinary navigation and is
+         * Policy-checked as one. Before the first Step there is nowhere to go
+         * back to — `about:blank` is not a place — so that case re-attempts the
+         * Action alone.
+         */
+        resumeAtStep: Effect.gen(function* () {
+          const reports: Array<RemedyReport> = []
+          let repositioned = true
+          if (/^https?:/i.test(beforeUrl)) {
+            const back = yield* attempt(
+              { type: "navigate", path: { from: "constant", text: beforeUrl } },
+              `return to ${beforeUrl}, where this step began`,
+              false
+            )
+            reports.push(back)
+            repositioned = back.done
+          }
+          // No point attempting the Step from somewhere it was never meant to run.
+          if (repositioned) {
+            reports.push(yield* attempt(step.action, `attempt the step again: ${step.intent}`, true))
+          }
+          return reports
+        }),
+
+        recheck: evaluate({ surface, inputs, readings }, step.checkpoint),
+
+        detected: (assertions: ReadonlyArray<Assertion>) =>
+          evaluate(
+            { surface, inputs, readings },
+            {
+              description: "the screen matches a declared recoverable condition",
+              expect: assertions,
+              // One look. Detection asks what is on screen now; waiting for a
+              // condition to appear would be waiting for trouble.
+              withinMillis: 0
+            }
+          ).pipe(Effect.map((result) => result.held)),
+
+        // Stamped with the Step being recovered, so the `recovery.*` events sit
+        // in the log beside the `checkpoint` they answer rather than floating at
+        // run level. SPEC user story 63: the records have to join up.
+        record: (body) => evidence.record({ stepId: step.id, ...body })
+      }
+    }
 
     /**
      * Carries out one Action and returns what it read, if it read anything.
@@ -249,13 +422,19 @@ export const replayCapability = (
      * control, next to the strategy the Artifact declared for it — a Target that
      * starts resolving for a different reason than the recorded one is then
      * visible in the record rather than silently fine.
+     *
+     * The Action is a parameter rather than being read off the Step, because a
+     * Recoverable Condition's remedy is a list of Actions that has to reach the
+     * Surface through this same function and therefore through the same
+     * authorisation. A remedy that had its own path to the browser would be a
+     * second chokepoint, which is the same as none.
      */
     const performAction = (
       step: Step,
+      action: Action,
       url: string
     ): Effect.Effect<string | undefined, ReplayFailure | EvidenceUnwritable> =>
       Effect.gen(function* () {
-        const action = step.action
         const fail = failing(step)
 
         if (action.type === "navigate") {
@@ -512,9 +691,11 @@ const finalise = (
       .pipe(Effect.ignore)
   })
 
-const isEvidenceProblem = (
-  problem: ReplayFailure | EvidenceUnwritable
-): problem is EvidenceUnwritable => "_tag" in problem && problem._tag === "EvidenceUnwritable"
+const isEvidenceProblem = (problem: unknown): problem is EvidenceUnwritable =>
+  typeof problem === "object" &&
+  problem !== null &&
+  "_tag" in problem &&
+  (problem as { _tag: unknown })._tag === "EvidenceUnwritable"
 
 const unresolvable = (
   fail: (body: ReplayFailureBody) => ReplayFailure,

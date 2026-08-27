@@ -197,6 +197,113 @@ steps:
   expect(problems.length).toBeGreaterThan(0)
 })
 
+it("checks a recovery rule's references the same way it checks a step's", () => {
+  const withRules = (recoverable: string) => `
+capability: broken
+version: 1.0.0
+title: Broken
+summary: A recovery rule that does not hang together.
+authored: hand-written
+surface: { kind: web, product: Test, entry: / }
+inputs: {}
+outputs: {}
+steps:
+  - id: read-it
+    intent: Read something.
+    action:
+      type: extract
+      target: { role: cell, label: Thing, strategy: label, robustness: because }
+    checkpoint:
+      description: It happened.
+      expect: [{ assert: textPresent, text: anything }]
+recoverable:
+${recoverable}`
+
+  const remedy = (value: string) => `
+    remedy:
+      - intent: Type it.
+        action:
+          type: fill
+          target: { role: textbox, name: Thing, strategy: name, robustness: because }
+          value: ${value}
+    resume: here
+    attempts: 2
+    backoffMillis: 100`
+
+  // A remedy value naming an input nobody declared is the same bug as a step's.
+  expect(
+    expectProblems(
+      parseArtifact(
+        "broken",
+        withRules(
+          `  - condition: NO_SUCH_INPUT
+    description: Refers to a parameter nobody declared.
+    detect: [{ assert: textPresent, text: Busy }]${remedy("{ from: parameter, name: notDeclared }")}`
+        )
+      )
+    ).join(" ")
+  ).toContain("notDeclared")
+
+  // A remedy may not depend on what a step read. A rule can fire at any step, so
+  // that reference would mean something different depending on where it fired,
+  // and a rule whose meaning depends on when it runs is not reviewable.
+  expect(
+    expectProblems(
+      parseArtifact(
+        "broken",
+        withRules(
+          `  - condition: READS_A_STEP
+    description: Depends on a reading that may not have happened yet.
+    detect: [{ assert: textPresent, text: Busy }]${remedy("{ from: step, step: read-it }")}`
+        )
+      )
+    ).join(" ")
+  ).toContain("may not depend on")
+
+  // Two rules under one code would make evidence ambiguous about which fired.
+  expect(
+    expectProblems(
+      parseArtifact(
+        "broken",
+        withRules(
+          `  - condition: SAME_CODE
+    description: The first one.
+    detect: [{ assert: textPresent, text: Busy }]
+    remedy: []
+    resume: here
+    attempts: 1
+    backoffMillis: 100
+  - condition: SAME_CODE
+    description: The second one.
+    detect: [{ assert: textPresent, text: Busier }]
+    remedy: []
+    resume: here
+    attempts: 1
+    backoffMillis: 100`
+        )
+      )
+    ).join(" ")
+  ).toContain("more than once")
+
+  // A bound of zero attempts is not a bound, it is a rule that never runs.
+  expect(
+    expectProblems(
+      parseArtifact(
+        "broken",
+        withRules(
+          `  - condition: NO_ATTEMPTS
+    description: Declares a remedy it will never try.
+    detect: [{ assert: textPresent, text: Busy }]
+    remedy: []
+    resume: here
+    attempts: 0
+    backoffMillis: 100`
+        )
+      )
+    ).length
+  ).toBeGreaterThan(0)
+})
+
 it("rejects text that is not an artifact at all", () => {
   expect(expectProblems(parseArtifact("junk", ": : not yaml : :")).length).toBeGreaterThan(0)
   expect(expectProblems(parseArtifact("empty", "capability: only-this")).length).toBeGreaterThan(0)
@@ -204,10 +311,25 @@ it("rejects text that is not an artifact at all", () => {
 
 it("resolves the latest stored version, and lists what is callable", () => {
   expect(listCapabilities(ARTIFACTS_DIRECTORY)).toContain("member.account-balance")
-  expect(listVersions(ARTIFACTS_DIRECTORY, "member.account-balance")).toContain("1.0.0")
+
+  // Both versions are on disk and neither was rewritten, which is the whole
+  // claim immutability makes: 1.0.0 still says exactly what it said when it was
+  // approved, and what 1.1.0 added is readable as a diff against it.
+  const versions = listVersions(ARTIFACTS_DIRECTORY, "member.account-balance")
+  expect(versions).toContain("1.0.0")
+  expect(versions).toContain("1.1.0")
+
   expect(expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance")).version).toBe(
-    "1.0.0"
+    "1.1.0"
   )
+  // A pinned version still resolves to itself; `latest` is a convenience, not
+  // the only way in.
+  expect(
+    expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance", "1.0.0")).version
+  ).toBe("1.0.0")
+  expect(
+    expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance", "1.0.0")).recoverable
+  ).toBeUndefined()
 })
 
 it("turns a scraped amount into money, and refuses one in the wrong currency", () => {

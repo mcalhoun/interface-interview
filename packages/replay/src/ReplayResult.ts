@@ -54,7 +54,16 @@ export const StepRecord = Schema.Struct({
   /** `held` for every Step in a Success. */
   checkpoint: Schema.Literals(["held", "failed", "not_reached"]),
   /** What the Step read, for `extract` Steps. Absent otherwise. */
-  read: Schema.optional(Schema.String)
+  read: Schema.optional(Schema.String),
+  /**
+   * The Recoverable Condition this Step had to get past, when there was one.
+   *
+   * Present on a Step that succeeded the second or third time rather than the
+   * first. A caller who cares whether a run went smoothly can see that it did
+   * not, without reading the Evidence log — and a Step that recovered is still a
+   * Step that held, which is the distinction the whole taxonomy rests on.
+   */
+  recovered: Schema.optional(Schema.String)
 })
 export type StepRecord = typeof StepRecord.Type
 
@@ -89,6 +98,28 @@ const CheckpointFailed = failure("checkpoint_failed", {
   checkpoint: Schema.String,
   waitedMillis: Schema.Int,
   /** The accessibility tree at the moment of failure. What the automation saw. */
+  accessibility: Schema.String,
+  url: Schema.String
+})
+
+/**
+ * A declared Recoverable Condition was met, and did not clear within its bound.
+ *
+ * Distinct from `checkpoint_failed` because the two demand different responses. A
+ * Checkpoint that failed against an unrecognised screen is a question about the
+ * Capability: is the Artifact wrong, or has the application changed? A recovery
+ * that ran out of attempts is a question about the *environment*: the system knew
+ * what it was looking at, knew what to do about it, did it, and the state stayed.
+ * SPEC: a condition that does not clear after bounded attempts stops being
+ * recoverable, and this is what it becomes.
+ */
+const RecoveryExhausted = failure("recovery_exhausted", {
+  /** The declared rule's code. Names which rule was believed and then wasn't. */
+  condition: Schema.String,
+  checkpoint: Schema.String,
+  /** How many times the remedy ran. `0` when the run's recovery budget was spent. */
+  attempts: Schema.Int,
+  waitedMillis: Schema.Int,
   accessibility: Schema.String,
   url: Schema.String
 })
@@ -148,6 +179,7 @@ const ArtifactUnexecutable = failure("artifact_unexecutable", {})
 
 export const ReplayFailure = Schema.Union([
   CheckpointFailed,
+  RecoveryExhausted,
   TargetMissing,
   TargetAmbiguous,
   SurfaceFailed,

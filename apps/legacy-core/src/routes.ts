@@ -4,8 +4,16 @@
  * Every route is a GET that returns a complete HTML document. There is no JSON
  * endpoint, no partial response and no way to reach the data except by rendering
  * a page, which is the point: this stands in for a system with no API.
+ *
+ * The router is built around a `TransientState` rather than being a bare
+ * function, because three of the behaviours it has to reproduce are ones that
+ * answer differently the second time you ask. See `conditions.ts` for what those
+ * are and why each one is shaped the way it is. With a default state the table
+ * below behaves exactly as it did before any of them existed.
  */
 
+import type { TransientState } from "./conditions.ts"
+import { transientState } from "./conditions.ts"
 import { findAccount, findMember } from "./members.ts"
 import {
   accountDetailPage,
@@ -13,6 +21,8 @@ import {
   crossReferencePage,
   memberDetailPage,
   memberSearchPage,
+  signOnPage,
+  systemBusyPage,
   systemMessagePage
 } from "./render.ts"
 
@@ -22,56 +32,98 @@ const html = (body: string, status = 200): Response =>
     headers: {
       "content-type": "text/html; charset=iso-8859-1",
       // A cached page would hide a full page load, and full page loads are the
-      // behaviour later tickets have to cope with.
+      // behaviour later tickets have to cope with. It is also what makes a
+      // transient condition observable: an unchanged URL has to be re-fetched.
       "cache-control": "no-store"
     }
   })
 
-export const handle = (request: Request): Response => {
-  const url = new URL(request.url)
+/**
+ * The screens an operator navigates. A request to one of these is what the
+ * session-expiry toggle counts, so the count means "screens visited" rather than
+ * "bytes fetched" and does not drift when a browser asks for a favicon.
+ */
+const PAGE_ROUTES = new Set(["/", "/search", "/member", "/account", "/account/panel", "/xref"])
 
-  switch (url.pathname) {
-    case "/":
-    case "/search":
-      return html(memberSearchPage())
+export type Router = (request: Request) => Promise<Response>
 
-    case "/member": {
-      const memberNumber = url.searchParams.get("memberNumber") ?? ""
-      const member = findMember(memberNumber)
-      if (member === undefined) {
-        return html(
-          systemMessagePage(
-            memberNumber.trim() === ""
-              ? "No member number entered."
-              : `Member number ${memberNumber.trim()} could not be retrieved.`
-          ),
-          404
-        )
-      }
-      return html(memberDetailPage(member))
+export const router = (state: TransientState = transientState()): Router => {
+  return async (request: Request): Promise<Response> => {
+    const url = new URL(request.url)
+    const pathname = url.pathname
+
+    // Not a screen. Answered before anything is counted, so a browser's own
+    // incidental requests cannot move the session-expiry toggle.
+    if (pathname === "/favicon.ico") return new Response(null, { status: 204 })
+
+    if (pathname === "/signon") {
+      // Any password will do — this is a mock and there is no credential store
+      // behind it — but an *empty* one is refused, so an automation that could
+      // not supply one stays signed out and its recovery genuinely runs out of
+      // attempts instead of being waved through.
+      if ((url.searchParams.get("password") ?? "").trim() === "") return html(signOnPage())
+      state.signOn()
+      return Response.redirect(new URL("/", url).toString(), 302)
     }
 
-    case "/xref":
-      return html(crossReferencePage(url.searchParams.get("legacyMemberNumber") ?? ""))
+    if (PAGE_ROUTES.has(pathname)) state.notePageRequest()
 
-    case "/account":
-    case "/account/panel": {
-      const member = findMember(url.searchParams.get("memberNumber") ?? "")
-      const account =
-        member === undefined
-          ? undefined
-          : findAccount(member, url.searchParams.get("accountNumber") ?? "")
-      if (member === undefined || account === undefined) {
-        return html(systemMessagePage("Account could not be retrieved."), 404)
+    // Once the session has timed out every screen says so, whatever was asked
+    // for. A run that walks into this is stranded rather than merely delayed.
+    if (state.isSignedOut() && PAGE_ROUTES.has(pathname)) return html(signOnPage())
+
+    switch (pathname) {
+      case "/":
+      case "/search":
+        return html(memberSearchPage())
+
+      case "/member": {
+        const memberNumber = url.searchParams.get("memberNumber") ?? ""
+        const member = findMember(memberNumber)
+        if (member === undefined) {
+          return html(
+            systemMessagePage(
+              memberNumber.trim() === ""
+                ? "No member number entered."
+                : `Member number ${memberNumber.trim()} could not be retrieved.`
+            ),
+            404
+          )
+        }
+        // A real record exists; the host is just not ready to hand it over yet.
+        // HTTP 200, a perfectly well-formed page, and not the one that was asked
+        // for — the failure mode nothing raises an exception about.
+        if (state.takeOverlay(member.memberNumber)) {
+          return html(systemBusyPage(member.memberNumber))
+        }
+        return html(memberDetailPage(member))
       }
-      return html(
-        url.pathname === "/account"
-          ? accountDetailPage(member, account)
-          : accountDetailPanel(member, account)
-      )
-    }
 
-    default:
-      return html(systemMessagePage(`No transaction is mapped to ${url.pathname}.`), 404)
+      case "/xref":
+        return html(crossReferencePage(url.searchParams.get("legacyMemberNumber") ?? ""))
+
+      case "/account":
+      case "/account/panel": {
+        const member = findMember(url.searchParams.get("memberNumber") ?? "")
+        const account =
+          member === undefined
+            ? undefined
+            : findAccount(member, url.searchParams.get("accountNumber") ?? "")
+        if (member === undefined || account === undefined) {
+          return html(systemMessagePage("Account could not be retrieved."), 404)
+        }
+        if (pathname === "/account") return html(accountDetailPage(member, account))
+
+        // The slow load. Nothing is wrong with this response; it is late. The
+        // right answer to lateness is waiting, which is what a Checkpoint's
+        // bounded poll already is, so no recovery is declared for it.
+        const delay = state.panelDelayMillis(member.memberNumber)
+        if (delay > 0) await Bun.sleep(delay)
+        return html(accountDetailPanel(member, account))
+      }
+
+      default:
+        return html(systemMessagePage(`No transaction is mapped to ${pathname}.`), 404)
+    }
   }
 }

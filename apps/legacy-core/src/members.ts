@@ -1,8 +1,11 @@
 /**
  * The member book Heritage Core serves from.
  *
- * Only member `12345`, the happy path, exists at this point. Later tickets add
- * `99999`, `88888`, `77777` and `55555` alongside it.
+ * `12345` is the happy path. `55555` holds exactly the same shape of record and
+ * differs only in how the application *serves* it — behind a transient
+ * interstitial and with a late balance panel — so a run against it exercises the
+ * same Capability Artifact and can only differ in what it had to get past. See
+ * `conditions.ts`. Later tickets add `99999`, `88888` and `77777`.
  */
 
 export interface Account {
@@ -60,7 +63,48 @@ const HAPPY_PATH: Member = {
   ]
 }
 
-const MEMBERS: ReadonlyMap<string, Member> = new Map([[HAPPY_PATH.memberNumber, HAPPY_PATH]])
+/**
+ * The member whose record the application is slow and awkward about serving.
+ *
+ * Nothing here says so: the record is ordinary, and the difficulty lives entirely
+ * in `conditions.ts`. That separation is the point. A transient condition is a
+ * property of a moment, not of a member, and a fixture that baked it into the
+ * data would be testing a different thing.
+ */
+const TRANSIENT: Member = {
+  memberNumber: "55555",
+  name: "DELPHINE R OKONKWO",
+  memberSince: "11/02/2011",
+  status: "Active",
+  taxIdMasked: "xxx-xx-7730",
+  branch: "004 - RIVERSIDE",
+  accounts: [
+    {
+      accountNumber: "0000055555-S01",
+      description: "Primary Savings",
+      type: "SAVINGS",
+      openedOn: "11/02/2011",
+      status: "Active",
+      availableBalance: "$917.40",
+      currentBalance: "$1,117.40",
+      lastActivityOn: "08/25/2026"
+    },
+    {
+      accountNumber: "0000055555-D10",
+      description: "Checking",
+      type: "DRAFT",
+      openedOn: "01/19/2016",
+      status: "Active",
+      availableBalance: "$233.06",
+      currentBalance: "$233.06",
+      lastActivityOn: "08/26/2026"
+    }
+  ]
+}
+
+const MEMBERS: ReadonlyMap<string, Member> = new Map(
+  [HAPPY_PATH, TRANSIENT].map((member) => [member.memberNumber, member])
+)
 
 export const findMember = (memberNumber: string): Member | undefined =>
   MEMBERS.get(memberNumber.trim())

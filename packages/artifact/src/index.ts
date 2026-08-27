@@ -21,9 +21,17 @@ export type { CapabilityArtifact, Step, SurfaceDeclaration } from "./CapabilityA
 export {
   CapabilityArtifact as CapabilityArtifactSchema,
   capabilityRef,
+  recoverableConditions,
   Step as StepSchema,
   SurfaceDeclaration as SurfaceDeclarationSchema
 } from "./CapabilityArtifact.ts"
+
+export type { RecoverableCondition, RecoveryResume, RemedyStep } from "./Recovery.ts"
+export {
+  RecoverableCondition as RecoverableConditionSchema,
+  RecoveryResume as RecoveryResumeSchema,
+  RemedyStep as RemedyStepSchema
+} from "./Recovery.ts"
 
 export type {
   InputDeclaration,

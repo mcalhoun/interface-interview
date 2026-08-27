@@ -12,6 +12,9 @@ export { DEFAULT_CHECKPOINT_MILLIS, evaluate as evaluateCheckpoint, resolveValue
 export type { ReplayRequest } from "./engine.ts"
 export { replayCapability } from "./engine.ts"
 
+export type { RecoveryOutcome, RecoveryPort, RecoveryRequest, RemedyReport } from "./recovery.ts"
+export { RECOVERY_BUDGET_PER_RUN, recover } from "./recovery.ts"
+
 export type {
   ReplayFailure,
   ReplayFailureBody,

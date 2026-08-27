@@ -21,17 +21,27 @@
  * condition and how long it waited. A Checkpoint is a *set* of assertions and its
  * failure has to say which one failed and what was there instead — SPEC user
  * story 29. Polling here means the failing assertion and the state that defeated
- * it come from the same observation. `waitFor` stays the right tool for ticket
- * 06's transient conditions, which wait on one thing and do not need to explain
- * themselves.
+ * it come from the same observation.
  *
- * ## Seam for ticket 06 (recoverable conditions)
+ * ## What `evaluate` turned out to be for (ticket 06)
  *
- * A Checkpoint that does not hold within its bound returns `CheckpointOutcome`
- * with the state that defeated it. Ticket 06 inspects that state for a known
- * transient condition, does something bounded about it, and calls `evaluate`
- * again — re-evaluating rather than assuming the fix worked, which its checklist
- * requires. The return type already carries everything that needs.
+ * This function ended up doing three jobs, and it is worth naming them because
+ * they are the same job:
+ *
+ *   1. **Verifying a Step.** What it was written for.
+ *   2. **Waiting out a slow load.** A bounded poll *is* patience. Ticket 06 looked
+ *      at declaring a recoverable condition for lateness and did not, because it
+ *      would have been a second mechanism for waiting sitting beside this one.
+ *   3. **Detecting a Recoverable Condition, and deciding whether one cleared.**
+ *      A rule's `detect` is a list of the same assertions, evaluated with a bound
+ *      of zero — one look, no waiting. And a recovery decides whether it worked
+ *      by calling this function again, against the live screen, rather than by
+ *      believing its own remedy. Re-evaluating is free because this is idempotent,
+ *      and it is the difference between a run that recovered and a run that says
+ *      it did.
+ *
+ * `recovery.ts` is where that loop lives; it reaches this function only through
+ * closures the engine hands it, so nothing in it can touch a browser.
  */
 
 import { Effect } from "effect"
