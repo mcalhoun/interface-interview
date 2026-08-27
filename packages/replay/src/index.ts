@@ -15,6 +15,15 @@ export { replayCapability } from "./engine.ts"
 export type { RunEvidenceOptions } from "./redaction.ts"
 export { evidenceForRun, scrubberFor, sensitiveNames } from "./redaction.ts"
 
+export type {
+  RecoveryBlocked,
+  RecoveryOutcome,
+  RecoveryPort,
+  RecoveryRequest,
+  RemedyReport
+} from "./recovery.ts"
+export { RECOVERY_BUDGET_PER_RUN, recover } from "./recovery.ts"
+
 export type { Choice, ChoiceContext } from "./selection.ts"
 export { chooseItem } from "./selection.ts"
 

@@ -360,6 +360,75 @@ export const crossReferencePage = (legacyMemberNumber: string): string =>
   )
 
 /**
+ * The interstitial Heritage Core shows while it is still fetching a record.
+ *
+ * Static, like every other page here: no script, no meta refresh, nothing that
+ * clears on its own. Waiting on this screen waits forever. The only way past it
+ * is the Continue link, which asks for the same record again — so it is a
+ * transient condition that needs an *action* rather than patience, and that is
+ * what makes it worth having next to the slow panel that needs the opposite.
+ *
+ * `System Busy` is the phrase an automation detects. It appears nowhere else.
+ */
+export const systemBusyPage = (memberNumber: string): string =>
+  shell(
+    "Heritage Core - Please Wait",
+    `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td><font face="Arial" size="2"><b>System Busy</b></font></td></tr>
+<tr bgcolor="#ffffff"><td>${caption(
+      "The member record is being retrieved from the host. This can take a moment at peak. Press Continue to ask again."
+    )}</td></tr>
+<tr bgcolor="#ffffff"><td><font face="Arial" size="2"><a href="/member?${query({
+      memberNumber
+    })}">Continue</a></font></td></tr>
+</table>
+<br>
+<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`
+  )
+
+/**
+ * Sign On. What every screen becomes once the teller session has timed out.
+ *
+ * The operator id is fixed to the workstation and shown rather than typed, the
+ * way a teller terminal signs a session back on; only the password is asked for.
+ * The control's accessible name comes from `title`, as everywhere else, and
+ * Chromium exposes a password input as a `textbox`, so this needs no special
+ * handling on the automation side.
+ *
+ * Submitting returns the operator to Member Search rather than to the screen they
+ * were on. That is deliberate and it is the hard half of ticket 06: getting
+ * signed back in is easy, and getting back to where the run was is not.
+ */
+export const signOnPage = (): string =>
+  shell(
+    "Heritage Core - Sign On",
+    `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>Session Expired</b></font></td></tr>
+<tr bgcolor="#ffffff"><td colspan="2">${caption(
+      "Your teller session has timed out for inactivity. Sign on to continue."
+    )}</td></tr>
+</table>
+<br>
+<form method="get" action="/signon">
+<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td colspan="3"><font face="Arial" size="2"><b>Operator Sign On</b></font></td></tr>
+<tr bgcolor="#ffffff">
+<td width="180">${caption("Operator ID")}</td>
+<td>${caption("OPR001")}</td>
+<td width="140">&nbsp;</td>
+</tr>
+<tr bgcolor="#ffffff">
+<td>${caption("Password")}</td>
+<td><input type="password" name="password" size="14" maxlength="16" title="Password"></td>
+<td><input type="submit" value="Sign On"></td>
+</tr>
+</table>
+</form>
+<br>
+<font face="Arial" size="1" color="#404040">Sessions time out after a period of inactivity. Signing on returns you to Member Search.</font>`
+  )
+
+/**
  * The system message page. Heritage Core answers every *unusable* request this
  * way: a transaction code that is not mapped, a search submitted with nothing in
  * it, an account number that does not belong to the member on the URL.

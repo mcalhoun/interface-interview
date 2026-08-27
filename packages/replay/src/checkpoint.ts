@@ -21,9 +21,7 @@
  * condition and how long it waited. A Checkpoint is a *set* of assertions and its
  * failure has to say which one failed and what was there instead — SPEC user
  * story 29. Polling here means the failing assertion and the state that defeated
- * it come from the same observation. `waitFor` stays the right tool for ticket
- * 06's transient conditions, which wait on one thing and do not need to explain
- * themselves.
+ * it come from the same observation.
  *
  * ## Three verdicts, not two
  *
@@ -39,7 +37,9 @@
  *   - **held** — every assertion in `expect` is true.
  *   - **outcome** — `expect` is not true, and every condition of a Business
  *     Outcome branch the Artifact declared *is*. Terminal, and not a failure.
- *   - **failed** — neither, within the bound. A Hard Failure.
+ *   - **failed** — neither, within the bound. Everything downstream of a failed
+ *     Checkpoint — recovery, then handing off to a person — hangs off this one
+ *     verdict, and only off this one.
  *
  * `expect` is always tried first, on every pass, so a screen that satisfies the
  * intended state can never be re-read as an outcome. Branches are tried in the
@@ -50,18 +50,47 @@
  * a state that has yet to settle, and making a legitimate domain answer cost a
  * five-second timeout would be treating it as a failure in everything but name.
  *
- * ## Seam for ticket 06 (recoverable conditions)
+ * ## The ladder below a failed Checkpoint
  *
- * A Checkpoint that reaches neither within its bound returns `verdict: "failed"`
- * with the state that defeated it. Ticket 06 inspects that state for a known
- * transient condition, does something bounded about it, and calls `evaluate`
- * again — re-evaluating rather than assuming the fix worked, which its checklist
- * requires. The return type already carries everything that needs.
+ * Four things now happen when a Checkpoint does not hold, and the order is the
+ * semantic core of the system:
  *
- * The order to add it in is: `expect`, then declared outcomes, then recoverable
- * conditions. An outcome is what the application *means*; a recoverable condition
- * is a state the application is passing through. Checking recovery first would
- * let a transient-overlay rule swallow a terminal domain answer.
+ * ```
+ *   expect  ->  declared Business Outcomes  ->  recovery  ->  hand off to a person
+ * ```
+ *
+ * A declared outcome is what the application *means*; a Recoverable Condition is
+ * a state it is passing through; an Intervention is what is left when neither
+ * applies. Checking recovery before outcomes would let a transient-overlay rule
+ * spend a run's budget retrying a question the application has already answered
+ * and then report a Hard Failure for a run that succeeded. Handing off before
+ * recovery would wake a person for something the system can get past on its own.
+ *
+ * The first arrow is structural: `evaluate` folds `expect` and the outcome
+ * branches together and only `verdict: "failed"` leaves this module, so nothing
+ * downstream can see an outcome to mistake for a fault. The rest of the ladder is
+ * enforced in `engine.ts` — see `runCheckpoint` there, which is the single
+ * expression the two lower rungs hang off.
+ *
+ * ## What `evaluate` turned out to be for
+ *
+ * This function ended up doing three jobs, and it is worth naming them because
+ * they are the same job:
+ *
+ *   1. **Verifying a Step.** What it was written for.
+ *   2. **Waiting out a slow load.** A bounded poll *is* patience. Ticket 06 looked
+ *      at declaring a recoverable condition for lateness and did not, because it
+ *      would have been a second mechanism for waiting sitting beside this one.
+ *   3. **Detecting a Recoverable Condition, and deciding whether one cleared.**
+ *      A rule's `detect` is a list of the same assertions, evaluated with a bound
+ *      of zero — one look, no waiting. And a recovery decides whether it worked
+ *      by calling this function again, against the live screen, rather than by
+ *      believing its own remedy. Re-evaluating is free because this is idempotent,
+ *      and it is the difference between a run that recovered and a run that says
+ *      it did.
+ *
+ * `recovery.ts` is where that loop lives; it reaches this function only through
+ * closures the engine hands it, so nothing in it can touch a browser.
  */
 
 import { Effect, Redacted } from "effect"

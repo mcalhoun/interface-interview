@@ -5,6 +5,13 @@
  * hostility is a feature rather than set dressing. See `render.ts`.
  */
 
+export type { TransientOptions, TransientState } from "./conditions.ts"
+export {
+  DEFAULT_OVERLAY_RESPONSES,
+  DEFAULT_PANEL_DELAY_MILLIS,
+  TRANSIENT_MEMBER,
+  transientState
+} from "./conditions.ts"
 export type { Account, AuthorizationAttempt, Member, Restriction } from "./members.ts"
 export {
   authorizationAccepted,
@@ -12,6 +19,7 @@ export {
   findAccount,
   findMember
 } from "./members.ts"
-export { handle } from "./routes.ts"
+export type { Router } from "./routes.ts"
+export { router } from "./routes.ts"
 export type { LegacyCore, LegacyCoreOptions } from "./server.ts"
 export { DEFAULT_PORT, serve } from "./server.ts"

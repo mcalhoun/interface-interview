@@ -41,10 +41,12 @@ import {
   DEFAULT_POLICY,
   POLICIES_DIRECTORY,
   declassifierFor,
+  describeUnsafeRepeat,
   listPolicies,
   loadPolicy,
   policyFrom,
-  sensitivityPolicy
+  sensitivityPolicy,
+  unsafeRepeats
 } from "@cua/policy"
 import {
   DEFAULT_HANDOFF_WAIT_MILLIS,
@@ -78,6 +80,10 @@ const usage = (): string =>
     "                    checkpoint is a hard failure, because nobody is watching",
     "  --operatorPort <n>       port for the operator interface (default 4180)",
     "  --handoffWait <seconds>  how long a paused run waits for someone",
+    "  --expireSessionAfter <n>",
+    "                    arm Heritage Core's one-shot session-expiry toggle after",
+    "                    n page requests, to watch a mid-flow expiry be recovered",
+    "                    from (ignored when --baseUrl points somewhere else)",
     "",
     "capabilities:",
     ...listCapabilities(ARTIFACTS_DIRECTORY).map((name) => `  ${name}`),
@@ -117,11 +123,23 @@ const parse = (argv: ReadonlyArray<string>): Argv => {
 /**
  * Everything the CLI consumes itself, so the rest is the capability's inputs.
  *
- * Both sets of switches are here: the policy selector, and the two that
- * configure a handoff. A name missing from this list is passed to the Artifact
- * as an input and rejected as undeclared, so forgetting one is loud.
+ * Every set of switches is here: the policy selector, the two that configure a
+ * handoff, and the one that arms Heritage Core's session-expiry toggle. A name
+ * missing from this list is passed to the Artifact as an input and rejected as
+ * undeclared, so forgetting one is loud.
+ *
+ * Note what is *not* here: `--operatorPassword`. That is a declared input of the
+ * capability, sensitive like any other, and it reaches the browser through
+ * `prepareInputs` rather than through the CLI.
  */
-const RESERVED = new Set(["baseUrl", "version", "policy", "operatorPort", "handoffWait"])
+const RESERVED = new Set([
+  "baseUrl",
+  "version",
+  "policy",
+  "operatorPort",
+  "handoffWait",
+  "expireSessionAfter"
+])
 
 const report = (
   result: ReplayResult,
@@ -170,7 +188,11 @@ const report = (
     yield* Console.log("steps:")
     for (const step of result.steps) {
       const read = step.read === undefined ? "" : `  -> ${step.read}`
-      yield* Console.log(`  [${step.checkpoint}] ${step.id}  ${step.intent}${read}`)
+      // A step that held on the second attempt still held, and a caller reading
+      // this should be able to see both facts at once.
+      const recovered =
+        step.recovered === undefined ? "" : `  (recovered from ${step.recovered})`
+      yield* Console.log(`  [${step.checkpoint}] ${step.id}  ${step.intent}${read}${recovered}`)
     }
     yield* Console.log("")
     yield* Console.log(`policy:   ${policy.name} (${policy.source})`)
@@ -204,7 +226,15 @@ const run = (
       return
     }
 
-    const baseUrl = argv.options["baseUrl"] ?? (yield* serve({ port: 0 })).origin
+    const expireSessionAfter = argv.options["expireSessionAfter"]
+    const baseUrl =
+      argv.options["baseUrl"] ??
+      (yield* serve({
+        port: 0,
+        ...(expireSessionAfter === undefined
+          ? {}
+          : { expireSessionAfter: Number(expireSessionAfter) })
+      })).origin
     const runId = `${artifact.capability}-${new Date().toISOString().replaceAll(/[:.]/g, "-")}-${
       randomUUID().slice(0, 8)
     }`
@@ -300,6 +330,21 @@ const program = Effect.gen(function* () {
   )
   if (Result.isFailure(artifact)) {
     yield* Console.error(`cannot run ${argv.capability}: ${artifact.failure.message}`)
+    process.exitCode = 2
+    return
+  }
+
+  // An `at-step` recovery rule performs a Step's own Action a second time, so a
+  // Capability whose Actions are risky has to say in writing why doing one twice
+  // is safe. Asked here, before a browser is even requested, for the same reason
+  // the inputs and the policy are: a document that cannot legally run should not
+  // cost anyone a browser. `replayCapability` asks again as the backstop that
+  // cannot be forgotten.
+  const unsafe = unsafeRepeats(artifact.success)
+  if (unsafe.length > 0) {
+    yield* Console.error(
+      [`cannot run ${argv.capability}:`, ...unsafe.map(describeUnsafeRepeat)].join("\n  ")
+    )
     process.exitCode = 2
     return
   }

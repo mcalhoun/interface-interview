@@ -36,10 +36,18 @@ import {
   compilePolicy,
   decide,
   loadPolicy,
+  REPEATABLE_JUSTIFICATION_MINIMUM,
+  describeUnsafeRepeat,
   originOf,
   parseOriginPattern,
-  riskOf
+  riskOf,
+  unsafeRepeats
 } from "@cua/policy"
+import {
+  type CapabilityArtifact,
+  type RecoverableCondition,
+  recoverableConditions
+} from "@cua/artifact"
 import { type SurfaceAdapterService, SurfaceAdapter, playwrightSurface } from "@cua/surface"
 import { replay, shippedArtifact, shippedPolicy } from "./support/replay-harness.ts"
 
@@ -550,6 +558,160 @@ describe("the chokepoint", () => {
         event.kind === "policy.check" ? [`${event.action}:${event.verdict}`] : []
       )
       expect(verdicts).toEqual(["navigate:allow", "fill:allow", "extract:deny"])
+    })
+  )
+})
+
+// ---------------------------------------------------------------------------
+// (5) A recovery may not repeat a risky Action without saying why
+// ---------------------------------------------------------------------------
+
+/**
+ * The gap ticket 06 flagged and could not close from where it stood.
+ *
+ * A Recoverable Condition that resumes `at-step` navigates back to where a Step
+ * began and performs that Step's Action **again**. Right for a read; wrong for a
+ * transfer. Nothing stopped an Artifact declaring one over an irreversible
+ * Action, and the risk classification that could tell the difference lives here
+ * rather than in the schema.
+ *
+ * So the refusal lives here too, as ticket 06's own note said it should. It is
+ * ticket 07's `because:` precedent one layer up: a risky thing cannot be
+ * permitted silently, and the argument for permitting it travels in the document
+ * a person approves. The engine asks before a run performs anything, so a rule
+ * that could repeat an irreversible Action never reaches a browser.
+ */
+describe("repeating an action during a recovery", () => {
+  const rule = (overrides: Partial<RecoverableCondition> = {}): RecoverableCondition =>
+    ({
+      condition: "SOMETHING",
+      description: "A transient state.",
+      detect: [{ assert: "textPresent", text: "Busy" }],
+      remedy: [],
+      resume: "at-step",
+      attempts: 2,
+      backoffMillis: 100,
+      ...overrides
+    }) as RecoverableCondition
+
+  const capability = (
+    steps: ReadonlyArray<"navigate" | "extract" | "click">,
+    rules: ReadonlyArray<RecoverableCondition>
+  ): CapabilityArtifact =>
+    ({
+      ...shippedArtifact(),
+      steps: steps.map((type, index) => ({
+        id: `step-${index}`,
+        intent: `Do a ${type}.`,
+        action:
+          type === "navigate"
+            ? { type, path: { from: "constant", text: "/" } }
+            : {
+                type,
+                target: { role: "cell", name: "Thing", strategy: "name", robustness: "because" }
+              },
+        checkpoint: { description: "It happened.", expect: [{ assert: "textPresent", text: "x" }] }
+      })),
+      recoverable: rules
+    }) as unknown as CapabilityArtifact
+
+  it("refuses an at-step rule whose remedy would repeat a risky action", () => {
+    const unsafe = unsafeRepeats(
+      capability(
+        ["navigate"],
+        [
+          rule({
+            remedy: [
+              {
+                intent: "Press it.",
+                action: {
+                  type: "click",
+                  target: {
+                    role: "button",
+                    name: "Go",
+                    strategy: "name",
+                    robustness: "because"
+                  }
+                }
+              }
+            ] as RecoverableCondition["remedy"]
+          })
+        ]
+      )
+    )
+
+    expect(unsafe).toHaveLength(1)
+    expect(unsafe[0]?.actions).toEqual(["click"])
+    expect(describeUnsafeRepeat(unsafe[0]!)).toContain("SOMETHING")
+  })
+
+  it("refuses an at-step rule in a capability whose own steps are risky", () => {
+    // The rule's remedy is empty and still it is refused: `at-step` re-attempts
+    // whichever Step it fired at, and nothing in the Artifact says which Steps a
+    // `detect` matches. Guessing narrower would pass the document whose riskiest
+    // Step is exactly the one the condition shows up at.
+    const unsafe = unsafeRepeats(capability(["navigate", "click"], [rule()]))
+    expect(unsafe.map((problem) => problem.actions)).toEqual([["click"]])
+  })
+
+  it("allows an at-step rule over a capability that only reads", () => {
+    expect(unsafeRepeats(capability(["navigate", "extract"], [rule()]))).toEqual([])
+  })
+
+  it("allows a `resume: here` rule regardless, because it repeats nothing", () => {
+    expect(unsafeRepeats(capability(["navigate", "click"], [rule({ resume: "here" })]))).toEqual([])
+  })
+
+  it("does not accept a one-line assurance as a justification", () => {
+    const short = unsafeRepeats(
+      capability(["navigate", "click"], [rule({ repeatable: "It is fine." })])
+    )
+    expect(short).toHaveLength(1)
+    expect(short[0]?.remedy).toContain(`${REPEATABLE_JUSTIFICATION_MINIMUM}`)
+  })
+
+  it("accepts an argument somebody actually made", () => {
+    const argued = rule({
+      repeatable:
+        "Every action this capability performs is a read: a navigation, a search field, or " +
+        "a reading. None of them posts a transaction, so performing one twice returns the " +
+        "same screen it returned the first time."
+    })
+    expect(unsafeRepeats(capability(["navigate", "click"], [argued]))).toEqual([])
+  })
+
+  it("the shipped artifact's own at-step rule is argued for", () => {
+    // The session-expiry rule resumes `at-step` and this capability's steps
+    // include a `fill`, a `click` and a `selectFromList`, all classified risky.
+    // It is legal because the artifact says in writing why repeating a read-only
+    // flow is safe — not because the check happens to miss it.
+    expect(unsafeRepeats(shippedArtifact())).toEqual([])
+
+    const declared = recoverableConditions(shippedArtifact()).find(
+      (declared) => declared.resume === "at-step"
+    )
+    expect(declared?.repeatable ?? "").not.toBe("")
+  })
+
+  it("stops a run before it performs anything, rather than when the rule fires", () =>
+    Effect.gen(function* () {
+      const tally: Record<string, number> = {}
+      const outcome = yield* replay({
+        artifact: capability(["navigate", "click"], [rule()]),
+        inputs: { memberId: "12345" },
+        surface: countingSurface(tally)
+      })
+
+      expect(outcome.result.result).toBe("failure")
+      if (outcome.result.result !== "failure") return
+      expect(outcome.result.failure.reason).toBe("artifact_unexecutable")
+      expect(outcome.result.failure.observed).toContain("SOMETHING")
+
+      // Nothing acted, and there is not even a `run.start`: the refusal happens
+      // before the run announces itself, so a rule that could repeat an
+      // irreversible action never reaches a browser.
+      expect(tally).toEqual({})
+      expect(outcome.events.filter((event) => event.kind === "action")).toEqual([])
     })
   )
 })

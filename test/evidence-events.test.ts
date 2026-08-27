@@ -123,25 +123,32 @@ it("defines every event kind SPEC lists, including the ones replay may never emi
     )
   )
 
-  expect(kinds).toEqual(
-    new Set([
-      "run.start",
-      "observe",
-      "decide",
-      "policy.check",
-      "action",
-      "checkpoint",
-      "outcome",
-      "assist.request",
-      "assist.proposal",
-      "intervention.raise",
-      "intervention.human_action",
-      "intervention.resolve",
-      "run.end"
-    ])
-  )
+  const SPEC_KINDS = [
+    "run.start",
+    "observe",
+    "decide",
+    "policy.check",
+    "action",
+    "checkpoint",
+    "outcome",
+    "assist.request",
+    "assist.proposal",
+    "intervention.raise",
+    "intervention.human_action",
+    "intervention.resolve",
+    "run.end"
+  ]
+  for (const kind of SPEC_KINDS) expect(kinds, `SPEC lists ${kind}`).toContain(kind)
 
   // `decide` has to be a thing that could have been written for "a replay run
   // contains no decide event" to be a claim worth testing.
   expect(KINDS_FORBIDDEN_IN_REPLAY).toEqual(["decide"])
+
+  // The `recovery.*` kinds are the one addition to SPEC's list, added for the
+  // reason SPEC gives for `assist.*` having its own kinds rather than reusing
+  // `decide`: getting past a transient state unattended must not be able to hide
+  // inside an ordinary `action` or a re-run `checkpoint`. Pinning the whole set
+  // here means a fifteenth kind is a decision somebody has to make on purpose.
+  const RECOVERY_KINDS = ["recovery.detected", "recovery.attempt", "recovery.resolved"]
+  expect(kinds).toEqual(new Set([...SPEC_KINDS, ...RECOVERY_KINDS]))
 })

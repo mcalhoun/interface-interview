@@ -9,10 +9,11 @@
 #
 # ON THIS BEING 1.0.0 AND NOT 1.1.0
 #
-# Ticket 09 replaced the step that opened the savings account. That is a
-# correction to a hand-written document, made before anything ran against a
-# production installation, and it is not the kind of change the immutability rule
-# is there to make visible. The rule exists so that a *learned* change — an
+# Ticket 09 replaced the step that opened the savings account, and ticket 06 added
+# the `recoverable:` section at the foot of this file. Both are corrections to a
+# hand-written document, made before anything ran against a production
+# installation, and neither is the kind of change the immutability rule is there
+# to make visible. The rule exists so that a *learned* change — an
 # outcome an Intervention taught the system — sits in its own file next to the
 # intervention record that justified it, which is what SPEC's scenario table
 # reserves v1.1.0 and v1.2.0 for. Cutting a version here would take one of those
@@ -20,6 +21,15 @@
 # belongs to is recorded in SPEC, not here: a member number has no business being
 # written into an Artifact, in a comment or anywhere else (ADR-0008), and the
 # evidence scanner enforces that without caring where in the file it appears.
+#
+# WHAT TICKET 06 CHANGED
+#
+# A `recoverable:` section declaring two transient states this capability can get
+# past unattended, with the bound on each written down in numbers; an optional
+# `operatorPassword` input used only by the re-authentication remedy and by
+# nothing on the happy path; and a `withinMillis` on two checkpoints, so a state
+# that will not settle by waiting reaches its recovery rule promptly instead of
+# burning the default. No step, target, output or strategy changed.
 #
 # WHAT TICKET 09 CHANGED
 #
@@ -121,6 +131,24 @@ inputs:
       the only label carrying the token 'savings' was "Primary Savings". That
       inference was made once, by the model, at discovery time, and recorded
       here. Replay never repeats it — it matches tokens against the live list.
+
+  operatorPassword:
+    type: string
+    description: >
+      The password for the workstation's teller sign-on, used only if Heritage
+      Core times the session out part-way through the flow. Nothing on the happy
+      path touches it.
+
+      Optional, and deliberately without a default: an artifact is a document
+      people read and review, and a credential with a default value in one is a
+      credential in a git repository. A run that meets an expired session without
+      this supplied stops with a failure naming the remedy step that could not
+      run, which is the right outcome — automation that cannot prove who it is
+      should not be signing anything on.
+    sensitive: true
+    required: false
+    discoveredFrom: >
+      Hand-written, from the sign-on screen the session-expiry condition lands on.
 
 outputs:
   availableBalance:
@@ -280,6 +308,12 @@ steps:
               The account list's own heading cell. Present on every member record
               regardless of how many accounts the member holds, so it confirms we
               are on Member Detail rather than confirming this member's data.
+      # Shorter than the default on purpose. Every screen in this application is
+      # server rendered and arrives whole, so a Member Detail that is not here
+      # within a second is not on its way — it is a different screen, and the
+      # sooner the outcome branch below and the recoverable conditions at the foot
+      # of this file get a look at it, the better.
+      withinMillis: 1000
       # The other screen this submit legitimately reaches. Tried only when the
       # expectation above does not hold, so a member record can never be re-read
       # as an absence.
@@ -360,6 +394,20 @@ steps:
               because the figures live in a separate document inside an iframe
               that loads after its parent. Asserting on the outer chrome would
               pass while the panel was still blank.
+      # Longer than the outer page needs, because the figures arrive in a second
+      # document inside an iframe and some members' panels take most of a second.
+      #
+      # The right answer to lateness is waiting, and nothing here has to act to
+      # get it: the surface adapter settles on the page's load event before it
+      # reports what it sees, and this bound is the backstop for a panel that
+      # arrives after that. No recovery rule below covers lateness, and adding one
+      # would be a second mechanism for waiting.
+      #
+      # Bounds are not free in the other direction either: this is also how long
+      # a genuinely wrong screen sits here before anything says so, and before a
+      # recoverable condition gets its look at it. Roughly triple the slowest
+      # panel observed, and no more.
+      withinMillis: 2500
 
   # ---------------------------------------------------------------------------
   - id: read-available-balance
@@ -409,3 +457,133 @@ steps:
         - assert: stepRead
           step: read-current-balance
           matches: "^\\$[0-9,]+\\.[0-9]{2}$"
+
+# =============================================================================
+# Recoverable conditions
+# =============================================================================
+#
+# Transient states this capability knows how to get past with nobody involved.
+# Checked in the order written, against the screen that defeated a step's
+# checkpoint, and only ever after a checkpoint has already failed — none of this
+# runs on a flow that is going well.
+#
+# Every rule ends the same way: the step's own checkpoint is evaluated again. A
+# remedy is never believed on its own account. `attempts` is the point at which
+# the system stops calling this recoverable and fails the run with the condition
+# named, which is a number a reviewer can argue with rather than a behaviour
+# buried in an engine.
+recoverable:
+  # ---------------------------------------------------------------------------
+  - condition: TRANSIENT_OVERLAY
+    description: >
+      Heritage Core answers a member lookup with a "System Busy" interstitial
+      while the host is still fetching the record. HTTP 200, a perfectly
+      well-formed page, and not the one that was asked for.
+
+      Waiting does not help: the screen is static, with no script and no meta
+      refresh anywhere in this application, so it will sit there indefinitely.
+      The remedy is the Continue link, which asks the host for the same record
+      again. Two or three requests apart by a moment is normally enough; if it is
+      not, the host has a problem that retrying is not going to solve.
+    detect:
+      # "System Busy" is the interstitial's own panel heading and appears on no
+      # other screen. Detecting on a screen's own words rather than on the
+      # failure text of the checkpoint means a reworded error message somewhere
+      # else cannot make this rule fire.
+      - assert: textPresent
+        text: System Busy
+    remedy:
+      - intent: Ask the host for the member record again.
+        action:
+          type: click
+          target:
+            role: link
+            name: Continue
+            strategy: accessible-name
+            robustness: >
+              The interstitial offers exactly one Continue link and its
+              accessible name is its own text. The only other link on the screen
+              reads "Return to Member Search", which would abandon the flow, so
+              matching the wrong one would be visible immediately as the search
+              screen rather than as a silent wrong turn.
+    # Continue re-requests the very screen the step wanted, so there is nowhere
+    # to go back to: re-evaluate the checkpoint where we stand.
+    resume: here
+    attempts: 3
+    backoffMillis: 250
+
+  # ---------------------------------------------------------------------------
+  - condition: SESSION_EXPIRED
+    description: >
+      The teller session timed out and every screen has become Sign On. This one
+      strands a run rather than delaying it: the step's action may have been
+      carried out against the sign-on screen, and signing back on returns the
+      operator to Member Search rather than to where they were.
+
+      So the remedy has two halves. Re-authenticating is the easy half. Getting
+      back to the step that was interrupted is the half that matters, and it is
+      why this rule resumes `at-step` rather than `here`.
+    detect:
+      - assert: textPresent
+        text: Session Expired
+      - assert: targetPresent
+        target:
+          role: button
+          name: Sign On
+          strategy: accessible-name
+          robustness: >
+            Asserting the sign-on control is actually present, not just the
+            words. A screen that merely mentioned an expired session — a help
+            page, an audit listing — would match the text and match nothing an
+            automation could act on, and a remedy fired against it would waste
+            the run's whole recovery budget on a page it could never fix.
+    remedy:
+      - intent: Enter the workstation's teller password.
+        action:
+          type: fill
+          target:
+            role: textbox
+            name: Password
+            strategy: accessible-name
+            robustness: >
+              The sign-on screen has one input and its accessible name comes from
+              the title attribute, as everywhere else in this application.
+              Chromium exposes a password input as a textbox, so this needs no
+              special handling; the value is a declared sensitive input and never
+              appears in this document.
+          value:
+            from: parameter
+            name: operatorPassword
+      - intent: Sign the session back on.
+        action:
+          type: click
+          target:
+            role: button
+            name: Sign On
+            strategy: accessible-name
+            robustness: >
+              The submit control's accessible name comes from its value
+              attribute, the same way the Search button's does. It is the only
+              button on the screen.
+    # Signing on lands on Member Search, nowhere near the interrupted step, so
+    # resuming means returning to where that step began and attempting it again.
+    resume: at-step
+    # Required, because `at-step` performs a step's own Action a second time and
+    # several of this capability's Actions are classified risky (a `fill`, a
+    # `click`, a `selectFromList`). The engine refuses an `at-step` rule that
+    # could repeat a risky Action without this written down — see
+    # `unsafeRepeats` in @cua/policy. Saying it here is what makes the retry a
+    # decision somebody made rather than a property of the engine.
+    repeatable: >
+      Every Action this capability performs is a read: a navigation, typing a
+      member number into a search field, pressing Search, or choosing an account
+      from a list. None of them posts a transaction, moves money, or changes a
+      record, so performing any of them twice returns the same screen it returned
+      the first time. Heritage Core keeps no server-side state across these
+      requests — the whole flow is GETs — which is what makes that true rather
+      than merely likely. A capability that submitted anything would need its own
+      justification here, and would not get one.
+    # Two, not more. A sign-on that does not take twice is a credential problem
+    # or an account problem, and neither gets better by trying a third time.
+    attempts: 2
+    backoffMillis: 300

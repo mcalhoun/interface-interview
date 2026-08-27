@@ -14,7 +14,7 @@
 import { mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { serve } from "@cua/legacy-core"
+import { type LegacyCoreOptions, serve } from "@cua/legacy-core"
 import {
   type CapabilityArtifact,
   ARTIFACTS_DIRECTORY,
@@ -39,8 +39,12 @@ import { Effect, Layer, Result } from "effect"
 /** The capability this ticket's tracer bullet runs. */
 export const ACCOUNT_BALANCE = "member.account-balance"
 
-export const shippedArtifact = (capability = ACCOUNT_BALANCE): CapabilityArtifact => {
-  const loaded = loadArtifact(ARTIFACTS_DIRECTORY, capability)
+/** The stored artifact. With no version, whichever one `latest` resolves to. */
+export const shippedArtifact = (
+  capability = ACCOUNT_BALANCE,
+  version?: string
+): CapabilityArtifact => {
+  const loaded = loadArtifact(ARTIFACTS_DIRECTORY, capability, version)
   if (Result.isFailure(loaded)) throw new Error(loaded.failure.message)
   return loaded.success
 }
@@ -92,9 +96,14 @@ export const replay = (options: {
    * around the real thing is an observation, not a substitute.
    */
   readonly surface?: ReturnType<typeof playwrightSurface>
+  /**
+   * How Heritage Core should behave for this run — which transient conditions
+   * are armed. Ticket 06's session-expiry toggle is one of these.
+   */
+  readonly core?: Omit<LegacyCoreOptions, "port" | "hostname">
 }): Effect.Effect<ReplayOutcome, unknown> =>
   Effect.gen(function* () {
-    const core = yield* serve({ port: 0 })
+    const core = yield* serve({ port: 0, ...options.core })
     // The same sensitivity policy the CLI runs under, so what the tests read off
     // disk is the redaction real runs get rather than a test-only arrangement.
     const prepared = prepareInputs(

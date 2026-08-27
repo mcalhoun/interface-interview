@@ -32,9 +32,17 @@ export {
   capabilityRef,
   declaredOutcome,
   declaredOutcomeCodes,
+  recoverableConditions,
   Step as StepSchema,
   SurfaceDeclaration as SurfaceDeclarationSchema
 } from "./CapabilityArtifact.ts"
+
+export type { RecoverableCondition, RecoveryResume, RemedyStep } from "./Recovery.ts"
+export {
+  RecoverableCondition as RecoverableConditionSchema,
+  RecoveryResume as RecoveryResumeSchema,
+  RemedyStep as RemedyStepSchema
+} from "./Recovery.ts"
 
 export type {
   Declassifier,

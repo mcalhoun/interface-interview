@@ -15,6 +15,12 @@
  *
  * Every event carries run, session and step identifiers, so Discovery, Replay and
  * Intervention records join up (SPEC user story 63).
+ *
+ * The `recovery.*` kinds are the one addition to SPEC's list. They are added
+ * rather than folded into the existing kinds for exactly the reason SPEC gives
+ * for `assist.*` having its own: getting past a transient state unattended must
+ * not be able to hide inside an ordinary `action` or a re-run `checkpoint`. See
+ * the note above them.
  */
 
 import { Schema } from "effect"
@@ -159,7 +165,66 @@ const Outcome = event("outcome", {
 })
 
 // ---------------------------------------------------------------------------
-// The recovery ladder. Defined here, emitted by tickets 12 and 15.
+// Recoverable conditions
+// ---------------------------------------------------------------------------
+
+/**
+ * Three kinds beyond the thirteen SPEC enumerates, and the argument for them is
+ * the same one SPEC makes about `assist.*`: a recovery gets its own kinds rather
+ * than borrowing existing ones, so that getting past a transient state can never
+ * hide inside an ordinary `action` or a re-run `checkpoint`.
+ *
+ * Read together they answer the three questions a reviewer has about an
+ * unattended recovery, in order — what was detected, what was attempted, and
+ * whether it cleared:
+ *
+ *     recovery.detected  SESSION_EXPIRED at step open-savings-account
+ *     recovery.attempt   attempt 1 of 2: signed back on, returned to the step
+ *                        -> cleared
+ *     recovery.resolved  SESSION_EXPIRED cleared after 1 attempt
+ *
+ * The Surface Actions a remedy performs are also recorded as ordinary `action`
+ * and `policy.check` events, because a remedy's Actions pass through the same
+ * Policy chokepoint as a Step's. The bracketing kinds are what make them legible
+ * as a recovery rather than as part of the flow.
+ */
+const RecoveryDetected = event("recovery.detected", {
+  /** The declared rule's code, e.g. `TRANSIENT_OVERLAY`. */
+  condition: Schema.String,
+  /** The rule's own description, so the log explains itself without the Artifact. */
+  detail: Schema.String,
+  /** The Checkpoint that did not hold, and what was there instead. */
+  checkpoint: Schema.String,
+  observed: Schema.String,
+  url: Schema.String
+})
+
+const RecoveryAttempt = event("recovery.attempt", {
+  condition: Schema.String,
+  /** One-based. `of` is the declared bound, so exhaustion is visible in the log. */
+  attempt: Schema.Int,
+  of: Schema.Int,
+  /** What was actually done, in the remedy's own words. */
+  attempted: Schema.Array(Schema.String),
+  /**
+   * Whether the Step's Checkpoint held when it was evaluated *again* afterwards.
+   * Never whether the remedy ran without complaint: that is the assumption this
+   * whole mechanism exists to avoid.
+   */
+  cleared: Schema.Boolean,
+  observed: Schema.String,
+  waitedMillis: Schema.Int
+})
+
+const RecoveryResolved = event("recovery.resolved", {
+  condition: Schema.String,
+  cleared: Schema.Boolean,
+  attempts: Schema.Int,
+  detail: Schema.String
+})
+
+// ---------------------------------------------------------------------------
+// The rest of the recovery ladder. Defined here, emitted by tickets 12 and 15.
 // ---------------------------------------------------------------------------
 
 const AssistRequest = event("assist.request", {
@@ -198,6 +263,9 @@ export const EvidenceEvent = Schema.Union([
   ActionEvent,
   CheckpointEvent,
   Outcome,
+  RecoveryDetected,
+  RecoveryAttempt,
+  RecoveryResolved,
   AssistRequest,
   AssistProposal,
   InterventionRaise,

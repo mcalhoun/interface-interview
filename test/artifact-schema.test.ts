@@ -24,7 +24,8 @@ import {
   listVersions,
   loadArtifact,
   parseArtifact,
-  parseOutput
+  parseOutput,
+  recoverableConditions
 } from "@cua/artifact"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -72,7 +73,7 @@ it("the shipped artifact parses, and says what it does without any code being re
 
   // The reviewer's contract: inputs typed and classified, outputs typed, every
   // step explained, every step verified, every target argued for.
-  expect(Object.keys(artifact.inputs)).toEqual(["memberId", "accountType"])
+  expect(Object.keys(artifact.inputs)).toEqual(["memberId", "accountType", "operatorPassword"])
   expect(Object.keys(artifact.outputs)).toEqual(["availableBalance", "currentBalance"])
   expect(artifact.outputs["availableBalance"]?.currency).toBe("USD")
   for (const step of artifact.steps) {
@@ -294,6 +295,113 @@ steps:
   expect(problems.join(" ")).toContain("nothing matches")
 })
 
+it("checks a recovery rule's references the same way it checks a step's", () => {
+  const withRules = (recoverable: string) => `
+capability: broken
+version: 1.0.0
+title: Broken
+summary: A recovery rule that does not hang together.
+authored: hand-written
+surface: { kind: web, product: Test, entry: / }
+inputs: {}
+outputs: {}
+steps:
+  - id: read-it
+    intent: Read something.
+    action:
+      type: extract
+      target: { role: cell, label: Thing, strategy: label, robustness: because }
+    checkpoint:
+      description: It happened.
+      expect: [{ assert: textPresent, text: anything }]
+recoverable:
+${recoverable}`
+
+  const remedy = (value: string) => `
+    remedy:
+      - intent: Type it.
+        action:
+          type: fill
+          target: { role: textbox, name: Thing, strategy: name, robustness: because }
+          value: ${value}
+    resume: here
+    attempts: 2
+    backoffMillis: 100`
+
+  // A remedy value naming an input nobody declared is the same bug as a step's.
+  expect(
+    expectProblems(
+      parseArtifact(
+        "broken",
+        withRules(
+          `  - condition: NO_SUCH_INPUT
+    description: Refers to a parameter nobody declared.
+    detect: [{ assert: textPresent, text: Busy }]${remedy("{ from: parameter, name: notDeclared }")}`
+        )
+      )
+    ).join(" ")
+  ).toContain("notDeclared")
+
+  // A remedy may not depend on what a step read. A rule can fire at any step, so
+  // that reference would mean something different depending on where it fired,
+  // and a rule whose meaning depends on when it runs is not reviewable.
+  expect(
+    expectProblems(
+      parseArtifact(
+        "broken",
+        withRules(
+          `  - condition: READS_A_STEP
+    description: Depends on a reading that may not have happened yet.
+    detect: [{ assert: textPresent, text: Busy }]${remedy("{ from: step, step: read-it }")}`
+        )
+      )
+    ).join(" ")
+  ).toContain("may not depend on")
+
+  // Two rules under one code would make evidence ambiguous about which fired.
+  expect(
+    expectProblems(
+      parseArtifact(
+        "broken",
+        withRules(
+          `  - condition: SAME_CODE
+    description: The first one.
+    detect: [{ assert: textPresent, text: Busy }]
+    remedy: []
+    resume: here
+    attempts: 1
+    backoffMillis: 100
+  - condition: SAME_CODE
+    description: The second one.
+    detect: [{ assert: textPresent, text: Busier }]
+    remedy: []
+    resume: here
+    attempts: 1
+    backoffMillis: 100`
+        )
+      )
+    ).join(" ")
+  ).toContain("more than once")
+
+  // A bound of zero attempts is not a bound, it is a rule that never runs.
+  expect(
+    expectProblems(
+      parseArtifact(
+        "broken",
+        withRules(
+          `  - condition: NO_ATTEMPTS
+    description: Declares a remedy it will never try.
+    detect: [{ assert: textPresent, text: Busy }]
+    remedy: []
+    resume: here
+    attempts: 0
+    backoffMillis: 100`
+        )
+      )
+    ).length
+  ).toBeGreaterThan(0)
+})
+
 it("rejects text that is not an artifact at all", () => {
   expect(expectProblems(parseArtifact("junk", ": : not yaml : :")).length).toBeGreaterThan(0)
   expect(expectProblems(parseArtifact("empty", "capability: only-this")).length).toBeGreaterThan(0)
@@ -301,18 +409,38 @@ it("rejects text that is not an artifact at all", () => {
 
 it("resolves the latest stored version, and lists what is callable", () => {
   expect(listCapabilities(ARTIFACTS_DIRECTORY)).toContain("member.account-balance")
-  expect(listVersions(ARTIFACTS_DIRECTORY, "member.account-balance")).toContain("1.0.0")
+
+  const versions = listVersions(ARTIFACTS_DIRECTORY, "member.account-balance")
+  expect(versions).toContain("1.0.0")
+
   expect(expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance")).version).toBe(
     "1.0.0"
   )
+  // A pinned version still resolves to itself; `latest` is a convenience, not
+  // the only way in.
+  expect(
+    expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance", "1.0.0")).version
+  ).toBe("1.0.0")
+})
+
+it("the shipped artifact declares the recovery rules it can get past unattended", () => {
+  // Ticket 06's rules live in 1.0.0 rather than in a version of their own, for
+  // the reason the next test spells out: rules written by hand are a correction
+  // to a hand-written document, not something an Intervention taught.
+  const artifact = expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance"))
+  expect(recoverableConditions(artifact).map((rule) => rule.condition)).toEqual([
+    "TRANSIENT_OVERLAY",
+    "SESSION_EXPIRED"
+  ])
 })
 
 it("v1.1.0 and v1.2.0 are left free for the outcomes an intervention teaches", () => {
   // SPEC's scenario table reserves those two for members 88888 and 77777 —
   // changes a human confirmed, each landing in its own file beside the
-  // intervention record that justified it. Ticket 09's selection is a correction
-  // to a hand-written document rather than something learned, so it belongs in
-  // 1.0.0. Taking a reserved slot would blur the one diff worth showing.
+  // intervention record that justified it. Ticket 09's selection and ticket 06's
+  // recovery rules are corrections to a hand-written document rather than things
+  // learned, so both belong in 1.0.0. Taking a reserved slot would blur the one
+  // diff worth showing.
   const versions = listVersions(ARTIFACTS_DIRECTORY, "member.account-balance")
   expect(versions).not.toContain("1.1.0")
   expect(versions).not.toContain("1.2.0")

@@ -66,20 +66,35 @@
  * never unwound. Every reading taken before the pause is still in hand, the
  * Steps before it do not run again, and the Steps after it run exactly once.
  *
- * ## Where those two meet: the order inside a failed Checkpoint
+ * ## The order inside a failed Checkpoint
  *
- * `evaluate` tries `expect` first and the Artifact's `orOutcome` branches second,
- * and only a Checkpoint that reached neither — `verdict: "failed"` — is offered
- * to a person. The order is `expect` -> `orOutcome` -> `handOff`, and it is not
- * an implementation detail: a state the Artifact already declares as a Business
- * Outcome is an *answer*, and stopping a person to confirm what the document
- * already says would escalate a terminal domain result as though it were
- * breakage. A recoverable-condition rung (ticket 06) belongs above the handoff
- * and below the outcome branches, for the same reason.
+ * Four things contribute to what happens when a Checkpoint does not hold, and the
+ * order is the semantic core of this system rather than an implementation detail:
+ *
+ * ```
+ *   expect  ->  declared Business Outcomes  ->  recovery  ->  hand off to a person
+ * ```
+ *
+ * A state the Artifact already declares as a Business Outcome is an *answer*. It
+ * must never be retried as though it were a transient glitch, and stopping a
+ * person to confirm what the document already says would escalate a terminal
+ * domain result as though it were breakage. A Recoverable Condition is a state
+ * the application is passing through, so it sits above the handoff: waking
+ * somebody for something the system can get past on its own is exactly what the
+ * ladder exists to avoid.
+ *
+ * It is enforced by types rather than by statement order. `evaluate` folds
+ * `expect` and the outcome branches together and only `verdict: "failed"` leaves
+ * it, so neither lower rung can be handed an outcome — `attemptRecovery` and
+ * `handOff` both take a `FailedCheckpoint`. And `handOff` takes an `Unrecovered`,
+ * which only `attemptRecovery` produces, so reaching a person without every
+ * declared recovery rule having had its turn does not compile.
  */
 
-import { Effect, Result } from "effect"
+import { Effect, Ref, Result } from "effect"
 import {
+  type Action,
+  type Assertion,
   type CapabilityArtifact,
   type Checkpoint,
   type OutputValue,
@@ -90,10 +105,11 @@ import {
   declaredOutcome,
   describeValueRef,
   parseOutput,
+  recoverableConditions,
   toSurfaceTarget
 } from "@cua/artifact"
 import { Evidence, type EvidenceUnwritable } from "@cua/evidence"
-import { type ActionRequest, Policy } from "@cua/policy"
+import { type ActionRequest, Policy, describeUnsafeRepeat, unsafeRepeats } from "@cua/policy"
 import { Session } from "@cua/session"
 import {
   type SurfaceAdapterService,
@@ -106,6 +122,14 @@ import {
 } from "@cua/surface"
 import { type CheckpointOutcome, type StepReadings, evaluate, resolveValue } from "./checkpoint.ts"
 import { chooseItem } from "./selection.ts"
+import {
+  type RecoveryBlocked,
+  type RecoveryOutcome,
+  type RecoveryPort,
+  type RemedyReport,
+  RECOVERY_BUDGET_PER_RUN,
+  recover
+} from "./recovery.ts"
 import type { ReplayFailure, ReplayFailureBody, ReplayResult, StepRecord } from "./ReplayResult.ts"
 import { describeResult } from "./ReplayResult.ts"
 
@@ -140,6 +164,9 @@ export const replayCapability = (
     const startedAt = Date.now()
     const steps: Array<StepRecord> = []
     const readings = new Map<string, string>()
+    const conditions = recoverableConditions(artifact)
+    /** Shared across every Step, so a whole flow cannot retry itself forever. */
+    const budget = yield* Ref.make(RECOVERY_BUDGET_PER_RUN)
 
     /** The half of a result that is the same whatever class it turns out to be. */
     const common = {
@@ -242,16 +269,23 @@ export const replayCapability = (
      * one this loop authorises. Today that is `targetReads` and only `targetReads`.
      * A later ticket adding an assertion that reads a control has to add it here
      * as well, or that read reaches the adapter unjudged.
+     *
+     * The assertions are a parameter rather than being read off the Step, because
+     * a Recoverable Condition's `detect` list is made of the same Assertions and
+     * is evaluated against the same live screen. A detection that read a control
+     * outside this gate would be the same bypass ticket 07 closed, reopened one
+     * rung lower.
      */
     const authorisedReader = (
       step: Step,
-      page: string
+      page: string,
+      assertions: ReadonlyArray<Assertion>
     ): Effect.Effect<
       (target: SurfaceTarget) => Effect.Effect<string, TargetFailure>,
       ReplayFailure | EvidenceUnwritable
     > =>
       Effect.gen(function* () {
-        for (const assertion of step.checkpoint.expect) {
+        for (const assertion of assertions) {
           if (assertion.assert !== "targetReads") continue
           const target = toSurfaceTarget(assertion.target)
           yield* authorised(step, "extract", describeTarget(target), page, () =>
@@ -318,28 +352,29 @@ export const replayCapability = (
           accessibility: before.accessibility
         })
 
-        const performed = yield* performAction(step, before)
+        const performed = yield* performAction(step, step.action, before)
         if (performed.read !== undefined) readings.set(step.id, performed.read)
         const read = performed.read
 
         /**
          * Ask the Checkpoint once, from the page the run is actually on.
          *
-         * Available twice on purpose: once now, and once after an Operator has
-         * been in the Session. `evaluate` is idempotent, so re-asking is how the
-         * run finds out what they did rather than being told.
+         * Available more than once on purpose: once now, once after a recovery
+         * has done something about a declared transient condition, and once after
+         * an Operator has been in the Session. `evaluate` is idempotent, so
+         * re-asking is how the run finds out what happened rather than being told.
          *
          * `page` is a parameter rather than a closed-over constant because the
-         * two calls are authorised against *different* pages. The first is
-         * wherever the Action left the run; the second is wherever the Operator
-         * left it, which is not something the engine may assume. A Checkpoint's
-         * reads are `extract`s and pass the same gate as any other action, so the
-         * second pass asks Policy again rather than reusing a permission granted
-         * before a person had the keyboard.
+         * calls are authorised against *different* pages. The first is wherever
+         * the Action left the run; the later ones are wherever a remedy or an
+         * Operator left it, which is not something the engine may assume. A
+         * Checkpoint's reads are `extract`s and pass the same gate as any other
+         * action, so each pass asks Policy again rather than reusing a permission
+         * granted before the screen moved.
          */
         const verify = (page: string): Effect.Effect<CheckpointOutcome, StepProblem> =>
           Effect.gen(function* () {
-            const readTarget = yield* authorisedReader(step, page)
+            const readTarget = yield* authorisedReader(step, page, step.checkpoint.expect)
             return yield* evaluate(
               { surface, inputs, readings, read: readTarget },
               step.checkpoint
@@ -354,67 +389,99 @@ export const replayCapability = (
                 )
               )
             )
-          }).pipe(
-            Effect.tap((outcome) =>
-              evidence.record({
-                kind: "checkpoint",
-                stepId: step.id,
-                description: step.checkpoint.description,
-                verdict: outcome.verdict,
-                ...describeVerdict(step.checkpoint, outcome),
-                waitedMillis: outcome.waitedMillis
-              })
-            )
-          )
+          }).pipe(Effect.tap((outcome) => recordVerdict(step, outcome)))
 
-        // Authorised against wherever the Action left the run, not where it
-        // started: a click that followed a link off the allowlist is exactly the
-        // case this is here to catch.
-        let outcome = yield* verify(performed.url)
+        // ---------------------------------------------------------------
+        // The ladder below a failed Checkpoint
+        // ---------------------------------------------------------------
+        //
+        //     expect  ->  declared Business Outcomes  ->  recovery  ->  hand off
+        //
+        // Four things contribute to what happens when a Checkpoint does not hold,
+        // and this is the order. The reasoning, which is the semantic core of the
+        // system rather than a preference:
+        //
+        //   - A declared Business Outcome is the application *answering*. It must
+        //     never be retried as though it were a glitch, and it must never wake
+        //     a person to confirm what the Artifact already says. A recovery rule
+        //     whose `detect` also matched the member-not-found screen would
+        //     otherwise spend the run's whole budget on a question that was
+        //     already answered and then report a Hard Failure for a run that
+        //     succeeded.
+        //   - A Recoverable Condition is a state the application is *passing
+        //     through*. Waking a person for one is what this rung exists to
+        //     avoid, so it sits above the handoff.
+        //   - An Intervention is what is left when neither applies.
+        //
+        // The order is enforced by types, not by the order of these statements:
+        //
+        //   1. `evaluate` folds `expect` and the outcome branches together and
+        //      only `verdict: "failed"` leaves it, so neither lower rung can be
+        //      handed an outcome — `attemptRecovery` and `handOff` both take
+        //      `FailedCheckpoint` and nothing else.
+        //   2. `handOff` takes an `Unrecovered`, and `attemptRecovery` is the only
+        //      expression in this file that can produce one. Handing off before
+        //      recovery has had its turn does not type-check.
+        let outcome: CheckpointOutcome = yield* verify(performed.url)
         let escalation: Escalated | undefined
         let afterHandoff = false
+        let recovered: string | undefined
+        let exhausted: Extract<RecoveryOutcome, { attempted: true }> | undefined
 
-        // Only `failed` gets here. A Checkpoint that held is done, and one that
-        // matched a declared `orOutcome` branch already has an answer — asking a
-        // person to confirm what the Artifact says is the mistake this ordering
-        // exists to prevent.
         if (outcome.verdict === "failed") {
-          // The Recovery Ladder's human rung. Everything above it — waiting,
-          // retrying, matching harder, and the Artifact's own declared outcomes —
-          // has had its turn by the time a Checkpoint has spent its whole bound
-          // and still does not hold.
-          const handed = yield* handOff(step, outcome)
-          if (handed.resumed) {
-            afterHandoff = true
+          // Rung 3. Reads the state that defeated the Checkpoint, does the
+          // bounded thing the Artifact declared, and re-evaluates the same
+          // Checkpoint rather than believing its own remedy.
+          const attempted = yield* attemptRecovery(step, before, outcome)
+          outcome = attempted.outcome
 
-            // Where the person left the run. Observed rather than assumed:
-            // between the pause and here, the only thing that moved the Surface
-            // was a human being.
-            const resumedAt = yield* surface.observe.pipe(
-              Effect.catch((unavailable) =>
-                Effect.fail(
-                  fail({
-                    reason: "surface_failed",
-                    expected: "to observe the surface control was returned on",
-                    observed: unavailable.reason
-                  })
+          if (attempted._tag === "Recovered") {
+            // A Step that recovered is still a Step that held.
+            recovered = attempted.condition
+          } else {
+            exhausted = attempted.recovery.attempted ? attempted.recovery : undefined
+
+            // Rung 4, the human one. Everything above it — waiting, the
+            // Artifact's own declared outcomes, and every declared recovery rule —
+            // has had its turn by now.
+            const handed = yield* handOff(step, attempted)
+            if (handed.resumed) {
+              afterHandoff = true
+
+              // Where the person left the run. Observed rather than assumed:
+              // between the pause and here, the only thing that moved the Surface
+              // was a human being.
+              const resumedAt = yield* surface.observe.pipe(
+                Effect.catch((unavailable) =>
+                  Effect.fail(
+                    fail({
+                      reason: "surface_failed",
+                      expected: "to observe the surface control was returned on",
+                      observed: unavailable.reason
+                    })
+                  )
                 )
               )
-            )
 
-            outcome = yield* verify(resumedAt.url)
-            if (outcome.verdict === "failed") {
-              // They said they had resolved it and the screen disagrees. Not a
-              // failure of the automation, and not something to escalate a
-              // second time: report it and let a person read the record.
-              escalation = escalated(
-                step,
-                outcome,
-                `control was returned as resolved, but ${outcome.expected} is still not true`
-              )
+              // Deliberately not another trip round the recovery rung. The
+              // Artifact's rules were tried against this Checkpoint already and
+              // did not clear it; a person has since acted, and if the screen
+              // still disagrees the answer is a record for someone to read, not
+              // another automated retry on top of a manual one.
+              outcome = yield* verify(resumedAt.url)
+              if (outcome.verdict === "failed") {
+                // They said they had resolved it and the screen disagrees. Not a
+                // failure of the automation, and not something to escalate a
+                // second time: report it and let a person read the record.
+                escalation = escalated(
+                  step,
+                  outcome,
+                  `control was returned as resolved, but ${outcome.expected} is still not true`
+                )
+              }
+            } else {
+              escalation = handed.escalation
             }
-          } else {
-            escalation = handed.escalation
           }
         }
 
@@ -423,7 +490,8 @@ export const replayCapability = (
           intent: step.intent,
           action: step.action.type,
           checkpoint: outcome.verdict,
-          ...(read === undefined ? {} : { read })
+          ...(read === undefined ? {} : { read }),
+          ...(recovered === undefined ? {} : { recovered })
         })
 
         if (outcome.verdict === "outcome") {
@@ -442,22 +510,210 @@ export const replayCapability = (
         }
 
         if (outcome.verdict === "failed") {
+          // A condition that was recognised and would not clear is a different
+          // problem from a Checkpoint that never matched anything known, and the
+          // two are reported as such: one asks whether the Artifact is wrong, the
+          // other says the system knew exactly what it was looking at and the
+          // state stayed anyway. SPEC: past its bound it stops being recoverable.
           return yield* Effect.fail<StepProblem>(
             escalation ??
-              fail({
-                reason: "checkpoint_failed",
-                expected: outcome.expected,
-                observed: outcome.observed,
-                checkpoint: step.checkpoint.description,
-                waitedMillis: outcome.waitedMillis,
-                accessibility: outcome.state.accessibility,
-                url: outcome.state.url
-              })
+              (exhausted === undefined
+                ? fail({
+                    reason: "checkpoint_failed",
+                    expected: outcome.expected,
+                    observed: outcome.observed,
+                    checkpoint: step.checkpoint.description,
+                    waitedMillis: outcome.waitedMillis,
+                    accessibility: outcome.state.accessibility,
+                    url: outcome.state.url
+                  })
+                : fail({
+                    reason: "recovery_exhausted",
+                    expected: outcome.expected,
+                    observed: `${outcome.observed}; ${exhausted.condition.condition} did not clear after ${exhausted.attempts} attempt(s)`,
+                    condition: exhausted.condition.condition,
+                    checkpoint: step.checkpoint.description,
+                    attempts: exhausted.attempts,
+                    waitedMillis: outcome.waitedMillis,
+                    accessibility: outcome.state.accessibility,
+                    url: outcome.state.url
+                  }))
           )
         }
 
         return { reached: undefined, afterHandoff }
       })
+
+    /** One `checkpoint` Evidence event. Emitted for every verdict a Step reaches. */
+    const recordVerdict = (
+      step: Step,
+      outcome: CheckpointOutcome
+    ): Effect.Effect<void, EvidenceUnwritable> =>
+      evidence.record({
+        kind: "checkpoint",
+        stepId: step.id,
+        description: step.checkpoint.description,
+        verdict: outcome.verdict,
+        ...describeVerdict(step.checkpoint, outcome),
+        waitedMillis: outcome.waitedMillis
+      })
+
+    // -----------------------------------------------------------------------
+    // Recovery, wired to the same chokepoint everything else goes through
+    // -----------------------------------------------------------------------
+
+    /**
+     * Rung 3 of the ladder: give the Artifact's declared recovery rules their turn.
+     *
+     * Takes a `FailedCheckpoint` and nothing wider, which is what makes "a
+     * declared Business Outcome is never retried" a compile-time fact rather than
+     * a comment: there is no way to hand this function an outcome verdict.
+     *
+     * Returns `Recovered` or `Unrecovered`, and `Unrecovered` is the only thing
+     * `handOff` accepts. Since this is the sole expression in the file that
+     * produces one, handing off before recovery has run does not type-check.
+     */
+    const attemptRecovery = (
+      step: Step,
+      before: SurfaceState,
+      failed: FailedCheckpoint
+    ): Effect.Effect<Recovered | Unrecovered, StepProblem> =>
+      Effect.gen(function* () {
+        const fail = failing(step)
+
+        const recovery = yield* recover({
+          conditions,
+          checkpoint: step.checkpoint.description,
+          failed,
+          budget,
+          port: recoveryPort(step, before)
+        }).pipe(
+          Effect.catch((problem): Effect.Effect<never, StepProblem> => {
+            if (isEvidenceProblem(problem)) return Effect.fail(problem)
+            // A denial or a lost session inside a remedy is already said in the
+            // result contract's words; only a dead browser needs translating.
+            if (!("_tag" in problem)) return Effect.fail(problem)
+            return Effect.fail(
+              fail({
+                reason: "surface_failed",
+                expected: `to recover: ${step.checkpoint.description}`,
+                observed: problem.reason
+              })
+            )
+          })
+        )
+
+        // No declared rule matched the screen. That is not a recovery that
+        // failed; it is a Checkpoint failure recovery had nothing to say about.
+        if (!recovery.attempted) return { _tag: "Unrecovered", outcome: failed, recovery }
+
+        // Recovery re-evaluated the Checkpoint, so the log gets the second
+        // verdict too. Without it the record would show one failed checkpoint and
+        // a run that carried on.
+        yield* recordVerdict(step, recovery.outcome)
+
+        return recovery.outcome.verdict === "failed"
+          ? { _tag: "Unrecovered", outcome: recovery.outcome, recovery }
+          : {
+              _tag: "Recovered",
+              outcome: recovery.outcome,
+              condition: recovery.condition.condition
+            }
+      })
+
+    /**
+     * The closures `recover` is allowed to have.
+     *
+     * A remedy's Actions run through `performAction`, which runs through
+     * `authorised`, which is Session guard then Policy then act. Recovery is not a
+     * privileged path, and the way that is kept true is that `recovery.ts` imports
+     * no adapter — there is nowhere in it to put a `click`.
+     */
+    const recoveryPort = (step: Step, before: SurfaceState): RecoveryPort => {
+      const attempt = (
+        action: Action,
+        what: string,
+        bindReading: boolean
+      ): Effect.Effect<RemedyReport, EvidenceUnwritable> =>
+        Effect.gen(function* () {
+          // The live screen, not the one the Step remembered. A remedy acts on
+          // whatever is actually there — and a `selectFromList` remedy would
+          // otherwise be matched against a list that is no longer displayed.
+          const at = yield* surface.observe
+          const performed = yield* performAction(step, action, at)
+          if (bindReading && performed.read !== undefined) readings.set(step.id, performed.read)
+          return { done: true, what } satisfies RemedyReport
+        }).pipe(
+          Effect.catch((problem) =>
+            isEvidenceProblem(problem)
+              ? Effect.fail(problem)
+              : Effect.succeed<RemedyReport>({
+                  done: false,
+                  what,
+                  why: "observed" in problem ? problem.observed : problem.reason
+                })
+          )
+        )
+
+      /** The Checkpoint's own reads, re-authorised against wherever the run is now. */
+      const evaluateHere = (
+        checkpoint: Checkpoint
+      ): Effect.Effect<CheckpointOutcome, RecoveryBlocked> =>
+        Effect.gen(function* () {
+          const at = yield* surface.observe
+          const readTarget = yield* authorisedReader(step, at.url, checkpoint.expect)
+          return yield* evaluate({ surface, inputs, readings, read: readTarget }, checkpoint)
+        })
+
+      return {
+        perform: (remedy) => attempt(remedy.action, remedy.intent, false),
+
+        /**
+         * Put the run back where this Step began, then attempt the Step again.
+         *
+         * The location came from the observation this Step made before it acted,
+         * so "where the step began" is a fact the run recorded rather than one it
+         * reconstructs. Going back there is an ordinary navigation and is
+         * Policy-checked as one. Before the first Step there is nowhere to go
+         * back to — `about:blank` is not a place — so that case re-attempts the
+         * Action alone.
+         */
+        resumeAtStep: Effect.gen(function* () {
+          const reports: Array<RemedyReport> = []
+          let repositioned = true
+          if (/^https?:/i.test(before.url)) {
+            const back = yield* attempt(
+              { type: "navigate", path: { from: "constant", text: before.url } },
+              `return to ${before.url}, where this step began`,
+              false
+            )
+            reports.push(back)
+            repositioned = back.done
+          }
+          // No point attempting the Step from somewhere it was never meant to run.
+          if (repositioned) {
+            reports.push(yield* attempt(step.action, `attempt the step again: ${step.intent}`, true))
+          }
+          return reports
+        }),
+
+        recheck: evaluateHere(step.checkpoint),
+
+        detected: (assertions: ReadonlyArray<Assertion>) =>
+          evaluateHere({
+            description: "the screen matches a declared recoverable condition",
+            expect: assertions,
+            // One look. Detection asks what is on screen now; waiting for a
+            // condition to appear would be waiting for trouble.
+            withinMillis: 0
+          }).pipe(Effect.map((result) => result.verdict === "held")),
+
+        // Stamped with the Step being recovered, so the `recovery.*` events sit
+        // in the log beside the `checkpoint` they answer rather than floating at
+        // run level. SPEC user story 63: the records have to join up.
+        record: (body) => evidence.record({ stepId: step.id, ...body })
+      }
+    }
 
     /**
      * Hand the live Session to a person, and wait.
@@ -470,6 +726,17 @@ export const replayCapability = (
      * Hard Failure it always did, and only a run with an Operator reachable stops
      * and asks.
      *
+     * ## Why the parameter is an `Unrecovered` rather than a failed Checkpoint
+     *
+     * It is the bottom rung, and the type says so. `Unrecovered` can only be
+     * produced by `attemptRecovery`, so there is no expression in this engine
+     * that reaches a person without every declared recovery rule having had its
+     * turn first — and, transitively, without `evaluate` having ruled out both
+     * the intended state and every declared Business Outcome. Waking somebody for
+     * a state the system can get past on its own, or to confirm an answer the
+     * Artifact already documents, are both compile errors rather than review
+     * comments.
+     *
      * ## Seam
      *
      * Only a failed Checkpoint escalates today, because it is the case where the
@@ -481,12 +748,14 @@ export const replayCapability = (
      */
     const handOff = (
       step: Step,
-      outcome: Extract<CheckpointOutcome, { verdict: "failed" }>
+      unrecovered: Unrecovered
     ): Effect.Effect<
       { readonly resumed: boolean; readonly escalation: Escalated | undefined },
       EvidenceUnwritable
     > =>
       Effect.gen(function* () {
+        const outcome = unrecovered.outcome
+
         if (!(yield* session.handoffAvailable)) {
           return { resumed: false, escalation: undefined }
         }
@@ -540,19 +809,26 @@ export const replayCapability = (
      * ordinary click. That ordering is what lets Policy see the control actually
      * about to be pressed, and it is why selection adds no new way for this
      * engine to touch the Surface. It takes the whole observed state rather than
-     * just a url because the choice is made against the tree the Step just saw.
+     * just a url because the choice is made against the tree the run just saw.
+     *
+     * The Action is a parameter rather than being read off the Step, because a
+     * Recoverable Condition's remedy is a list of Actions that has to reach the
+     * Surface through this same function and therefore through the same
+     * authorisation. A remedy that had its own path to the browser would be a
+     * second chokepoint, which is the same as none. `at` is then the state the
+     * remedy is acting from — a fresh observation, not the Step's remembered one.
      */
     const performAction = (
       step: Step,
-      before: SurfaceState
+      action: Action,
+      at: SurfaceState
     ): Effect.Effect<
       { readonly read: string | undefined; readonly url: string },
       ReplayFailure | EvidenceUnwritable
     > =>
       Effect.gen(function* () {
-        const action = step.action
         const fail = failing(step)
-        const url = before.url
+        const url = at.url
 
         if (action.type === "navigate") {
           const path = resolveValue({ inputs, readings }, action.path)
@@ -593,7 +869,7 @@ export const replayCapability = (
           if (wanted === undefined) {
             return yield* Effect.fail(unresolvable(fail, action.match.against))
           }
-          const choice = chooseItem({ inputs, tree: before.tree, url }, action, wanted)
+          const choice = chooseItem({ inputs, tree: at.tree, url }, action, wanted)
           if (choice._tag === "Unchosen") return yield* Effect.fail(fail(choice.failure))
           surfaceTarget = choice.target
           declaredStrategy = action.match.strategy
@@ -701,6 +977,25 @@ export const replayCapability = (
     // -----------------------------------------------------------------------
 
     const body = Effect.gen(function* () {
+      // Before anything is performed, and before the first `run.start`: an
+      // `at-step` recovery rule re-performs a Step's own Action, so a Capability
+      // whose Actions are risky has to say in writing why doing one twice is
+      // safe. Refused here rather than at the moment the rule would fire, so a
+      // rule that could repeat an irreversible Action never reaches a browser.
+      // The CLI asks the same question earlier still, before a browser is even
+      // requested; this is the backstop that cannot be forgotten.
+      const unsafe = unsafeRepeats(artifact)
+      if (unsafe.length > 0) {
+        const first = artifact.steps[0]!
+        return yield* Effect.fail<ReplayFailure>({
+          reason: "artifact_unexecutable",
+          stepId: first.id,
+          stepIntent: first.intent,
+          expected: "every at-step recovery rule to justify repeating a risky action",
+          observed: unsafe.map(describeUnsafeRepeat).join("; ")
+        })
+      }
+
       yield* evidence.record({
         kind: "run.start",
         mode: "replay",
@@ -834,6 +1129,39 @@ interface ReachedOutcome {
  * Evidence log says so at the moment it happened, and it is the field ticket 13
  * reads when it turns "what the Operator did" into an Artifact Amendment.
  */
+/** A Checkpoint that reached neither the intended state nor a declared outcome. */
+type FailedCheckpoint = Extract<CheckpointOutcome, { verdict: "failed" }>
+
+/**
+ * A failed Checkpoint that a declared recovery rule got past.
+ *
+ * `outcome` is the *re-evaluated* verdict, never the remedy's own report: a
+ * recovery is believed only when the Checkpoint says so.
+ */
+interface Recovered {
+  readonly _tag: "Recovered"
+  readonly outcome: Exclude<CheckpointOutcome, FailedCheckpoint>
+  /** The declared rule's code. Goes onto the `StepRecord` as `recovered`. */
+  readonly condition: string
+}
+
+/**
+ * A failed Checkpoint that recovery did not get past — either because no declared
+ * rule matched the screen at all, or because the rule that did ran out of
+ * attempts.
+ *
+ * This is the *only* thing `handOff` accepts, and `attemptRecovery` is the only
+ * expression that produces one. That is how the last two rungs of the ladder are
+ * ordered by the compiler rather than by the order of two statements somebody
+ * could swap without noticing.
+ */
+interface Unrecovered {
+  readonly _tag: "Unrecovered"
+  readonly outcome: FailedCheckpoint
+  /** What recovery had to say, including `attempted: false` when nothing matched. */
+  readonly recovery: RecoveryOutcome
+}
+
 interface StepConclusion {
   /** The declared Business Outcome this Step reached. `undefined` means carry on. */
   readonly reached: ReachedOutcome | undefined
@@ -996,9 +1324,11 @@ const finalise = (
       .pipe(Effect.ignore)
   })
 
-const isEvidenceProblem = (
-  problem: ReplayFailure | EvidenceUnwritable
-): problem is EvidenceUnwritable => "_tag" in problem && problem._tag === "EvidenceUnwritable"
+const isEvidenceProblem = (problem: unknown): problem is EvidenceUnwritable =>
+  typeof problem === "object" &&
+  problem !== null &&
+  "_tag" in problem &&
+  (problem as { _tag: unknown })._tag === "EvidenceUnwritable"
 
 const unresolvable = (
   fail: (body: ReplayFailureBody) => ReplayFailure,

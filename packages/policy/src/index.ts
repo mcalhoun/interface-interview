@@ -52,6 +52,13 @@ export {
   resolvePolicyPath
 } from "./store.ts"
 
+export type { UnsafeRepeat } from "./Repeatability.ts"
+export {
+  REPEATABLE_JUSTIFICATION_MINIMUM,
+  describeUnsafeRepeat,
+  unsafeRepeats
+} from "./Repeatability.ts"
+
 export type { Declassification, SensitivityPolicy } from "./Sensitivity.ts"
 export {
   declassifierFor,
