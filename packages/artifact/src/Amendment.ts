@@ -182,8 +182,15 @@ export interface AmendmentOptions {
    * Detection is by comparison. If scrubbing the finished document changes it,
    * the document contains something it should not, and the Amendment is refused
    * without anything having to say what was found.
+   *
+   * **Required, for the same reason `EvidenceOptions.scrubber` is** (ticket 08).
+   * An optional scrubber defaulting to identity does not weaken the guarantee a
+   * little: it removes it entirely and silently, because the document is then
+   * compared against an unchanged copy of itself and the comparison always
+   * matches. Saying no has to be spelled `noScrubbing`, which is a word a
+   * reviewer can grep for, rather than an argument somebody left out.
    */
-  readonly scrub?: (text: string) => string
+  readonly scrub: (text: string) => string
 }
 
 /**
@@ -203,7 +210,7 @@ export interface AmendmentOptions {
 export const declareLearnedNoMatch = (
   artifact: CapabilityArtifact,
   learned: LearnedBusinessOutcome,
-  options: AmendmentOptions = {}
+  options: AmendmentOptions
 ): Result.Result<CapabilityArtifact, AmendmentRefused> => {
   const refuse = (reason: string) =>
     Result.fail(new AmendmentRefused({ capability: artifact.capability, reason }))
@@ -325,7 +332,7 @@ export interface LearnedRequiresHuman {
 export const declareRequiresHuman = (
   artifact: CapabilityArtifact,
   learned: LearnedRequiresHuman,
-  options: AmendmentOptions = {}
+  options: AmendmentOptions
 ): Result.Result<CapabilityArtifact, AmendmentRefused> => {
   const refuse = (reason: string) =>
     Result.fail(new AmendmentRefused({ capability: artifact.capability, reason }))
@@ -407,8 +414,21 @@ const carriesNothingSensitive = (
   options: AmendmentOptions,
   refuse: (reason: string) => Result.Result<never, AmendmentRefused>
 ): Result.Result<CapabilityArtifact, AmendmentRefused> => {
+  // The type makes the scrubber required; this is the runtime half of the same
+  // rule, and it exists because the failure it prevents is silent. A caller that
+  // reached here without one would compare the document against an unchanged copy
+  // of itself, and every amendment would pass the check that is supposed to be
+  // the last thing between an operator's sentence and a stored document.
+  if (typeof options.scrub !== "function") {
+    return refuse(
+      "no scrubber was supplied, so the amended document could not be checked for values " +
+        "this run treats as sensitive. The check is not optional (ADR-0008): an amendment " +
+        "that cannot be checked is refused rather than written"
+    )
+  }
+
   const yaml = formatArtifact(amended)
-  const scrubbed = options.scrub?.(yaml) ?? yaml
+  const scrubbed = options.scrub(yaml)
   if (scrubbed !== yaml) {
     return refuse(
       `the amended document would carry, on ${countChangedLines(yaml, scrubbed)} line(s), a ` +

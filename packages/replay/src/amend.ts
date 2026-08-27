@@ -90,8 +90,14 @@ export interface AmendmentRequest {
   /**
    * The run's Evidence scrubber. The amendment is refused if scrubbing the
    * finished document would change it — see `AmendmentOptions.scrub`.
+   *
+   * **Required.** The guarantee in the sentence above is unconditional, and an
+   * optional field defaulting to identity would quietly make it opt-in: with no
+   * scrubber the finished document is compared against an unchanged copy of
+   * itself, the comparison always matches, and ADR-0008's refusal never fires.
+   * A run that genuinely redacts nothing says so with `noScrubbing`.
    */
-  readonly scrub?: (text: string) => string
+  readonly scrub: (text: string) => string
   /** Defaults to the next minor of the version that ran. */
   readonly version?: string
 }
@@ -156,7 +162,7 @@ export const proposeAmendment = (request: AmendmentRequest): ProposedAmendment =
       ),
       discoveredFrom: provenanceFor(record, learned.because)
     },
-    { scrub: request.scrub ?? ((text) => text) }
+    { scrub: request.scrub }
   )
 
   if (Result.isFailure(amended)) return { _tag: "Refused", refusal: amended.failure }
@@ -210,7 +216,7 @@ const requiresHumanAmendment = (
       summary: requiresHumanSummaryFor(record, step.checkpoint.description),
       discoveredFrom: requiresHumanProvenanceFor(record, because)
     },
-    { scrub: request.scrub ?? ((text) => text) }
+    { scrub: request.scrub }
   )
 
   if (Result.isFailure(amended)) return { _tag: "Refused", refusal: amended.failure }

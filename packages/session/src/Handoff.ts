@@ -36,6 +36,28 @@
  * when they hand it back. These are written by the fiber doing the thing, which
  * matters: the paused run cannot record what the Operator did, because it is
  * asleep while they do it.
+ *
+ * ## A transition that could not be recorded did not happen
+ *
+ * Evidence and the state machine move together. Each transition commits to the
+ * `Ref`, writes its event, and — if the write fails — puts the state back exactly
+ * as it found it. Without that, a failed `evidence.record` left the machine
+ * somewhere no retry could reach: `takeControl` and `returnControl` are refused
+ * once the owner has moved, and a `noteAction` retry appends the action a second
+ * time.
+ *
+ * The case that made this worth doing properly is `returnControl`. It moves
+ * `HUMAN -> RESUME_REQUESTED` and then records `intervention.resolve`. If that
+ * write failed, the owner stayed `resume_requested` with the `Deferred` never
+ * completed — and when the paused fiber's wait expired it read that owner as an
+ * answered return and **resumed the run**, on an episode whose resolution is not
+ * in the log and whose Operator was told their return had failed. Rolling the
+ * owner back to `operator` makes the same expiry report "nobody came", which is
+ * the truth, and lets the Operator try again.
+ *
+ * The rollback is conditional on the state still being the one this transition
+ * committed, so a concurrent settle is never clobbered; if something else has
+ * moved on, the failure is reported and the state is left alone.
  */
 
 import { Context, Deferred, Effect, Layer, Ref, Schema } from "effect"
@@ -245,6 +267,20 @@ export const sessionControl = (
 
       const read = Ref.get(state)
 
+      /**
+       * Undo a transition whose Evidence event could not be written.
+       *
+       * Conditional on the state still being the one that transition committed.
+       * Nothing else can normally have moved it — the operator's half is driven
+       * by one interface and the run is asleep — but the paused fiber's wait can
+       * expire at any instant, and putting an older state back over a settle that
+       * has already happened would be a worse bug than the one this is fixing.
+       * Reference equality is the check, because `State` is replaced wholesale on
+       * every change and never mutated.
+       */
+      const rollBack = (previous: State, committed: State): Effect.Effect<void> =>
+        Ref.update(state, (current) => (current === committed ? previous : current))
+
       const snapshot: Effect.Effect<HandoffSnapshot> = read.pipe(
         Effect.map((current) => ({
           sessionId,
@@ -294,13 +330,20 @@ export const sessionControl = (
               raisedAt: now()
             }
             const record = raise(intervention)
+            const next: State = {
+              ...enter(current, "paused", `automation stopped at step ${request.stepId}`),
+              pending: { record, deferred },
+              raised: current.raised + 1
+            }
             return [
-              { kind: "raised", record, operatorUrl: current.operatorUrl },
               {
-                ...enter(current, "paused", `automation stopped at step ${request.stepId}`),
-                pending: { record, deferred },
-                raised: current.raised + 1
-              }
+                kind: "raised",
+                record,
+                operatorUrl: current.operatorUrl,
+                previous: current,
+                committed: next
+              },
+              next
             ]
           })
 
@@ -319,12 +362,16 @@ export const sessionControl = (
             }
           }
 
+          // A pause nobody could record is a pause that did not happen: the run
+          // fails with `EvidenceUnwritable`, and leaving the Session parked in
+          // PAUSED behind it would strand it on a `Deferred` no operator has been
+          // told about and no retry can reach.
           yield* evidence.record({
             kind: "intervention.raise",
             stepId: request.stepId,
             reason: request.reason,
             detail: request.detail
-          })
+          }).pipe(Effect.onError(() => rollBack(started.previous, started.committed)))
 
           if (options.announce !== undefined) {
             yield* options.announce(started.record.intervention, started.operatorUrl)
@@ -406,53 +453,69 @@ export const sessionControl = (
       // -------------------------------------------------------------------
 
       /**
-       * Applies one operator transition, or refuses it. Every one goes through
-       * here, which is what makes "refused, never ignored" true of all of them
-       * rather than of the ones somebody remembered to guard.
+       * Applies one operator transition, records it, or refuses it. Every one
+       * goes through here, which is what makes "refused, never ignored" true of
+       * all of them rather than of the ones somebody remembered to guard.
        *
        * `step` returns the new record, the new owner and what to call the move.
        * An owner that does not change (an Operator recording a second action)
        * leaves no entry in the trail: the trail is changes of hands, not activity.
+       *
+       * **`event` is a parameter rather than a `tap` at the call site, because
+       * the write and the transition have to be one thing.** The event is written
+       * from the state it describes — `record` already carries the operator, the
+       * timestamp and the action — and a write that fails puts the state back.
+       * Otherwise the machine lands somewhere no retry can reach: `takeControl`
+       * and `returnControl` refuse once the owner has moved, and a second
+       * `noteAction` appends the action twice. Either the transition and its
+       * event both happened or neither did.
        */
       const transition = (
         attempted: string,
         expected: ControlOwner,
-        step: (waiting: Waiting) => [InterventionRecord, ControlOwner, string]
-      ): Effect.Effect<InterventionRecord, HandoffRefused> =>
+        step: (waiting: Waiting) => [InterventionRecord, ControlOwner, string],
+        event: (record: InterventionRecord) => Effect.Effect<void, EvidenceUnwritable>
+      ): Effect.Effect<InterventionRecord, HandoffRefused | EvidenceUnwritable> =>
         Ref.modify(state, (current): [Transitioned, State] => {
           if (current.owner !== expected || current.pending === undefined) {
             return [{ ok: false, owner: current.owner }, current]
           }
           const [record, owner, by] = step(current.pending)
           const moved = owner === current.owner ? current : enter(current, owner, by)
-          return [
-            { ok: true, record },
-            { ...moved, pending: { ...current.pending, record } }
-          ]
+          const next: State = { ...moved, pending: { ...current.pending, record } }
+          return [{ ok: true, record, previous: current, committed: next }, next]
         }).pipe(
-          Effect.flatMap((outcome) =>
-            outcome.ok
-              ? Effect.succeed(outcome.record)
-              : Effect.fail(
-                  new HandoffRefused({ sessionId, attempted, owner: outcome.owner, expected })
-                )
+          Effect.flatMap(
+            (
+              outcome
+            ): Effect.Effect<InterventionRecord, HandoffRefused | EvidenceUnwritable> =>
+              outcome.ok
+                ? event(outcome.record).pipe(
+                    Effect.onError(() => rollBack(outcome.previous, outcome.committed)),
+                    Effect.map(() => outcome.record)
+                  )
+                : Effect.fail(
+                    new HandoffRefused({ sessionId, attempted, owner: outcome.owner, expected })
+                  )
           )
         )
 
       const takeControl = (operator: string) =>
-        transition("take control", "paused", (waiting) => [
-          { ...waiting.record, operator, tookControlAt: now() },
-          "operator",
-          `${operator} took control`
-        ]).pipe(
-          Effect.tap((record) =>
+        transition(
+          "take control",
+          "paused",
+          (waiting) => [
+            { ...waiting.record, operator, tookControlAt: now() },
+            "operator",
+            `${operator} took control`
+          ],
+          (record) =>
             evidence.record({
               kind: "intervention.human_action",
               stepId: record.intervention.stepId,
               operator,
               detail: "took control of the live session"
             })
-          )
         )
 
       const noteAction = (note: OperatorNote) =>
@@ -480,18 +543,28 @@ export const sessionControl = (
           )
           const redacted = note.entered.map((entry) => operatorFieldLabel(entry.field))
 
-          return yield* transition("record an action", "operator", (waiting) => [
-            {
-              ...waiting.record,
-              actions: [
-                ...waiting.record.actions,
-                { at: now(), detail: note.detail, redacted }
-              ]
-            },
+          // The appended action and its event stand or fall together. A write
+          // that failed after the append would leave the action on the record
+          // with nothing in the log about it, and the obvious retry would append
+          // it a second time -- which matters more here than anywhere else,
+          // because `classify` reads `actions.length` to decide whether an
+          // episode taught a business outcome or a requires-human state
+          // (ADR-0004).
+          return yield* transition(
+            "record an action",
             "operator",
-            "(no change of hands)"
-          ]).pipe(
-            Effect.tap((record) =>
+            (waiting) => [
+              {
+                ...waiting.record,
+                actions: [
+                  ...waiting.record.actions,
+                  { at: now(), detail: note.detail, redacted }
+                ]
+              },
+              "operator",
+              "(no change of hands)"
+            ],
+            (record) =>
               evidence.record({
                 kind: "intervention.human_action",
                 stepId: record.intervention.stepId,
@@ -501,34 +574,40 @@ export const sessionControl = (
                     ? note.detail
                     : `${note.detail} (values entered: ${redacted.join(", ")})`
               })
-            )
           )
         })
 
       const returnControl = (body: ControlReturn) =>
-        transition("return control", "operator", (waiting) => [
-          {
-            ...waiting.record,
-            operator: body.operator,
-            returnedAt: now(),
-            classification: body.classification,
-            detail: body.detail,
-            // The answer to the one question, recorded on the episode it was
-            // asked about. Ticket 13's Amendment reads it from here, together
-            // with `actions`, which is the other half of ADR-0004's table.
-            nextTime: body.nextTime,
-            // The second question, when there was one to ask. An absent answer
-            // is `not_asked` rather than a refusal: the same careful direction
-            // the operator interface takes, and for the same reason — a field
-            // nobody filled in must never read as a confirmation.
-            confirmProposal: body.confirmProposal ?? "not_asked"
-          },
-          // Not `automation`. The Operator has finished; the automation has not
-          // yet noticed. Those are two facts and this state keeps them apart.
-          "resume_requested",
-          `${body.operator} returned control as ${body.classification}`
-        ]).pipe(
-          Effect.tap((record) =>
+        transition(
+          "return control",
+          "operator",
+          (waiting) => [
+            {
+              ...waiting.record,
+              operator: body.operator,
+              returnedAt: now(),
+              classification: body.classification,
+              detail: body.detail,
+              // The answer to the one question, recorded on the episode it was
+              // asked about. Ticket 13's Amendment reads it from here, together
+              // with `actions`, which is the other half of ADR-0004's table.
+              nextTime: body.nextTime,
+              // The second question, when there was one to ask. An absent answer
+              // is `not_asked` rather than a refusal: the same careful direction
+              // the operator interface takes, and for the same reason — a field
+              // nobody filled in must never read as a confirmation.
+              confirmProposal: body.confirmProposal ?? "not_asked"
+            },
+            // Not `automation`. The Operator has finished; the automation has not
+            // yet noticed. Those are two facts and this state keeps them apart.
+            "resume_requested",
+            `${body.operator} returned control as ${body.classification}`
+          ],
+          // The dangerous one. RESUME_REQUESTED is what the paused fiber reads as
+          // "somebody answered", so if this write fails the owner is rolled back
+          // to HUMAN and the wait expires as "nobody came" — the truth — instead
+          // of resuming a run on an episode whose resolution is not in the log.
+          (record) =>
             evidence.record({
               kind: "intervention.resolve",
               stepId: record.intervention.stepId,
@@ -538,8 +617,10 @@ export const sessionControl = (
               nextTime: body.nextTime,
               confirmProposal: body.confirmProposal ?? "not_asked"
             })
-          ),
-          // Only now: the run wakes to a state that already says it may proceed.
+        ).pipe(
+          // Only now: the run wakes to a state that already says it may proceed,
+          // and only if the resolution was recorded. A `Deferred` completed
+          // before the event is written is a resume nobody can account for.
           Effect.tap(() =>
             read.pipe(
               Effect.flatMap((current) =>
@@ -573,6 +654,10 @@ type Started =
       readonly kind: "raised"
       readonly record: InterventionRecord
       readonly operatorUrl: string
+      /** The state before the pause, to put back if the raise cannot be written. */
+      readonly previous: State
+      /** The state this pause committed, so a rollback can tell it is still current. */
+      readonly committed: State
     }
 
 interface Settled {
@@ -581,7 +666,12 @@ interface Settled {
 }
 
 type Transitioned =
-  | { readonly ok: true; readonly record: InterventionRecord }
+  | {
+      readonly ok: true
+      readonly record: InterventionRecord
+      readonly previous: State
+      readonly committed: State
+    }
   | { readonly ok: false; readonly owner: ControlOwner }
 
 /**

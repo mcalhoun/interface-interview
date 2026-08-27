@@ -25,7 +25,13 @@ import { it } from "@effect/vitest"
 import { Effect, Fiber, Layer } from "effect"
 import { expect } from "vitest"
 import { randomUUID } from "node:crypto"
-import { evidenceFiles, noSecrets } from "@cua/evidence"
+import {
+  type EvidenceEventBody,
+  Evidence,
+  EvidenceUnwritable,
+  evidenceFiles,
+  noSecrets
+} from "@cua/evidence"
 import {
   HandoffRefused,
   SessionControl,
@@ -102,6 +108,178 @@ const bareControl = () =>
       )
     )
   )
+)
+
+/**
+ * A control whose Evidence writer refuses the first event of a given kind.
+ *
+ * Everything else is recorded, and the refusal is one-shot, because both things
+ * a failed write should leave behind are worth asserting: the state the retry
+ * finds, and the retry succeeding.
+ */
+const brittleControl = (failFirst: EvidenceEventBody["kind"], waitMillis: number) => {
+  const refused: Array<string> = []
+  const written: Array<EvidenceEventBody> = []
+  const evidence = Layer.effect(Evidence)(
+    Effect.sync(() => ({
+      directory: "(no directory: this writer never reaches a disk)",
+      record: (body: EvidenceEventBody) => {
+        if (body.kind === failFirst && refused.length === 0) {
+          refused.push(body.kind)
+          return Effect.fail(
+            new EvidenceUnwritable({ path: "(nowhere)", reason: "the volume went away" })
+          )
+        }
+        written.push(body)
+        return Effect.void
+      },
+      attach: () => Effect.void,
+      written: Effect.sync(() => []),
+      redact: () => Effect.void,
+      scrub: (text: string) => text
+    }))
+  )
+
+  return Effect.map(
+    SessionControl.pipe(
+      Effect.provide(
+        sessionControl({ sessionId: "session-brittle", waitMillis }).pipe(
+          Layer.provide(evidence)
+        )
+      )
+    ),
+    (control) => ({ control, written })
+  )
+}
+
+const HELD = {
+  capability: "member.account-balance",
+  version: "1.1.0",
+  runId: "brittle",
+  stepId: HELD_STEP,
+  stepIntent: "open the savings account",
+  reason: "a checkpoint did not hold",
+  detail: "expected a balance cell",
+  url: "http://example.invalid/account",
+  accessibility: "- table:"
+}
+
+/**
+ * The failure this exists to rule out.
+ *
+ * `returnControl` used to move the owner to RESUME_REQUESTED and *then* write
+ * `intervention.resolve`. If that write failed the owner stayed there, the
+ * `Deferred` was never completed, and the Operator was handed an error — so when
+ * the paused fiber's wait expired it read RESUME_REQUESTED as "somebody
+ * answered" and resumed the run, on an episode whose resolution is in no log.
+ * Nor could the Operator retry: `returnControl` is refused once the owner has
+ * left HUMAN.
+ */
+it.live("a resolution that could not be recorded does not resume the run", () =>
+  Effect.gen(function* () {
+    const { control } = yield* brittleControl("intervention.resolve", 300)
+    yield* control.attach("http://127.0.0.1:0")
+
+    const paused = yield* Effect.forkChild(control.pause(HELD))
+    while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
+    yield* control.takeControl("j.okafor")
+
+    const unwritable = yield* Effect.flip(
+      control.returnControl({
+        operator: "j.okafor",
+        classification: "resolved",
+        detail: "authorized the account",
+        nextTime: "not_asked"
+      })
+    )
+    expect(unwritable).toBeInstanceOf(EvidenceUnwritable)
+
+    // Rolled back. The owner is where the Operator left it, the episode has not
+    // been closed, and RESUME_REQUESTED never happened — which is the whole
+    // reason the expiry below reports the truth.
+    const afterFailure = yield* control.snapshot
+    expect(afterFailure.owner).toBe("operator")
+    expect(afterFailure.pending?.returnedAt).toBeUndefined()
+    expect(afterFailure.history.map((entry) => entry.owner)).not.toContain("resume_requested")
+
+    // And the run does not resume on the strength of it.
+    const outcome = yield* Fiber.join(paused)
+    expect(outcome.resumed).toBe(false)
+    if (outcome.resumed) throw new Error("unreachable")
+    expect(outcome.reason).toContain("no operator took control")
+  })
+)
+
+it.live("and the operator can simply try again", () =>
+  Effect.gen(function* () {
+    const { control, written } = yield* brittleControl("intervention.resolve", 10_000)
+    yield* control.attach("http://127.0.0.1:0")
+
+    const paused = yield* Effect.forkChild(control.pause(HELD))
+    while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
+    yield* control.takeControl("j.okafor")
+
+    const body = {
+      operator: "j.okafor",
+      classification: "resolved" as const,
+      detail: "authorized the account",
+      nextTime: "not_asked" as const
+    }
+    yield* Effect.flip(control.returnControl(body))
+    yield* control.returnControl(body)
+
+    const outcome = yield* Fiber.join(paused)
+    expect(outcome.resumed).toBe(true)
+
+    // One resolution in the log, not two, and the trail passes through
+    // RESUME_REQUESTED exactly once.
+    expect(written.filter((event) => event.kind === "intervention.resolve")).toHaveLength(1)
+    const snapshot = yield* control.snapshot
+    expect(
+      snapshot.history.filter((entry) => entry.owner === "resume_requested")
+    ).toHaveLength(1)
+  })
+)
+
+/**
+ * The same rule, on the transition an Operator is most likely to repeat.
+ *
+ * `noteAction` appends to the record and then writes its event. Without the
+ * rollback the obvious retry appends the action a *second* time — and
+ * `classify` reads `actions.length` to decide whether an episode taught a
+ * business outcome or a requires-human state (ADR-0004), so a duplicated action
+ * is not a cosmetic problem.
+ */
+it.live("an action that could not be recorded is not left on the record", () =>
+  Effect.gen(function* () {
+    const { control } = yield* brittleControl("intervention.human_action", 10_000)
+    yield* control.attach("http://127.0.0.1:0")
+
+    const paused = yield* Effect.forkChild(control.pause(HELD))
+    while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
+
+    // The first `intervention.human_action` is the one `takeControl` writes, so
+    // that is the write this control refuses. The transition rolls back with it.
+    yield* Effect.flip(control.takeControl("j.okafor"))
+    expect((yield* control.snapshot).owner).toBe("paused")
+
+    // And the retry finds a session it can still take.
+    yield* control.takeControl("j.okafor")
+    const note = { detail: "pressed Authorize", entered: [] }
+    yield* control.noteAction(note)
+    yield* control.noteAction(note)
+
+    const pending = (yield* control.snapshot).pending
+    expect(pending?.actions).toHaveLength(2)
+
+    yield* control.returnControl({
+      operator: "j.okafor",
+      classification: "resolved",
+      detail: "authorized the account",
+      nextTime: "not_asked"
+    })
+    yield* Fiber.join(paused)
+  })
 )
 
 it.live("a session starts owned by automation and says so", () =>

@@ -142,6 +142,7 @@ export {
   parseOutput
 } from "./Outputs.ts"
 
+export type { BakedInLiteral } from "./parse.ts"
 export { ArtifactInvalid, bakedInLiterals, formatArtifact, parseArtifact } from "./parse.ts"
 
 export type { ConfirmedTarget, OverrideOptions, OverrideTarget, TenantOverride } from "./Override.ts"

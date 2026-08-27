@@ -116,19 +116,68 @@ export const formatArtifact = (artifact: CapabilityArtifact): string =>
  * the words the Artifact will use to find a control on every future run. A
  * discovered Target named after what one member's screen happened to say is the
  * same mistake as a baked-in constant, wearing a different field name.
+ *
+ * So are an input's declared `values` and its `pattern`. An `enum`'s legal values
+ * are read off the screen during Discovery (ADR-0007), which is exactly the way a
+ * run-specific label gets into a document, and `prepareInputs` matches against
+ * them on every future call. A `pattern` is a regular expression the value must
+ * satisfy, and one inferred from a single example can hold that example.
+ *
+ * ## What is deliberately *not* walked, and why
+ *
+ * `inputs.default` is by construction the Goal's own word — ticket 09's whole
+ * argument is that recording the matched label there produces a capability that
+ * works at one institution and looks correct doing it — so a `default` that
+ * echoes a goal-derived value is the design rather than the defect. `description`
+ * and `discoveredFrom` are prose, and prose is covered by the compiler's
+ * whole-document text gate (`valuesInText` in `@cua/agent`), which reads the
+ * finished YAML rather than a field list. Everything else in the schema is either
+ * an identifier the document assigns itself (step ids, outcome codes, capability,
+ * version) or reviewer prose (`title`, `summary`, `intent`, `robustness`,
+ * `strategy`, `description`), neither of which the Artifact matches a screen with.
  */
+/**
+ * One position in a document that holds a value it should not.
+ *
+ * `where` and `value` are separate fields rather than one sentence a caller takes
+ * apart, and that is the whole point of the shape. The caller that has to write a
+ * refusal — `@cua/agent`'s compiler — must name the position and must *not* quote
+ * the value, because a refusal about a leaked member number that contains the
+ * member number lands in a terminal, a CI log and a ticket. Recovering the
+ * position by splitting `finding` on a fixed phrase made that guarantee depend on
+ * this module's wording: change the sentence and the value silently rides along
+ * into the reason.
+ */
+export interface BakedInLiteral {
+  /** Where in the document, e.g. `step open-account's checkpoint assertion 0's name`. */
+  readonly where: string
+  /**
+   * The runtime value that was found.
+   *
+   * Safe here — the caller passed it in and already holds it — and never safe in
+   * a message. See `where`.
+   */
+  readonly value: string
+  /** Both halves as one sentence, for a caller that is allowed to print the value. */
+  readonly finding: string
+}
+
 export const bakedInLiterals = (
   artifact: CapabilityArtifact,
   values: Iterable<string>
-): ReadonlyArray<string> => {
+): ReadonlyArray<BakedInLiteral> => {
   const needles = [...values].filter((value) => value.length > 0)
   if (needles.length === 0) return []
 
-  const found: Array<string> = []
+  const found: Array<BakedInLiteral> = []
   const check = (where: string, text: string): void => {
     for (const needle of needles) {
       if (text.includes(needle)) {
-        found.push(`${where} contains the runtime value ${JSON.stringify(needle)}`)
+        found.push({
+          where,
+          value: needle,
+          finding: `${where} contains the runtime value ${JSON.stringify(needle)}`
+        })
       }
     }
   }
@@ -211,6 +260,22 @@ export const bakedInLiterals = (
     )
     rule.remedy.forEach((remedy, index) => checkAction(`${where}'s remedy ${index}`, remedy.action))
   }
+
+  // The inputs. Screen-derived and matched against on every future run, which is
+  // both halves of what makes a literal dangerous.
+  for (const [name, declaration] of Object.entries(artifact.inputs)) {
+    const where = `input ${name}`
+    ;(declaration.values ?? []).forEach((value, index) =>
+      check(`${where}'s value ${index}`, value)
+    )
+    if (declaration.pattern !== undefined) check(`${where}'s pattern`, declaration.pattern)
+  }
+
+  // The entry path. A Step's `navigate` constant is walked above, and the
+  // compiler writes the same string into both — but this one is the field a
+  // hand-written or amended document can move on its own, and
+  // `/member?memberNumber=12345` is a perfectly ordinary thing to paste into it.
+  check("the surface entry path", artifact.surface.entry)
 
   return found
 }

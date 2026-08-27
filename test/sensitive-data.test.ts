@@ -371,8 +371,13 @@ it("catches a member number baked into a constant or an asserted string", () => 
 
   const found = bakedInLiterals(poisoned, [MEMBER_ID])
   expect(found.length).toBe(1)
-  expect(found[0]).toContain("checkpoint assertion 0")
-  expect(found[0]).toContain(MEMBER_ID)
+  expect(found[0]?.where).toContain("checkpoint assertion 0")
+  expect(found[0]?.value).toBe(MEMBER_ID)
+  // `where` is the position and nothing else. The compiler builds a refusal out
+  // of it, and a refusal that quotes the value it is refusing lands in a
+  // terminal, a CI log and a ticket.
+  expect(found[0]?.where).not.toContain(MEMBER_ID)
+  expect(found[0]?.finding).toContain(MEMBER_ID)
 })
 
 /**
@@ -446,7 +451,7 @@ it("walks the selection, the outcome branches and the recovery rules too", () =>
   }
 
   const found = bakedInLiterals(poisoned, [MEMBER_ID])
-  const where = found.join(" | ")
+  const where = found.map((finding) => finding.where).join(" | ")
 
   expect(where).toContain("step select-it's match's constant")
   expect(where).toContain("step select-it's checkpoint assertion 0's name")
@@ -454,6 +459,54 @@ it("walks the selection, the outcome branches and the recovery rules too", () =>
   expect(where).toContain("recoverable condition SESSION_EXPIRED's detect condition 0")
   expect(where).toContain("recoverable condition SESSION_EXPIRED's remedy 0's path's constant")
   expect(found.length).toBe(5)
+})
+
+/**
+ * The ninth position, and the one an amendment cannot reach but a compiler can.
+ *
+ * An `enum` input's `values` are the labels a Discovery run read off the screen
+ * (ADR-0007), and `prepareInputs` matches every future caller's value against
+ * them — so a run-specific label there is both a stored runtime value and a
+ * matching rule built out of one. `pattern` is the same shape wearing a regular
+ * expression: one inferred from a single example can hold that example.
+ *
+ * The entry path is here for a different reason. The compiler writes it into a
+ * `navigate` constant as well, which the scan already walked, but
+ * `surface.entry` is the field a hand-written or hand-edited document moves on
+ * its own, and `/member?memberNumber=12345` is an entirely ordinary thing to
+ * paste into it.
+ */
+it("walks an input's declared values, its pattern and the entry path", () => {
+  const artifact = shippedArtifact()
+  const poisoned = {
+    ...artifact,
+    surface: { ...artifact.surface, entry: `/member?memberNumber=${MEMBER_ID}` },
+    inputs: {
+      ...artifact.inputs,
+      accountType: {
+        ...artifact.inputs["accountType"]!,
+        // The label this one member's screen happened to show.
+        values: ["Primary Savings", `Savings ${MEMBER_ID}`]
+      },
+      memberId: {
+        ...artifact.inputs["memberId"]!,
+        // A format inferred from a single example, which is the example.
+        pattern: `^${MEMBER_ID}$`
+      }
+    }
+  }
+
+  const found = bakedInLiterals(poisoned, [MEMBER_ID])
+  const where = found.map((finding) => finding.where).join(" | ")
+
+  expect(where).toContain("input accountType's value 1")
+  expect(where).toContain("input memberId's pattern")
+  expect(where).toContain("the surface entry path")
+  expect(found).toHaveLength(3)
+
+  // The label that is not this run's, in the same field, is left alone: the scan
+  // is about the value, not about the field being screen-derived.
+  expect(where).not.toContain("input accountType's value 0")
 })
 
 // ---------------------------------------------------------------------------

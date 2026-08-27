@@ -46,6 +46,7 @@ import {
   writeArtifact
 } from "@cua/artifact"
 import { type InterventionRecord, classify } from "@cua/session"
+import { noScrubbing } from "@cua/evidence"
 import { proposeAmendment } from "@cua/replay"
 import { attendedReplay } from "./support/handoff-harness.ts"
 import { replay, shippedArtifact } from "./support/replay-harness.ts"
@@ -185,7 +186,7 @@ it("refuses to redeclare a state this capability has already classified", () => 
     title: "something else entirely",
     summary: "a second intervention trying to redefine a declared state",
     discoveredFrom: "a later episode"
-  })
+  }, { scrub: noScrubbing })
 
   expect(Result.isFailure(again)).toBe(true)
   if (!Result.isFailure(again)) throw new Error("unreachable")
@@ -202,10 +203,56 @@ it("refuses to amend a version into itself", () => {
     title: "t",
     summary: "s",
     discoveredFrom: "d"
-  })
+  }, { scrub: noScrubbing })
   expect(Result.isFailure(refused)).toBe(true)
   if (!Result.isFailure(refused)) throw new Error("unreachable")
   expect(refused.failure.message).toContain("diffed")
+})
+
+it("refuses an amendment nobody supplied a scrubber for", () => {
+  // The guarantee `AmendmentRequest.scrub` documents is unconditional: "the
+  // amendment is refused if scrubbing the finished document would change it". An
+  // optional field defaulting to identity does not weaken that a little, it
+  // removes it — the document is compared against an unchanged copy of itself,
+  // the comparison always matches, and ADR-0008's refusal never fires for any
+  // caller who left the argument out.
+  //
+  // The field is required, so the cast below is the only way to express the
+  // mistake at all. It stands in for the caller that would have made it: a new
+  // CLI path, a harness, an operator interface written next year.
+  const detail = `member ${CHECKING_ONLY} has no savings account`
+  const closed = record({ detail })
+
+  const unchecked = proposeAmendment(
+    { artifact: beforeLearning(), record: closed } as unknown as Parameters<
+      typeof proposeAmendment
+    >[0]
+  )
+  expect(unchecked._tag).toBe("Refused")
+  if (unchecked._tag !== "Refused") throw new Error("unreachable")
+  expect(unchecked.refusal.message).toContain("no scrubber was supplied")
+  expect(unchecked.refusal.message).not.toContain(CHECKING_ONLY)
+
+  // With the run's real scrubber the same episode is refused for the reason it
+  // should be, which is what proves the refusal above is the guard firing rather
+  // than the amendment being impossible.
+  const checked = proposeAmendment({
+    artifact: beforeLearning(),
+    record: closed,
+    scrub: (text: string) => text.replaceAll(CHECKING_ONLY, "[redacted:memberId]")
+  })
+  expect(checked._tag).toBe("Refused")
+  if (checked._tag !== "Refused") throw new Error("unreachable")
+  expect(checked.refusal.message).toContain("ADR-0008")
+
+  // And an episode with nothing sensitive in it still amends, so what the two
+  // refusals above have in common is the check and not the document.
+  const clean = proposeAmendment({
+    artifact: beforeLearning(),
+    record: record({ detail: "there is no such account to open" }),
+    scrub: (text: string) => text.replaceAll(CHECKING_ONLY, "[redacted:memberId]")
+  })
+  expect(clean._tag).toBe("Amended")
 })
 
 it("refuses an amendment carrying a value the run treats as sensitive", () => {
@@ -423,7 +470,7 @@ it.live(
       if (closed === undefined) throw new Error("no closed intervention")
       expect(closed.actions).toEqual([])
 
-      const proposal = proposeAmendment({ artifact: before, record: closed })
+      const proposal = proposeAmendment({ artifact: before, record: closed, scrub: noScrubbing })
       if (proposal._tag !== "Amended") {
         throw new Error(`expected an amendment, got ${proposal._tag}`)
       }
@@ -580,7 +627,7 @@ it("will not turn a checkpoint failure into a business outcome", () => {
     classification: "resolved"
   })
 
-  const proposal = proposeAmendment({ artifact: beforeLearning(), record: held })
+  const proposal = proposeAmendment({ artifact: beforeLearning(), record: held, scrub: noScrubbing })
   if (proposal._tag !== "Amended") throw new Error(`expected an amendment, got ${proposal._tag}`)
   expect(proposal.learnedClass).toBe("requires_human")
 
@@ -595,7 +642,7 @@ it("will not turn a checkpoint failure into a business outcome", () => {
 
 it("will not amend on the strength of a question nobody answered", () => {
   const unanswered = record({ nextTime: "not_asked" })
-  const proposal = proposeAmendment({ artifact: beforeLearning(), record: unanswered })
+  const proposal = proposeAmendment({ artifact: beforeLearning(), record: unanswered, scrub: noScrubbing })
   expect(proposal._tag).toBe("Unchanged")
 })
 
@@ -605,7 +652,7 @@ it("writes a document that loads, executes and round-trips", () => {
   // reachable and every reachable code is declared. `writeArtifact` re-parses
   // before it writes, and this asserts the same thing one level up so a failure
   // says which half broke.
-  const proposal = proposeAmendment({ artifact: beforeLearning(), record: record() })
+  const proposal = proposeAmendment({ artifact: beforeLearning(), record: record(), scrub: noScrubbing })
   if (proposal._tag !== "Amended") throw new Error(`expected an amendment, got ${proposal._tag}`)
 
   const again = parseArtifact("round-trip", formatArtifact(proposal.amended))

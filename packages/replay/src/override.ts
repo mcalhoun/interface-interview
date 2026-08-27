@@ -79,8 +79,15 @@ export interface OverrideRequest {
   readonly record: InterventionRecord
   /** This Tenant's existing delta for this Capability, if it has one. */
   readonly existing?: TenantOverride | undefined
-  /** The run's Evidence scrubber. See `Override.ts`. */
-  readonly scrub?: ((text: string) => string) | undefined
+  /**
+   * The run's Evidence scrubber. See `Override.ts`.
+   *
+   * **Required.** An optional scrubber defaulting to identity would compare the
+   * delta against an unchanged copy of itself, so ADR-0008's refusal would never
+   * fire and a run-specific literal could reach a stored Override. A run that
+   * redacts nothing says so with `noScrubbing`.
+   */
+  readonly scrub: (text: string) => string
 }
 
 /**
@@ -120,6 +127,32 @@ export const proposeOverride = (request: OverrideRequest): ProposedOverride => {
         `${record.operator ?? "(unnamed)"} looked at the screen and said ` +
         `${JSON.stringify(proposal.control)} is not the control this step needs. Nothing is ` +
         `written, and the rejection is in the evidence for this run`
+    }
+  }
+
+  /**
+   * The gate, and it is stated affirmatively on purpose.
+   *
+   * `ProposalAnswer` has exactly one affirmative spelling, and the two branches
+   * above name the other two — but `SessionControl.returnControl` copies
+   * `ControlReturn.confirmProposal` onto the record without re-validating it, and
+   * an interface other than the one in `apps/operator` (a second page, a harness,
+   * a `curl` against a future endpoint) could put any string there. Refusing two
+   * known negatives lets every *unknown* answer through, and what it lets it
+   * through into is a Tenant Override: durable, append-only, and justified
+   * entirely by the claim that a person said yes (ADR-0006).
+   *
+   * So the test is `!== "confirmed"`. An answer nobody recognises is not a
+   * confirmation, and the failure mode of getting this backwards is a document
+   * that cannot be withdrawn.
+   */
+  if (record.confirmProposal !== "confirmed") {
+    return {
+      _tag: "Unchanged",
+      why:
+        `control was returned with an answer to "${THE_PROPOSAL_QUESTION}" that is not a ` +
+        `confirmation, so the proposed control ${JSON.stringify(proposal.control)} stays a ` +
+        `proposal. Only "confirmed" writes an override`
     }
   }
 

@@ -584,6 +584,14 @@ const goalEchoes = (artifact: CapabilityArtifact, goal: string): ReadonlyArray<s
  * which is exactly right for a function whose caller holds the value already, and
  * exactly wrong for a message that ends up in a log. The position is kept and the
  * value is dropped.
+ *
+ * **The position comes from the finding's own `where` field, never from parsing
+ * its sentence.** It used to be recovered by splitting the sentence on a fixed
+ * phrase, which made a refusal that must not contain the value depend on the
+ * wording of a function in another package: reword it there and `split` returns
+ * the whole finding, member number included, and this reason carries it into a
+ * terminal and a CI log. A refusal that leaks the value it is refusing is worse
+ * than no refusal, so the location is now structured data.
  */
 const typedValuesInFixedText = (
   artifact: CapabilityArtifact,
@@ -595,10 +603,10 @@ const typedValuesInFixedText = (
     const literal = literals[index]
     if (literal === undefined) return
     for (const finding of bakedInLiterals(artifact, [literal])) {
-      const [where] = finding.split(" contains the runtime value")
       reasons.push(
-        `${where} contains the value this run supplied for ${parameter.name}. No runtime value ` +
-          `survives into a stored capability (ADR-0008): reference the parameter instead.`
+        `${finding.where} contains the value this run supplied for ${parameter.name}. No ` +
+          `runtime value survives into a stored capability (ADR-0008): reference the parameter ` +
+          `instead.`
       )
     }
   })

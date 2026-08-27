@@ -328,6 +328,29 @@ describe("no value from the run survives into the document", () => {
     expect(reasons.join(" ")).not.toContain(MEMBER_ID)
   })
 
+  it("builds the refusal from the finding's position, not by splitting its sentence", () => {
+    // The reason is assembled from `BakedInLiteral.where`. It used to be
+    // recovered by splitting the finding's sentence on a fixed phrase, which made
+    // a message that must never carry a member number depend on the wording of a
+    // function in another package: reword it there and `split` hands back the
+    // whole finding, value included, straight into a terminal and a CI log.
+    //
+    // Asserted as an exact string rather than a `toContain`, because the failure
+    // this guards against is extra text on the front of the reason.
+    const reasons = refusal(trajectory({ entry: `/member?memberNumber=${MEMBER_ID}` }))
+
+    expect(reasons).toContain(
+      "step open's path's constant contains the value this run supplied for memberId. No " +
+        "runtime value survives into a stored capability (ADR-0008): reference the parameter " +
+        "instead."
+    )
+    expect(reasons).toContain(
+      "the surface entry path contains the value this run supplied for memberId. No runtime " +
+        "value survives into a stored capability (ADR-0008): reference the parameter instead."
+    )
+    expect(reasons.join(" ")).not.toContain(MEMBER_ID)
+  })
+
   it("refuses a value that reached the prose rather than a field", () => {
     // A summary is free text a model wrote, and "the balance of member 12345" is
     // exactly the sentence a model writes. No schema field catches this one.

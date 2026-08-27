@@ -58,6 +58,7 @@ import {
   writeArtifact
 } from "@cua/artifact"
 import { type InterventionRecord, type NextTimeAnswer, classify } from "@cua/session"
+import { noScrubbing } from "@cua/evidence"
 import { proposeAmendment } from "@cua/replay"
 import { attendedReplay } from "./support/handoff-harness.ts"
 import { replay, shippedArtifact } from "./support/replay-harness.ts"
@@ -207,7 +208,7 @@ it("refuses to downgrade a requires-human state into a business outcome", () => 
     title: "nothing on offer matched",
     summary: "a later operator saying this is just an answer",
     discoveredFrom: "a later episode"
-  })
+  }, { scrub: noScrubbing })
 
   expect(Result.isFailure(downgrade)).toBe(true)
   if (!Result.isFailure(downgrade)) throw new Error("unreachable")
@@ -241,7 +242,7 @@ it("refuses the same downgrade however many times somebody resolves the state", 
   })
 
   const refusals = Array.from({ length: 100 }, () =>
-    proposeAmendment({ artifact, record: observed, version: "1.4.0" })
+    proposeAmendment({ artifact, record: observed, version: "1.4.0", scrub: noScrubbing })
   )
   expect(refusals.every((proposal) => proposal._tag === "Refused")).toBe(true)
   const first = refusals[0]!
@@ -258,7 +259,7 @@ it("refuses to write the same requires-human entry twice", () => {
     title: "t",
     summary: "s",
     discoveredFrom: "d"
-  })
+  }, { scrub: noScrubbing })
 
   expect(Result.isFailure(again)).toBe(true)
   if (!Result.isFailure(again)) throw new Error("unreachable")
@@ -274,7 +275,7 @@ it("refuses to amend a version into itself, or to classify a step that is not th
     title: "t",
     summary: "s",
     discoveredFrom: "d"
-  })
+  }, { scrub: noScrubbing })
   expect(Result.isFailure(sameVersion)).toBe(true)
   if (!Result.isFailure(sameVersion)) throw new Error("unreachable")
   expect(sameVersion.failure.message).toContain("diffed")
@@ -285,7 +286,7 @@ it("refuses to amend a version into itself, or to classify a step that is not th
     title: "t",
     summary: "s",
     discoveredFrom: "d"
-  })
+  }, { scrub: noScrubbing })
   expect(Result.isFailure(noSuchStep)).toBe(true)
 })
 
@@ -534,7 +535,7 @@ it.live(
       // ---------------------------------------------------------------
       // 4 and 5. A new version, declaring the state as always-escalating.
       // ---------------------------------------------------------------
-      const proposal = proposeAmendment({ artifact: before, record: closed })
+      const proposal = proposeAmendment({ artifact: before, record: closed, scrub: noScrubbing })
       if (proposal._tag !== "Amended") {
         throw new Error(`expected an amendment, got ${proposal._tag}`)
       }
@@ -665,7 +666,7 @@ it.live("at the learned version it still escalates to a person, and they can sti
 
     // And the second episode teaches nothing new: the document already says it.
     const closed = outcome.snapshot.resolved[0]!
-    const proposal = proposeAmendment({ artifact: afterLearning(), record: closed })
+    const proposal = proposeAmendment({ artifact: afterLearning(), record: closed, scrub: noScrubbing })
     expect(proposal._tag).toBe("Refused")
     if (proposal._tag !== "Refused") throw new Error("unreachable")
     expect(proposal.refusal.message).toContain("write-once")
@@ -747,8 +748,12 @@ it("is the same mechanism reaching opposite conclusions", () => {
   })
   const acted = record()
 
-  const outcome = proposeAmendment({ artifact: shippedArtifact(undefined, "1.0.0"), record: observed })
-  const human = proposeAmendment({ artifact: beforeLearning(), record: acted })
+  const outcome = proposeAmendment({
+    artifact: shippedArtifact(undefined, "1.0.0"),
+    record: observed,
+    scrub: noScrubbing
+  })
+  const human = proposeAmendment({ artifact: beforeLearning(), record: acted, scrub: noScrubbing })
 
   if (outcome._tag !== "Amended" || human._tag !== "Amended") {
     throw new Error("expected two amendments")

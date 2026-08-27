@@ -208,8 +208,13 @@ export interface OverrideOptions {
    * The run's own Evidence scrubber, for the same reason an Amendment takes one:
    * what a run's log refuses to carry, its documents refuse to carry. An
    * Operator's confirmation is quoted into `confirmedBy` verbatim.
+   *
+   * **Required, exactly as `AmendmentOptions.scrub` is.** An optional scrubber
+   * defaulting to identity compares the delta against an unchanged copy of
+   * itself, so the check below always passes and the guarantee is gone without
+   * anything saying so. `noScrubbing` is how a caller says it means it.
    */
-  readonly scrub?: ((text: string) => string) | undefined
+  readonly scrub: (text: string) => string
 }
 
 /**
@@ -227,7 +232,7 @@ export const declareTargetOverride = (
   tenant: string,
   artifact: CapabilityArtifact,
   confirmed: ConfirmedTarget,
-  options: OverrideOptions = {}
+  options: OverrideOptions
 ): Result.Result<TenantOverride, OverrideRefused> => {
   const refuse = (reason: string) =>
     Result.fail(new OverrideRefused({ tenant, capability: artifact.capability, reason }))
@@ -276,8 +281,19 @@ export const declareTargetOverride = (
   // The same rule an Amendment is held to, applied to the same kind of document:
   // if scrubbing what would be written changes it, it carries a runtime value and
   // must not be stored. The line count is reported and the value never is.
+  //
+  // The type makes the scrubber required; this is the runtime half, because the
+  // failure it prevents is a silent one — a delta compared against an unchanged
+  // copy of itself passes every time.
+  if (typeof options.scrub !== "function") {
+    return refuse(
+      "no scrubber was supplied, so the override could not be checked for values this run " +
+        "treats as sensitive. The check is not optional (ADR-0008): an override that cannot " +
+        "be checked is refused rather than written"
+    )
+  }
   const rendered = JSON.stringify(override)
-  const scrubbed = options.scrub?.(rendered) ?? rendered
+  const scrubbed = options.scrub(rendered)
   if (scrubbed !== rendered) {
     return refuse(
       `the override would carry a value this run treats as sensitive. A tenant override ` +

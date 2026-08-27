@@ -46,6 +46,8 @@ import {
   loadOverride,
   parseOverride
 } from "@cua/artifact"
+import { noScrubbing } from "@cua/evidence"
+import type { ProposalAnswer } from "@cua/session"
 import { COMMUNITY_CU, HERITAGE_CORE, serve } from "@cua/legacy-core"
 import {
   type Advisor,
@@ -397,7 +399,7 @@ describe("the recovery ladder proposes, and a person confirms", () => {
 
   it("a proposal nobody confirmed writes nothing", () => {
     const asked = confirmedRecord("not_asked")
-    const proposal = proposeOverride({ artifact: base(), tenant: TENANT, record: asked })
+    const proposal = proposeOverride({ artifact: base(), tenant: TENANT, record: asked, scrub: noScrubbing })
     expect(proposal._tag).toBe("Unchanged")
     if (proposal._tag === "Unchanged") {
       expect(proposal.why).toContain("stays a proposal")
@@ -408,7 +410,8 @@ describe("the recovery ladder proposes, and a person confirms", () => {
     const rejected = proposeOverride({
       artifact: base(),
       tenant: TENANT,
-      record: confirmedRecord("rejected")
+      record: confirmedRecord("rejected"),
+      scrub: noScrubbing
     })
     expect(rejected._tag).toBe("Unchanged")
     if (rejected._tag === "Unchanged") {
@@ -419,13 +422,50 @@ describe("the recovery ladder proposes, and a person confirms", () => {
     }
   })
 
+  it("an answer that is not a confirmation writes nothing, whatever it says", () => {
+    // `ProposalAnswer` has one affirmative spelling, and the two tests above name
+    // the other two — but `SessionControl.returnControl` copies
+    // `ControlReturn.confirmProposal` onto the record without re-validating it,
+    // so a second operator interface, a harness or a `curl` can put any string
+    // there. A gate that refuses two known negatives lets every *unknown* answer
+    // through, and what it lets through is a durable, append-only Tenant
+    // Override whose entire justification is that a person said yes (ADR-0006).
+    //
+    // The cast is the point of the test: it is how a runtime string that the type
+    // says cannot exist reaches the gate.
+    const record = {
+      ...confirmedRecord("confirmed"),
+      confirmProposal: "yes" as unknown as ProposalAnswer
+    }
+    const odd = proposeOverride({
+      artifact: base(),
+      tenant: TENANT,
+      record,
+      scrub: noScrubbing
+    })
+    expect(odd._tag).toBe("Unchanged")
+    if (odd._tag !== "Unchanged") throw new Error("unreachable")
+    expect(odd.why).toContain('Only "confirmed" writes an override')
+
+    // And the affirmative still works, so what was refused was the answer and
+    // not the episode.
+    const confirmed = proposeOverride({
+      artifact: base(),
+      tenant: TENANT,
+      record: confirmedRecord("confirmed"),
+      scrub: noScrubbing
+    })
+    expect(confirmed._tag).toBe("Confirmed")
+  })
+
   it("an episode with no proposal on it can never produce an override", () => {
     const { intervention, ...rest } = confirmedRecord("confirmed")
     const { proposal: _dropped, ...withoutProposal } = intervention
     const nothing = proposeOverride({
       artifact: base(),
       tenant: TENANT,
-      record: { ...rest, intervention: withoutProposal }
+      record: { ...rest, intervention: withoutProposal },
+      scrub: noScrubbing
     })
     // Even with a confirmation on it. Both halves are required: a person typing
     // a control name into a box would be hand-writing an override, which is what
@@ -437,7 +477,11 @@ describe("the recovery ladder proposes, and a person confirms", () => {
     // Two independent readings of one episode, each with its own gate. Confirming
     // a tenant's label is not a Business Outcome and not an authority-class
     // state, and `classify` says so without being told about tenants at all.
-    const amendment = proposeAmendment({ artifact: base(), record: confirmedRecord("confirmed") })
+    const amendment = proposeAmendment({
+      artifact: base(),
+      record: confirmedRecord("confirmed"),
+      scrub: noScrubbing
+    })
     expect(amendment._tag).toBe("Unchanged")
   })
 })
@@ -534,7 +578,7 @@ describe("the override is a scoped delta against the base capability", () => {
       name: "Go",
       discoveredFrom: "somewhere else",
       confirmedBy: "somebody else"
-    })
+    }, { scrub: noScrubbing })
     expect(Result.isFailure(again)).toBe(true)
     if (Result.isFailure(again)) {
       expect(again.failure.message).toContain("append-only")
@@ -548,7 +592,7 @@ describe("the override is a scoped delta against the base capability", () => {
       name: "Search",
       discoveredFrom: "d",
       confirmedBy: "c"
-    })
+    }, { scrub: noScrubbing })
     expect(Result.isFailure(pointless)).toBe(true)
   })
 })
