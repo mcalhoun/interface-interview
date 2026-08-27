@@ -6,15 +6,14 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "dependencies": {
+    "@cua/agent": "workspace:*",
     "@cua/artifact": "workspace:*",
     "@cua/evidence": "workspace:*",
+    "@cua/legacy-core": "workspace:*",
     "@cua/operator": "workspace:*",
     "@cua/policy": "workspace:*",
     "@cua/session": "workspace:*",
     "@cua/surface": "workspace:*",
     "effect": "4.0.0-rc.112"
-  },
-  "devDependencies": {
-    "@cua/legacy-core": "workspace:*"
   }
 }

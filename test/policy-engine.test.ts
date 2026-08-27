@@ -837,8 +837,85 @@ describe("repeating an action during a recovery", () => {
     expect(unsafeRepeats(capability(["navigate", "extract"], [rule()]))).toEqual([])
   })
 
-  it("allows a `resume: here` rule regardless, because it repeats nothing", () => {
+  it("allows a `resume: here` rule with an empty remedy, which repeats nothing", () => {
+    // `here` re-evaluates the Checkpoint where it stands and performs no Step
+    // Action, so the capability's own risky `click` is not in play. With nothing
+    // in the remedy either, there is nothing that can happen twice.
     expect(unsafeRepeats(capability(["navigate", "click"], [rule({ resume: "here" })]))).toEqual([])
+  })
+
+  it("refuses a `resume: here` rule whose remedy performs a risky action more than once", () => {
+    // The exemption this replaces. `resume` decides where the run carries on
+    // *after* the remedy; it says nothing about the remedy itself, which the
+    // engine performs at the top of every attempt (`recover` in
+    // packages/replay/src/recovery.ts). So `attempts: 3` presses this button up
+    // to three times, and pressing something three times is exactly what the
+    // `repeatable:` justification exists to make somebody argue for.
+    const unsafe = unsafeRepeats(
+      capability(
+        ["navigate", "extract"],
+        [
+          rule({
+            resume: "here",
+            attempts: 3,
+            remedy: [
+              {
+                intent: "Press it.",
+                action: {
+                  type: "click",
+                  target: {
+                    role: "button",
+                    name: "Continue",
+                    strategy: "name",
+                    robustness: "because"
+                  }
+                }
+              }
+            ] as RecoverableCondition["remedy"]
+          })
+        ]
+      )
+    )
+
+    expect(unsafe).toHaveLength(1)
+    expect(unsafe[0]?.actions).toEqual(["click"])
+    // The reason names the field that causes it, so a reviewer knows which half
+    // of the rule to argue for or change. Not `resume`, which is innocent here.
+    expect(unsafe[0]?.remedy).toContain("attempts: 3")
+    expect(unsafe[0]?.remedy).not.toContain("resume: at-step performs")
+  })
+
+  it("allows the same `resume: here` remedy at a single attempt, because once is not twice", () => {
+    // The boundary, stated. A remedy Action performed exactly once has not been
+    // repeated, and demanding an argument for it would teach the wrong lesson
+    // about when one is needed.
+    expect(
+      unsafeRepeats(
+        capability(
+          ["navigate", "extract"],
+          [
+            rule({
+              resume: "here",
+              attempts: 1,
+              remedy: [
+                {
+                  intent: "Press it.",
+                  action: {
+                    type: "click",
+                    target: {
+                      role: "button",
+                      name: "Continue",
+                      strategy: "name",
+                      robustness: "because"
+                    }
+                  }
+                }
+              ] as RecoverableCondition["remedy"]
+            })
+          ]
+        )
+      )
+    ).toEqual([])
   })
 
   it("does not accept a one-line assurance as a justification", () => {
@@ -859,17 +936,22 @@ describe("repeating an action during a recovery", () => {
     expect(unsafeRepeats(capability(["navigate", "click"], [argued]))).toEqual([])
   })
 
-  it("the shipped artifact's own at-step rule is argued for", () => {
+  it("both of the shipped artifact's retrying rules are argued for", () => {
     // The session-expiry rule resumes `at-step` and this capability's steps
     // include a `fill`, a `click` and a `selectFromList`, all classified risky.
-    // It is legal because the artifact says in writing why repeating a read-only
-    // flow is safe — not because the check happens to miss it.
+    // The transient-overlay rule resumes `here` and still retries: `attempts: 3`
+    // presses its Continue link up to three times, and a `click` is risky. Both
+    // are legal because the artifact says in writing why repeating a read-only
+    // request is safe — not because the check happens to miss either of them.
     expect(unsafeRepeats(shippedArtifact())).toEqual([])
 
-    const declared = recoverableConditions(shippedArtifact()).find(
-      (declared) => declared.resume === "at-step"
+    const retrying = recoverableConditions(shippedArtifact()).filter(
+      (declared) => declared.resume === "at-step" || declared.attempts > 1
     )
-    expect(declared?.repeatable ?? "").not.toBe("")
+    expect(retrying.length).toBeGreaterThanOrEqual(2)
+    for (const declared of retrying) {
+      expect(declared.repeatable ?? "").not.toBe("")
+    }
   })
 
   // `it.live`, not `it`. An Effect is not a thenable, so a plain `it` returning

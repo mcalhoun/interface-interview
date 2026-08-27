@@ -212,24 +212,44 @@ const CannotClassify = Tool.make("cannotClassify", {
 })
 
 /**
- * The toolkit for one consultation: the Artifact's candidate codes, and the
- * screen's controls when a correspondent may be proposed at all.
+ * A tool is only offered when its enumeration has something in it.
  *
  * `proposeTarget` is **absent** when `controls` is empty, which is every
  * consultation except one about a named control that was not on the screen. Not
  * disabled, not denied at run time: not a word the model has. That is the same
  * construction `ASSIST_VERBS` uses against acting verbs, applied one level down
  * — a rung cannot be asked a question it was not given the vocabulary for.
+ *
+ * `classify` is absent on the same terms and for a sharper reason. Its
+ * `proposedOutcome` is a `Schema.Literals` over the Capability's codes, and over
+ * an empty list that renders as `{"not": {}}` — a required property no value
+ * satisfies. Offering it would mean sending a model a tool it cannot call
+ * correctly under a `toolChoice: "required"` that obliges it to call something.
+ * So an empty candidate list yields the vocabulary without it, and every word the
+ * model is given is one it can actually use.
+ *
+ * `@cua/replay`'s `consultAssist` declines an empty-candidate consultation
+ * outright, so nothing in this workspace reaches these branches from a run. They
+ * are here because `assistTools` and the toolkits below are a public surface, and
+ * a tool nobody can satisfy should not be constructible by accident.
+ *
+ * Note what is *not* here: no branch adds a word. Removing `classify` narrows
+ * what the consulted model may return, so ADR-0005's line is where it was.
  */
 export const assistTools = (candidates: ReadonlyArray<AssistCandidate>) =>
-  Toolkit.make(classifyTool(candidates), CannotClassify)
+  candidates.length === 0
+    ? Toolkit.make(CannotClassify)
+    : Toolkit.make(classifyTool(candidates), CannotClassify)
 
 /** The three-word vocabulary, for the tests that enumerate what it can say. */
 export const assistTargetTools = (
   candidates: ReadonlyArray<AssistCandidate>,
   missing: string,
   controls: ReadonlyArray<AssistControl>
-) => Toolkit.make(classifyTool(candidates), proposeTargetTool(missing, controls), CannotClassify)
+) =>
+  candidates.length === 0
+    ? Toolkit.make(proposeTargetTool(missing, controls), CannotClassify)
+    : Toolkit.make(classifyTool(candidates), proposeTargetTool(missing, controls), CannotClassify)
 
 /**
  * Handlers that refuse to run.
@@ -255,6 +275,13 @@ const refuseToResolve = (verb: AssistVerb) => () =>
  * which to suggest pressing anything.
  */
 export const assistToolkit = (candidates: ReadonlyArray<AssistCandidate>) => {
+  if (candidates.length === 0) {
+    const only = Toolkit.make(CannotClassify)
+    return Effect.provide(
+      only,
+      only.toLayer({ cannotClassify: refuseToResolve("cannotClassify") })
+    )
+  }
   const tools = Toolkit.make(classifyTool(candidates), CannotClassify)
   return Effect.provide(
     tools,
@@ -279,6 +306,16 @@ export const assistTargetToolkit = (
   missing: string,
   controls: ReadonlyArray<AssistControl>
 ) => {
+  if (candidates.length === 0) {
+    const without = Toolkit.make(proposeTargetTool(missing, controls), CannotClassify)
+    return Effect.provide(
+      without,
+      without.toLayer({
+        proposeTarget: refuseToResolve("proposeTarget"),
+        cannotClassify: refuseToResolve("cannotClassify")
+      })
+    )
+  }
   const tools = Toolkit.make(
     classifyTool(candidates),
     proposeTargetTool(missing, controls),
@@ -461,11 +498,23 @@ export const modelAdvisor = (options: AdvisorOptions): Advisor => ({
         )
       }
 
+      /**
+       * The arguments, read once, before anything narrows on the name.
+       *
+       * Every word in every one of these vocabularies carries `params`, but the
+       * vocabularies are now four different types — `classify` is absent when
+       * the Capability offers no code to classify with — so narrowing on `name`
+       * first can leave a branch whose call type is `never` and take `params`
+       * with it. Each reply is validated by its own Schema below regardless, so
+       * reading the arguments as `unknown` loses nothing.
+       */
+      const params: unknown = call.params
+
       // One turn only. A reply that does not decode is not corrected and asked
       // again — that is the loop this rung must not become. It is an
       // unavailability, and a person is asked.
       if (call.name === "proposeTarget") {
-        const decoded = decodeCorrespondence(call.params)
+        const decoded = decodeCorrespondence(params)
         return decoded._tag === "Failure"
           ? yield* Effect.fail(
               new AssistUnavailable({
@@ -481,7 +530,7 @@ export const modelAdvisor = (options: AdvisorOptions): Advisor => ({
       }
 
       if (call.name === "cannotClassify") {
-        const decoded = decodeRefusal(call.params)
+        const decoded = decodeRefusal(params)
         return decoded._tag === "Failure"
           ? ({
               _tag: "Unclassified",
@@ -490,7 +539,7 @@ export const modelAdvisor = (options: AdvisorOptions): Advisor => ({
           : ({ _tag: "Unclassified", rationale: decoded.success.rationale } satisfies AssistReply)
       }
 
-      const decoded = decodeClassification(call.params)
+      const decoded = decodeClassification(params)
       if (decoded._tag === "Failure") {
         return yield* Effect.fail(
           new AssistUnavailable({

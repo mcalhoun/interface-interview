@@ -23,13 +23,28 @@
  *
  * ## The rule
  *
- * An `at-step` rule that could cause a **risky** Action to be performed a second
+ * A recovery rule that could cause a **risky** Action to be performed a second
  * time is refused unless the rule says in writing why that is safe. Two sources
- * of such an Action, and both count:
+ * of such an Action, and they are reached by different routes:
  *
- *   1. the rule's own `remedy` Actions, which run every attempt; and
- *   2. every Step's Action, because a rule fires wherever its `detect` matches
- *      and the Artifact does not say which Steps that is.
+ *   1. **the rule's own `remedy` Actions, whatever `resume` says.** The engine
+ *      runs the whole remedy once per attempt (`recovery.ts`, the `attempt`
+ *      generator) and `resume` decides only what happens *after* it. So a rule
+ *      with `attempts: 3` performs every remedy Action up to three times, and a
+ *      `resume: here` rule is no exception. This counts when `attempts > 1`;
+ *      at `attempts: 1` the remedy runs once and once is not a repeat.
+ *   2. **every Step's Action, when `resume` is `at-step`.** Resuming there
+ *      returns to where the Step began and attempts its Action again, and
+ *      nothing in the Artifact says which Steps a `detect` matches, so all of
+ *      them count. A `resume: here` rule re-evaluates the Checkpoint where it
+ *      stands and performs no Step Action, so the Steps do not count for one.
+ *
+ * The `at-step` filter therefore applies to the second source only. An earlier
+ * version skipped every `resume: here` rule outright, on the reasoning that such
+ * a rule "repeats nothing" — which was true of the Steps and false of the remedy,
+ * and left a risky remedy Action free to run `attempts` times with no
+ * justification at all. That is precisely the silent re-performance of an
+ * irreversible Action this check exists to stop.
  *
  * This is ticket 07's precedent one layer up: a risky action cannot be permitted
  * silently, and the justification travels with the permission. A read-only
@@ -60,17 +75,21 @@ export interface UnsafeRepeat {
 }
 
 /**
- * Every `at-step` rule in this Artifact that could repeat a risky Action without
+ * Every recovery rule in this Artifact that could repeat a risky Action without
  * saying why that is safe. Empty means the Artifact's recovery rules are legal.
+ *
+ * Both `resume` values are examined. `at-step` is not a precondition of the check
+ * — it decides only whether the Capability's Steps are one of the things that
+ * could happen twice.
  */
 export const unsafeRepeats = (artifact: CapabilityArtifact): ReadonlyArray<UnsafeRepeat> => {
   const rules = artifact.recoverable ?? []
   const results: Array<UnsafeRepeat> = []
 
   for (const rule of rules) {
-    if (rule.resume !== "at-step") continue
-
-    const risky = [...new Set(repeatableActionTypes(artifact, rule).filter(isRisky))].sort()
+    const fromRemedy = riskyOnce(repeatedRemedyActionTypes(rule))
+    const fromSteps = riskyOnce(resumedStepActionTypes(artifact, rule))
+    const risky = [...new Set([...fromRemedy, ...fromSteps])].sort()
     if (risky.length === 0) continue
 
     const justification = (rule.repeatable ?? "").trim()
@@ -81,7 +100,7 @@ export const unsafeRepeats = (artifact: CapabilityArtifact): ReadonlyArray<Unsaf
       actions: risky,
       remedy:
         justification === ""
-          ? `resume: at-step performs ${risky.join(", ")} a second time. Say in the rule's \`repeatable:\` why that is safe for this capability, or use resume: here.`
+          ? `${describeCauses(rule, fromRemedy, fromSteps)}. Say in the rule's \`repeatable:\` why that is safe for this capability, or ${describeFix(fromRemedy, fromSteps)}.`
           : `the \`repeatable:\` justification for ${risky.join(", ")} is ${justification.length} characters; at least ${REPEATABLE_JUSTIFICATION_MINIMUM} are required, because a one-line assurance is not an argument.`
     })
   }
@@ -89,24 +108,71 @@ export const unsafeRepeats = (artifact: CapabilityArtifact): ReadonlyArray<Unsaf
   return results
 }
 
+/** The distinct risky types in a list, in a stable order. */
+const riskyOnce = (types: ReadonlyArray<string>): ReadonlyArray<string> =>
+  [...new Set(types.filter(isRisky))].sort()
+
+/**
+ * Why this rule is refused, said in terms of the field that causes it, so a
+ * reviewer can see which half of the document to argue for or change.
+ */
+const describeCauses = (
+  rule: RecoverableCondition,
+  fromRemedy: ReadonlyArray<string>,
+  fromSteps: ReadonlyArray<string>
+): string => {
+  const causes: Array<string> = []
+  if (fromSteps.length > 0) {
+    causes.push(`resume: at-step performs a step's ${fromSteps.join(", ")} a second time`)
+  }
+  if (fromRemedy.length > 0) {
+    causes.push(
+      `attempts: ${rule.attempts} runs this rule's own remedy up to ${rule.attempts} times, ` +
+        `performing ${fromRemedy.join(", ")} more than once`
+    )
+  }
+  return causes.join("; and ")
+}
+
+/** The other way out, which is to stop the repetition rather than argue for it. */
+const describeFix = (
+  fromRemedy: ReadonlyArray<string>,
+  fromSteps: ReadonlyArray<string>
+): string => {
+  const fixes: Array<string> = []
+  if (fromSteps.length > 0) fixes.push("use resume: here")
+  if (fromRemedy.length > 0) fixes.push("set attempts: 1")
+  return fixes.join(" and ")
+}
+
 /** The sentence the engine and the CLI both report. One wording, one meaning. */
 export const describeUnsafeRepeat = (unsafe: UnsafeRepeat): string =>
   `recoverable condition ${unsafe.condition}: ${unsafe.remedy}`
 
 /**
- * Every Action type an `at-step` rule could cause to be performed again.
+ * The rule's own remedy Actions, when the rule can run them more than once.
+ *
+ * `resume` is not consulted. The engine performs the whole remedy at the top of
+ * every attempt and only then asks where to resume, so the number of times a
+ * remedy Action happens is `attempts` and nothing else. At `attempts: 1` the
+ * remedy runs once, which is not a repeat and needs no argument.
+ */
+const repeatedRemedyActionTypes = (rule: RecoverableCondition): ReadonlyArray<string> =>
+  rule.attempts > 1 ? rule.remedy.map((remedy) => remedy.action.type) : []
+
+/**
+ * Every Step Action an `at-step` rule could cause to be performed again, and
+ * none for a rule that resumes `here`.
  *
  * The Steps are included wholesale rather than narrowed to the ones the rule
  * might fire at, because nothing in the Artifact says which Steps a `detect`
  * matches. Guessing narrower would make the check pass on a document whose
  * riskiest Step is exactly the one the condition shows up at.
  */
-const repeatableActionTypes = (
+const resumedStepActionTypes = (
   artifact: CapabilityArtifact,
   rule: RecoverableCondition
-): ReadonlyArray<string> => [
-  ...rule.remedy.map((remedy) => remedy.action.type),
-  ...artifact.steps.map((step) => step.action.type)
-]
+): ReadonlyArray<string> =>
+  rule.resume === "at-step" ? artifact.steps.map((step) => step.action.type) : []
 
 const isRisky = (type: string): boolean => riskOf(type) === "risky"

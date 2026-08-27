@@ -43,6 +43,16 @@
     "packages/agent": {
       "name": "@cua/agent",
       "version": "0.0.0",
+      "dependencies": {
+        "@cua/artifact": "workspace:*",
+        "@cua/evidence": "workspace:*",
+        "@cua/legacy-core": "workspace:*",
+        "@cua/policy": "workspace:*",
+        "@cua/replay": "workspace:*",
+        "@cua/surface": "workspace:*",
+        "@effect/ai-openai": "4.0.0-rc.112",
+        "effect": "4.0.0-rc.112",
+      },
     },
     "packages/artifact": {
       "name": "@cua/artifact",
@@ -71,16 +81,15 @@
       "name": "@cua/replay",
       "version": "0.0.0",
       "dependencies": {
+        "@cua/agent": "workspace:*",
         "@cua/artifact": "workspace:*",
         "@cua/evidence": "workspace:*",
+        "@cua/legacy-core": "workspace:*",
         "@cua/operator": "workspace:*",
         "@cua/policy": "workspace:*",
         "@cua/session": "workspace:*",
         "@cua/surface": "workspace:*",
         "effect": "4.0.0-rc.112",
-      },
-      "devDependencies": {
-        "@cua/legacy-core": "workspace:*",
       },
     },
     "packages/session": {
@@ -96,11 +105,9 @@
       "name": "@cua/surface",
       "version": "0.0.0",
       "dependencies": {
+        "@cua/legacy-core": "workspace:*",
         "effect": "4.0.0-rc.112",
         "playwright": "1.62.1",
-      },
-      "devDependencies": {
-        "@cua/legacy-core": "workspace:*",
       },
     },
   },

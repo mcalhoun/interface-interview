@@ -58,6 +58,14 @@
  * Policy engine (`unsafeRepeats` in `@cua/policy`), where the risk classification
  * already is. This schema deliberately does not classify anything: a second risk
  * table that a document could disagree with is worth less than none.
+ *
+ * `resume` is not the only way a rule can perform something twice, and reading it
+ * as though it were was a real hole. The engine runs a rule's whole `remedy` at
+ * the top of *every* attempt and only then consults `resume`, so a rule with
+ * `attempts` above one performs its own remedy Actions that many times whichever
+ * value `resume` holds. `unsafeRepeats` therefore asks two questions of every
+ * rule: whether the remedy repeats (`attempts > 1`) and whether the Steps repeat
+ * (`resume: at-step`).
  */
 
 import { Schema } from "effect"
@@ -92,18 +100,25 @@ export const RecoverableCondition = Schema.Struct({
   remedy: Schema.Array(RemedyStep),
   resume: RecoveryResume,
   /**
-   * Why re-performing this Capability's Actions is safe. Required for `at-step`.
+   * Why re-performing this Capability's Actions is safe.
    *
-   * `at-step` performs a Step's own Action a second time, and a risky Action
-   * performed twice is a risky Action performed twice. Ticket 07's precedent is
-   * followed exactly: a risky thing cannot be permitted silently, and the
-   * justification for permitting it travels with the permission so a reviewer
-   * reads the argument next to the record of it happening.
+   * Required of two kinds of rule, and they are independent:
    *
-   * Absent, an `at-step` rule is legal only in a Capability whose every Action is
-   * classified safe. `unsafeRepeats` in `@cua/policy` is the check; the engine
-   * runs it before a run performs anything, so a rule that could repeat an
-   * irreversible Action never reaches a browser.
+   *   - `resume: at-step`, which performs a Step's own Action a second time; and
+   *   - any rule with `attempts` above one whose `remedy` contains a risky
+   *     Action, because the remedy runs once per attempt whatever `resume` says.
+   *
+   * A risky Action performed twice is a risky Action performed twice, by
+   * whichever route. Ticket 07's precedent is followed exactly: a risky thing
+   * cannot be permitted silently, and the justification for permitting it travels
+   * with the permission so a reviewer reads the argument next to the record of it
+   * happening.
+   *
+   * Absent, such a rule is legal only in a Capability whose every Action — and
+   * whose every remedy Action — is classified safe. `unsafeRepeats` in
+   * `@cua/policy` is the check; the engine runs it before a run performs
+   * anything, so a rule that could repeat an irreversible Action never reaches a
+   * browser.
    */
   repeatable: Schema.optional(Schema.String),
   /** Total tries, including the first. Beyond this the condition is a failure. */

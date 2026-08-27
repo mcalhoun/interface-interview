@@ -184,10 +184,12 @@ describe("the boundary: acting is not representable", () => {
       { code: "MEMBER_NOT_FOUND", meaning: "no member record exists" },
       { code: NO_MATCHING_ITEM, meaning: "nothing on offer matched" }
     ]
+    const offered = assistTools(candidates).tools as Record<
+      string,
+      { readonly parametersSchema: unknown }
+    >
     const rendered = JSON.stringify(
-      Schema.toJsonSchemaDocument(
-        assistTools(candidates).tools["classify"]!.parametersSchema as never
-      )
+      Schema.toJsonSchemaDocument(offered["classify"]!.parametersSchema as never)
     )
 
     // An enumeration, not a string. A model cannot invent an outcome code
@@ -252,6 +254,119 @@ describe("the boundary: acting is not representable", () => {
         )
       )
     expect(reaching).toEqual(["cli.ts"])
+  })
+
+  /**
+   * A consultation with nothing to classify against.
+   *
+   * `proposableOutcomes` builds the candidate list out of the Capability's own
+   * `outcomes:`, minus anything a person has classified as needing authority. A
+   * document with no outcomes, or one where every outcome has been ratcheted to
+   * `requires_human`, produces an empty list — and a `target_missing` stall on a
+   * screen that does offer controls used to sail straight past the guard on the
+   * strength of the controls alone.
+   *
+   * What it built was a `classify` tool whose `proposedOutcome` is a
+   * `Schema.Literals` over no values. That renders as a required property with
+   * `{"not": {}}` in it: nothing satisfies it, and the model is being told to
+   * pick a tool. Both halves are closed below — the consultation is declined, and
+   * the tool is not constructed even if something reaches the toolkit directly.
+   */
+  it.effect("a consultation with no candidate codes is declined, controls or not", () =>
+    Effect.gen(function* () {
+      const budget = yield* Ref.make(1)
+      let consulted = 0
+      const recorded: Array<string> = []
+
+      const advisor: Advisor = {
+        consult: () =>
+          Effect.sync(() => {
+            consulted += 1
+            return {
+              _tag: "Classified" as const,
+              proposedOutcome: "ANYTHING",
+              confidence: 1,
+              rationale: "it answered"
+            }
+          })
+      }
+
+      const outcome = yield* consultAssist(
+        {
+          advisor,
+          gate: {
+            authorise: () =>
+              Effect.succeed({
+                verdict: "allow" as const,
+                reason: "permitted",
+                policy: "test",
+                risk: "risky" as const
+              }),
+            record: (body) => Effect.sync(() => void recorded.push(body.kind))
+          },
+          budget,
+          page: "http://127.0.0.1:1/"
+        },
+        {
+          capability: "x@1.0.0",
+          stepId: "s",
+          stepIntent: "press the thing",
+          stalled: "the control was not on the screen",
+          question: "what does this mean",
+          url: "http://127.0.0.1:1/",
+          accessibility: "- table",
+          // The condition the old guard let through: nothing to classify with,
+          // and a screen full of controls.
+          candidates: [],
+          missing: 'button "Search"',
+          controls: [{ name: "Find", role: "button", region: "Member Number Search" }]
+        }
+      )
+
+      expect(outcome._tag).toBe("NotProposed")
+      if (outcome._tag === "NotProposed") {
+        expect(outcome.why).toContain("names no outcome code")
+      }
+
+      // Declined before anything is spent: no model call, no evidence event, and
+      // the run's one consultation still available for a stall that can use it.
+      expect(consulted).toBe(0)
+      expect(recorded).toEqual([])
+      expect(yield* Ref.get(budget)).toBe(1)
+    })
+  )
+
+  it("no tool is offered whose parameters nothing can satisfy", () => {
+    const controls = [{ name: "Find", role: "button", region: "Member Number Search" }]
+
+    // `classify` is absent rather than empty. Same construction `proposeTarget`
+    // already used for a screen with no controls: a word the model does not have
+    // cannot be a word it answers badly.
+    expect(Object.keys(assistTools([]).tools).sort()).toEqual(["cannotClassify"])
+    expect(Object.keys(assistTargetTools([], 'button "Search"', controls).tools).sort()).toEqual([
+      "cannotClassify",
+      "proposeTarget"
+    ])
+
+    // And nothing left in either one renders an unsatisfiable schema. `{"not":{}}`
+    // is what an empty `Schema.Literals` becomes, so it is the exact string a
+    // regression would put back.
+    for (const toolkit of [assistTools([]), assistTargetTools([], 'button "Search"', controls)]) {
+      for (const [name, tool] of Object.entries(toolkit.tools)) {
+        const rendered = JSON.stringify(
+          Schema.toJsonSchemaDocument(tool.parametersSchema as never)
+        )
+        expect(rendered, `the ${name} tool cannot be satisfied`).not.toContain('"not":{}')
+      }
+    }
+
+    // Removing a word narrows what may come back; it never widens it. ADR-0005's
+    // line is where it was.
+    for (const toolkit of [assistTools([]), assistTargetTools([], 'button "Search"', controls)]) {
+      for (const name of Object.keys(toolkit.tools)) {
+        expect(ASSIST_VERBS).toContain(name)
+      }
+    }
   })
 })
 

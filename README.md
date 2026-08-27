@@ -283,7 +283,7 @@ packages/surface/     the Surface Adapter. Accessibility tree only, no DOM, no s
 packages/artifact/    the Capability Artifact schema, store, catalog and amendments
 packages/replay/      the deterministic engine, the recovery ladder, the result contract
 packages/agent/       discovery, the compiler, the provider, the assist toolkit
-packages/policy/      origins, action risk, sensitivity, at-step repeatability
+packages/policy/      origins, action risk, sensitivity, recovery repeatability
 packages/session/     control ownership, handoff, what an intervention taught
 packages/evidence/    the event log, the schema it validates against, the scrubber
 artifacts/            stored capabilities, one immutable file per version
@@ -329,6 +329,7 @@ gap somebody meant to hide.
   flag. There is nowhere in the schema to record a review.
 - **`unsafeRepeats` is coarse.** It treats every step in an artifact as one an
   `at-step` recovery rule might fire at, because nothing says which steps a
-  `detect` matches.
+  `detect` matches, and it treats every remedy action of a rule with `attempts`
+  above one as repeated, because nothing says which attempt clears it.
 - **`1.2.0` and the tenant override were produced by scripted operators**, not by
   a person at a keyboard. Everything else about those runs is real.

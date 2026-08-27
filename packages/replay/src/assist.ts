@@ -487,10 +487,26 @@ export const consultAssist = (
     }
 
     const controls = consultation.controls ?? []
-    if (consultation.candidates.length === 0 && controls.length === 0) {
+
+    /**
+     * A consultation needs something to classify with.
+     *
+     * `candidates` is the closed enumeration `classify` is built over, so an
+     * empty one is not a smaller question — it is an unanswerable one. The tool's
+     * `proposedOutcome` becomes a `Schema.Literals` over no values, which renders
+     * as `{"not": {}}`: a required property nothing can satisfy, sent to a model
+     * that `toolChoice: "required"` obliges to call something. Even where another
+     * word remains callable, the consultation spends the run's one attempt to ask
+     * a question whose principal answer was removed before it was asked.
+     *
+     * So an empty candidate list declines here, whatever the screen offers. The
+     * doc on `AssistConsultation.candidates` says "never empty when consulted";
+     * this is the line that makes that true rather than hoped for.
+     */
+    if (consultation.candidates.length === 0) {
       return notProposed(
-        `${consultation.capability} names no outcome code for this state and the screen ` +
-          `offers no control to propose, so there is nothing a consultation could return`
+        `${consultation.capability} names no outcome code this state could be classified as, ` +
+          `so there is nothing a consultation could return`
       )
     }
 

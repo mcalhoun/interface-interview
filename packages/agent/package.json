@@ -4,5 +4,15 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
-  "types": "src/index.ts"
+  "types": "src/index.ts",
+  "dependencies": {
+    "@cua/artifact": "workspace:*",
+    "@cua/evidence": "workspace:*",
+    "@cua/legacy-core": "workspace:*",
+    "@cua/policy": "workspace:*",
+    "@cua/replay": "workspace:*",
+    "@cua/surface": "workspace:*",
+    "@effect/ai-openai": "4.0.0-rc.112",
+    "effect": "4.0.0-rc.112"
+  }
 }

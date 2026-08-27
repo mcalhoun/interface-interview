@@ -347,7 +347,7 @@ Everything here was a decision rather than an oversight.
 | Confidence scoring and approval gating | `awaitingReview` is derived from `authored` and **over-flags**: a compiled capability a person has read still shows it | a `reviewedBy`/`approvedAt` pair, gating unattended replay |
 | Multi-run stability signal | determinism is asserted over two runs, not scored over many | replay N times, diff outcomes, feed the approval gate |
 | A per-deployment assist confidence floor | `AssistOptions.floor` exists and nothing passes it, so the floor is the constant 0.75 | a field in the policy document beside the assist justification |
-| Narrowing `unsafeRepeats` | **coarse**: every step counts as one an `at-step` rule might fire at, because nothing says which steps a `detect` matches | a schema field scoping a recovery rule to steps |
+| Narrowing `unsafeRepeats` | **coarse**: every step counts as one an `at-step` rule might fire at and every remedy action of a rule with `attempts` above one counts as repeated, because nothing says which steps a `detect` matches or which attempt clears it | a schema field scoping a recovery rule to steps |
 | Path-level policy rules, rate limits, per-capability scoping | the origin allowlist constrains where the browser may go, not which endpoint inside an origin | fine for mutations behind a `click`, not for a legacy app with mutating GETs |
 | Recovery on the action-blocked path | the assisted rung already serves both paths | a rule would have to say which path its `detect` is written for |
 | A prettier caller-facing code for a learned state | codes are derived, never supplied | a hand-written version cut by whoever owns the contract |

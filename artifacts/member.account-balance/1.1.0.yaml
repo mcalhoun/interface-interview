@@ -284,6 +284,15 @@ recoverable:
           abandon the flow, so matching the wrong one would be visible immediately as the search
           screen rather than as a silent wrong turn.
   resume: here
+  repeatable: >
+    The remedy is one link, and following it is a GET for the member record the step already
+    asked for. It posts nothing, writes nothing and starts no workflow: Heritage Core keeps no
+    server-side state across these requests, so the second and third presses ask exactly the
+    question the first one asked and are answered from the same place. The worst a repeat can
+    cost is another read of a record this run is already authorised to read, which is why
+    retrying it is safe rather than merely usually harmless. A Continue that confirmed a posting
+    rather than re-requesting a screen would be a different control and would not get this
+    argument.
   attempts: 3
   backoffMillis: 250
 - condition: SESSION_EXPIRED

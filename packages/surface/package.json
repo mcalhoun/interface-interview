@@ -6,10 +6,8 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "dependencies": {
+    "@cua/legacy-core": "workspace:*",
     "effect": "4.0.0-rc.112",
     "playwright": "1.62.1"
-  },
-  "devDependencies": {
-    "@cua/legacy-core": "workspace:*"
   }
 }
