@@ -68,11 +68,18 @@
  *
  * ## The order inside a failed Checkpoint
  *
- * Four things contribute to what happens when a Checkpoint does not hold, and the
+ * Five things contribute to what happens when a Checkpoint does not hold, and the
  * order is the semantic core of this system rather than an implementation detail:
  *
  * ```
- *   expect  ->  declared Business Outcomes  ->  recovery  ->  hand off to a person
+ *   expect
+ *     ->  declared Business Outcomes                 (ADR-0004, ticket 04)
+ *     ->  declared Recoverable Conditions            (ticket 06)
+ *     ->  one bounded assisted consultation          (ADR-0005, ticket 15)
+ *     ->  hand off to a person                       (ADR-0006, ticket 12)
+ *           labelled by what this Capability has learned about the state
+ *           (`requiresHuman:`, ticket 14) — and a state it has already learned
+ *           needs authority skips the consultation entirely.
  * ```
  *
  * A state the Artifact already declares as a Business Outcome is an *answer*. It
@@ -81,14 +88,34 @@
  * domain result as though it were breakage. A Recoverable Condition is a state
  * the application is passing through, so it sits above the handoff: waking
  * somebody for something the system can get past on its own is exactly what the
- * ladder exists to avoid.
+ * ladder exists to avoid. A consultation performs nothing and re-evaluates
+ * nothing, so it sits below both and above the person: it is the cheapest rung
+ * that can tell "the application answered" from "the automation is broken" for a
+ * state nobody has written down yet.
+ *
+ * And that last clause is the whole of where ticket 14 meets ticket 15. A state
+ * the document has *already* classified as needing authority is not a question,
+ * so it is not asked: the run short-circuits from the recovery rung straight to
+ * the human one, carrying the learned code and the sentence somebody who solved
+ * it wrote. SPEC's ladder says the same thing — "low confidence, **or
+ * authority-class state**" — and ADR-0005 says such a state is never proposable
+ * as automatable, of which not proposing it at all is the stronger form.
  *
  * It is enforced by types rather than by statement order. `evaluate` folds
  * `expect` and the outcome branches together and only `verdict: "failed"` leaves
- * it, so neither lower rung can be handed an outcome — `attemptRecovery` and
- * `handOff` both take a `FailedCheckpoint`. And `handOff` takes an `Unrecovered`,
- * which only `attemptRecovery` produces, so reaching a person without every
- * declared recovery rule having had its turn does not compile.
+ * it, so no lower rung can be handed an outcome — `attemptRecovery`,
+ * `attemptAssist` and `handOff` are all downstream of a `FailedCheckpoint`. Then
+ * each rung's turn is a value only that rung can build:
+ *
+ *   - `attemptRecovery` is the only producer of an `Unrecovered`;
+ *   - `classifyAsHumanRequired` takes an `Unrecovered` and is the only producer
+ *     of a `Classified`;
+ *   - `attemptAssist` is the only producer of an `Unassisted`;
+ *   - `handOff` takes `ForAPerson = Unassisted | Classified` and nothing else.
+ *
+ * So reaching a person without recovery having had its turn does not compile, and
+ * neither does reaching one without the assisted rung having had its turn for a
+ * state nothing has classified.
  */
 
 import { Effect, Ref, Result } from "effect"
@@ -122,6 +149,15 @@ import {
   describeMatch,
   describeTarget
 } from "@cua/surface"
+import {
+  type Advisor,
+  type AssistGate,
+  type AssistCandidate,
+  ASSIST_BUDGET_PER_RUN,
+  ASSIST_QUESTION,
+  consultAssist,
+  proposableOutcomes
+} from "./assist.ts"
 import { type CheckpointOutcome, type StepReadings, evaluate, resolveValue } from "./checkpoint.ts"
 import { chooseItem } from "./selection.ts"
 import {
@@ -134,6 +170,7 @@ import {
 } from "./recovery.ts"
 import type { ReplayFailure, ReplayFailureBody, ReplayResult, StepRecord } from "./ReplayResult.ts"
 import { describeResult } from "./ReplayResult.ts"
+import { scrubberFor } from "./redaction.ts"
 
 export interface ReplayRequest {
   readonly artifact: CapabilityArtifact
@@ -150,6 +187,21 @@ export interface ReplayRequest {
    */
   readonly baseUrl: string
   readonly runId: string
+  /**
+   * The Assisted Recovery rung, when this run has one. Absent by default.
+   *
+   * SPEC: "Off by default, enabled with `--assist`." Modelled as an absent value
+   * rather than a boolean, so a run without it has nothing to consult rather
+   * than a flag that some later branch could read the wrong way round. Nothing
+   * in this engine constructs one, and the type says what an `Advisor` may
+   * return: a classification, never an action (ADR-0005, and `assist.ts`).
+   *
+   * `Advisor` has an empty requirement channel, which is what lets a model-backed
+   * implementation exist at all without `LanguageModel` appearing in this
+   * engine's requirement set. Whatever it needs, it closed over before it got
+   * here.
+   */
+  readonly assist?: Advisor
 }
 
 /** Runs one Capability Artifact end to end. Read the return type as a specification. */
@@ -169,6 +221,27 @@ export const replayCapability = (
     const conditions = recoverableConditions(artifact)
     /** Shared across every Step, so a whole flow cannot retry itself forever. */
     const budget = yield* Ref.make(RECOVERY_BUDGET_PER_RUN)
+    /**
+     * The assisted rung's budget, shared the same way and equal to one.
+     *
+     * At run level rather than per Step, which is what "bounded to a single step
+     * and a single attempt" means when a flow has five of them: the *run* gets
+     * one consultation, about whichever Step needed it. A per-Step budget would
+     * let a five-step Capability consult five times and still satisfy every
+     * sentence in the spec read literally.
+     */
+    const assistBudget = yield* Ref.make(ASSIST_BUDGET_PER_RUN)
+    /**
+     * The run's own scrubber, for the one thing that leaves the building.
+     *
+     * Evidence scrubs on write, so everything in the log is already covered. A
+     * consultation is the only text this engine sends anywhere else, and it is
+     * put through the same function rather than a second definition of
+     * "sensitive" that could drift from the first (ADR-0008, and ticket 13's
+     * argument for passing the run's own scrubber into an Amendment). No new
+     * `Redacted.value` call site: `scrubberFor` is the existing one.
+     */
+    const scrub = scrubberFor(inputs)
 
     /** The half of a result that is the same whatever class it turns out to be. */
     const common = {
@@ -365,20 +438,23 @@ export const replayCapability = (
         // over; there is no Checkpoint to ask, because there was no Action whose
         // effect a Checkpoint could confirm.
         if (performed._tag === "Answered") {
-          const declaration = declaredOutcome(artifact, performed.code)
           steps.push({
             id: step.id,
             intent: step.intent,
             action: step.action.type,
-            checkpoint: "outcome"
+            checkpoint: "outcome",
+            ...(performed.assisted === undefined ? {} : { assisted: true })
           })
           return {
-            reached: {
-              code: performed.code,
-              detail: declaration?.title ?? `the capability reached ${performed.code}`,
-              stepId: step.id,
-              because: performed.because
-            },
+            reached:
+              performed.assisted === undefined
+                ? {
+                    code: performed.code,
+                    detail: detailFor(performed.code),
+                    stepId: step.id,
+                    because: performed.because
+                  }
+                : reachedByAssist(step, performed.assisted),
             afterHandoff: attempt.afterHandoff
           }
         }
@@ -425,9 +501,10 @@ export const replayCapability = (
         // The ladder below a failed Checkpoint
         // ---------------------------------------------------------------
         //
-        //     expect  ->  declared Business Outcomes  ->  recovery  ->  hand off
+        //     expect  ->  declared Business Outcomes  ->  recovery  ->  assist
+        //             ->  a person, labelled by what has been learned
         //
-        // Four things contribute to what happens when a Checkpoint does not hold,
+        // Five things contribute to what happens when a Checkpoint does not hold,
         // and this is the order. The reasoning, which is the semantic core of the
         // system rather than a preference:
         //
@@ -441,17 +518,27 @@ export const replayCapability = (
         //   - A Recoverable Condition is a state the application is *passing
         //     through*. Waking a person for one is what this rung exists to
         //     avoid, so it sits above the handoff.
-        //   - An Intervention is what is left when neither applies.
+        //   - One bounded consultation is what is tried next, because it performs
+        //     nothing and so cannot leave anything for a person to unpick — and
+        //     because "what does this screen mean" is a cheaper question to ask a
+        //     model than a person. Unless the document has already answered it:
+        //     see `classifyAsHumanRequired` below.
+        //   - An Intervention is what is left when none of those applies.
         //
         // The order is enforced by types, not by the order of these statements:
         //
         //   1. `evaluate` folds `expect` and the outcome branches together and
-        //      only `verdict: "failed"` leaves it, so neither lower rung can be
-        //      handed an outcome — `attemptRecovery` and `handOff` both take
-        //      `FailedCheckpoint` and nothing else.
-        //   2. `handOff` takes an `Unrecovered`, and `attemptRecovery` is the only
-        //      expression in this file that can produce one. Handing off before
-        //      recovery has had its turn does not type-check.
+        //      only `verdict: "failed"` leaves it, so no lower rung can be handed
+        //      an outcome — `attemptRecovery`, `attemptAssist` and `handOff` are
+        //      all downstream of a `FailedCheckpoint`.
+        //   2. `attemptRecovery` is the only expression in this file that can
+        //      produce an `Unrecovered`, and both rungs below it take one.
+        //      Handing off before recovery has had its turn does not type-check.
+        //   3. `handOff` takes `ForAPerson = Unassisted | Classified`, and each
+        //      arm has exactly one producer: `attemptAssist` and
+        //      `classifyAsHumanRequired`. Reaching a person without the assisted
+        //      rung having had its turn for an *unclassified* state does not
+        //      type-check either.
         let outcome: CheckpointOutcome = yield* verify(performed.url)
         let escalation: Escalated | undefined
         // Possibly already true: an Operator may have been in the Session before
@@ -460,6 +547,8 @@ export const replayCapability = (
         let afterHandoff = attempt.afterHandoff
         let recovered: string | undefined
         let exhausted: Extract<RecoveryOutcome, { attempted: true }> | undefined
+        /** Set when the assisted rung classified this stall. Ends the Step. */
+        let assisted: Assisted | undefined
 
         if (outcome.verdict === "failed") {
           // Rung 3. Reads the state that defeated the Checkpoint, does the
@@ -474,14 +563,14 @@ export const replayCapability = (
           } else {
             exhausted = attempted.recovery.attempted ? attempted.recovery : undefined
 
-            // Rung 4, the human one. Everything above it — waiting, the
-            // Artifact's own declared outcomes, and every declared recovery rule —
-            // has had its turn by now.
+            // Rung 4 is deliberately not the first thing asked here, and that
+            // ordering is the whole of what composing tickets 14 and 15 means.
             //
-            // Ticket 14 changes *what this rung says*, not where it is. A state
-            // this Capability has learned always needs a person is announced
-            // under its declared code, with the sentence somebody who already
-            // solved it wrote, instead of as a Checkpoint that would not hold.
+            // Ticket 14's rung changes *what this stall is called*, not where it
+            // is. A state this Capability has learned always needs a person is
+            // announced under its declared code, with the sentence somebody who
+            // already solved it wrote, instead of as a Checkpoint that would not
+            // hold.
             //
             // `attempted: false` is the condition, and it is the right one: it
             // means no declared recovery rule recognised this screen at all.
@@ -497,56 +586,84 @@ export const replayCapability = (
             // `recovery_exhausted` says the system knew exactly what it was
             // looking at, did the declared thing, and the state stayed — which is
             // a question about the environment and not about authority.
-            const classified = attempted.recovery.attempted
-              ? undefined
-              : requiresHumanAtStep(artifact, step.id)
-            const stalled: Stalled =
-              classified === undefined
-                ? attempted
-                : {
-                    _tag: "HumanRequired",
-                    code: classified.code,
-                    declaration: classified.declaration,
-                    outcome: attempted.outcome
-                  }
+            const classified = classifyAsHumanRequired(step, attempted)
 
-            const handed = yield* handOff(step, stalled)
-            if (handed.resumed) {
-              afterHandoff = true
+            // Rung 4, when there is anything left to ask about: one bounded
+            // consultation. It cannot act, so it cannot have changed anything a
+            // person would then have to unpick.
+            //
+            // **A classified state short-circuits straight past it and is never
+            // put to a model at all.** Three reasons:
+            //
+            //   - ADR-0005: authority-class states are never proposable as
+            //     automatable. `proposableOutcomes` enforces that by filtering
+            //     what an Advisor may choose from; not asking at all is the
+            //     stronger form of the same rule, and it does not rest on a
+            //     filter continuing to be right.
+            //   - The Capability already knows the answer. Consulting a model
+            //     about a state a person has already ruled on spends money and
+            //     latency re-deriving a fact that is written down — and an
+            //     episode a reviewer approved outranks a proposal nobody has seen.
+            //   - It keeps the assisted rung's own invariant honest. That rung
+            //     exists for states nobody has classified yet; a run that meets a
+            //     classified one records no `assist.*` event at all, which is the
+            //     observable form of the same sentence and is what
+            //     `test/assisted-recovery.test.ts` pins.
+            //
+            // It is a fact about the types rather than a boolean somebody could
+            // flip. `classifyAsHumanRequired` is the only expression that
+            // produces a `Classified`; it takes an `Unrecovered`, so recovery has
+            // still had its turn; and `handOff` accepts `Classified | Unassisted`
+            // and nothing else. The only two ways to reach a person are therefore
+            // "the assisted rung had its turn" and "the document had already
+            // answered", and neither can be skipped.
+            const consulted = classified ?? (yield* attemptAssist(step, attempted))
 
-              // Where the person left the run. Observed rather than assumed:
-              // between the pause and here, the only thing that moved the Surface
-              // was a human being.
-              const resumedAt = yield* surface.observe.pipe(
-                Effect.catch((unavailable) =>
-                  Effect.fail(
-                    fail({
-                      reason: "surface_failed",
-                      expected: "to observe the surface control was returned on",
-                      observed: unavailable.reason
-                    })
+            if (consulted._tag === "Assisted") {
+              assisted = consulted
+            } else {
+              // Rung 5, the human one. Everything above it — waiting, the
+              // Artifact's own declared outcomes, every declared recovery rule,
+              // and either one bounded consultation or the classification that
+              // made asking one pointless — has had its turn by now.
+              const handed = yield* handOff(step, consulted)
+              if (handed.resumed) {
+                afterHandoff = true
+
+                // Where the person left the run. Observed rather than assumed:
+                // between the pause and here, the only thing that moved the Surface
+                // was a human being.
+                const resumedAt = yield* surface.observe.pipe(
+                  Effect.catch((unavailable) =>
+                    Effect.fail(
+                      fail({
+                        reason: "surface_failed",
+                        expected: "to observe the surface control was returned on",
+                        observed: unavailable.reason
+                      })
+                    )
                   )
                 )
-              )
 
-              // Deliberately not another trip round the recovery rung. The
-              // Artifact's rules were tried against this Checkpoint already and
-              // did not clear it; a person has since acted, and if the screen
-              // still disagrees the answer is a record for someone to read, not
-              // another automated retry on top of a manual one.
-              outcome = yield* verify(resumedAt.url)
-              if (outcome.verdict === "failed") {
-                // They said they had resolved it and the screen disagrees. Not a
-                // failure of the automation, and not something to escalate a
-                // second time: report it and let a person read the record.
-                escalation = escalated(
-                  step,
-                  outcome.state.accessibility,
-                  `control was returned as resolved, but ${outcome.expected} is still not true`
-                )
+                // Deliberately not another trip round the recovery rung. The
+                // Artifact's rules were tried against this Checkpoint already and
+                // did not clear it; a person has since acted, and if the screen
+                // still disagrees the answer is a record for someone to read, not
+                // another automated retry on top of a manual one.
+                outcome = yield* verify(resumedAt.url)
+                if (outcome.verdict === "failed") {
+                  // They said they had resolved it and the screen disagrees. Not a
+                  // failure of the automation, and not something to escalate a
+                  // second time: report it and let a person read the record.
+                  escalation = escalated(
+                    step,
+                    outcome.state.accessibility,
+                    `control was returned as resolved, but ${outcome.expected} is still not true`
+                  )
+                }
+              } else {
+                escalation = handed.escalation
               }
-            } else {
-              escalation = handed.escalation
             }
           }
         }
@@ -555,10 +672,22 @@ export const replayCapability = (
           id: step.id,
           intent: step.intent,
           action: step.action.type,
-          checkpoint: outcome.verdict,
+          // A Step the assisted rung settled reached an outcome. Its Checkpoint
+          // did not hold and never will — `assisted` is what says the answer was
+          // proposed rather than observed, exactly as `recovered` says a Step
+          // that held did not hold first time.
+          checkpoint: assisted === undefined ? outcome.verdict : "outcome",
           ...(read === undefined ? {} : { read }),
-          ...(recovered === undefined ? {} : { recovered })
+          ...(recovered === undefined ? {} : { recovered }),
+          ...(assisted === undefined ? {} : { assisted: true })
         })
+
+        // Before both branches below, because the Checkpoint's own verdict is
+        // still `failed` here: what changed is not the Checkpoint's answer but
+        // that something below it produced one.
+        if (assisted !== undefined) {
+          return { reached: reachedByAssist(step, assisted), afterHandoff }
+        }
 
         if (outcome.verdict === "outcome") {
           // Not a failure, and so not a `fail`. The declaration is what supplies
@@ -682,11 +811,33 @@ export const replayCapability = (
         const first = yield* attemptAction(step, before)
         if (first._tag !== "Blocked") return { performed: first, afterHandoff: false }
 
-        const handed = yield* handOff(step, {
+        // The assisted rung, on the path recovery does not serve. See
+        // `attemptAssist` for why the asymmetry with recovery is right rather
+        // than an omission: a remedy would have to act and then re-ask a
+        // Checkpoint that never ran, and a classification has to do neither.
+        //
+        // A settled stall becomes an `Answered`: no Target, no Policy check for a
+        // gesture, no `action` event — because nothing was performed. It is the
+        // same shape a `selectFromList` reaching a declared outcome produces,
+        // carrying the marker that says a model proposed this one.
+        const consulted = yield* attemptAssist(step, {
           _tag: "ActionBlocked",
           failure: first.failure,
           state: before
         })
+        if (consulted._tag === "Assisted") {
+          return {
+            performed: {
+              _tag: "Answered",
+              code: consulted.code,
+              because: becauseAssisted(consulted),
+              assisted: consulted
+            },
+            afterHandoff: false
+          }
+        }
+
+        const handed = yield* handOff(step, consulted)
 
         // Nobody to ask, or nobody came, or they could not resolve it. An
         // unattended run reports the Hard Failure it always did: the engine's
@@ -918,6 +1069,166 @@ export const replayCapability = (
     }
 
     /**
+     * The rung above the consultation: what this Capability has already learned.
+     *
+     * Ticket 14's rung, kept exactly where ticket 14 put it and given one new
+     * job. It fires on `recovery.attempted === false`, which means precisely "no
+     * declared recovery rule recognised this screen at all", and it takes an
+     * `Unrecovered` — the value only `attemptRecovery` produces — so a
+     * `HumanRequired` still cannot be built before recovery has had its turn.
+     *
+     * Returning `undefined` is not "nothing to say": it is the condition under
+     * which the assisted rung is worth asking. A recovery rule that *was*
+     * attempted and ran out keeps its own answer (`recovery_exhausted`), because
+     * "the system knew exactly what it was looking at, did the declared thing,
+     * and the state stayed" is a question about the environment rather than about
+     * authority — and it is not a state anybody has classified.
+     *
+     * This is the only expression that produces a `Classified`, which is what
+     * makes the short-circuit past the consultation a fact about the types.
+     */
+    const classifyAsHumanRequired = (step: Step, stalled: Unrecovered): Classified | undefined => {
+      if (stalled.recovery.attempted) return undefined
+      const classified = requiresHumanAtStep(artifact, step.id)
+      if (classified === undefined) return undefined
+      return {
+        _tag: "Classified",
+        stalled: {
+          _tag: "HumanRequired",
+          code: classified.code,
+          declaration: classified.declaration,
+          outcome: stalled.outcome
+        }
+      }
+    }
+
+    /**
+     * Rung 4 of the ladder: ask, once, before waking anybody — but only about a
+     * state nobody has classified.
+     *
+     * ## Why this rung serves both stall paths when recovery serves one
+     *
+     * Ticket 13 left recovery off the action-blocked path with a reason, and the
+     * reason is worth restating because it is exactly what does *not* apply
+     * here. A declared Recoverable Condition **acts** — it performs a remedy —
+     * and then believes the Checkpoint rather than itself. `resume: here` means
+     * "re-evaluate that Checkpoint", which is meaningless for a Step whose
+     * Action never ran: the Checkpoint would fail for the reason it was always
+     * going to fail.
+     *
+     * Assisted Recovery performs nothing and re-evaluates nothing. It reads the
+     * screen and says what the state means. That question is just as well posed
+     * when a control was missing as when a Checkpoint would not hold — better
+     * posed, in fact, because "the thing the Step wanted is not on this screen"
+     * is very often the application answering rather than the Capability being
+     * broken, which is precisely SPEC's reason for routing zero matches into the
+     * ladder at all.
+     *
+     * So the middle rung sits above the human one on **both** paths, and the
+     * action-blocked path stops being deterministic-then-a-person with nothing
+     * in between.
+     *
+     * ## The one state this rung is never asked about
+     *
+     * A Step the Artifact has filed under `requiresHuman:` short-circuits past
+     * here entirely — `classifyAsHumanRequired` above answers first, and its
+     * `Classified` goes straight to `handOff`. ADR-0005 says authority-class
+     * states are never proposable as automatable; `proposableOutcomes` enforces
+     * that by filtering the candidate list, and not asking at all is the stronger
+     * form of the same rule. It is also what keeps this rung's own invariant
+     * honest: it exists for states nobody has classified yet, and a run that
+     * meets a classified one records no `assist.*` event at all.
+     *
+     * ## The type discipline, and what it buys
+     *
+     * `handOff` takes a `ForAPerson`, whose two members are the `Unassisted` this
+     * function is the only producer of and the `Classified` that
+     * `classifyAsHumanRequired` is the only producer of. Reaching a person
+     * without the assisted rung having had its turn *for an unclassified state*
+     * does not compile — the same trick `Unrecovered` plays for the recovery
+     * rung, extended to cover the path recovery does not serve.
+     *
+     * A run without `--assist` still comes through here. It gets an `Unassisted`
+     * carrying no `why`, records nothing, and reaches the person it always did.
+     * The ladder has one shape whether or not the rung is enabled, which is why
+     * turning it on cannot change the order of anything.
+     */
+    const attemptAssist = (
+      step: Step,
+      stalled: Stalled
+    ): Effect.Effect<Assisted | Unassisted, EvidenceUnwritable> =>
+      Effect.gen(function* () {
+        const said = describeStall(step, stalled)
+
+        // A `no_matching_item` carries the code the Artifact named for the state
+        // it hit — a code the document has written down but, at this version, has
+        // not classified. That is the whole of what makes this rung useful, and
+        // it is the only place a candidate comes from that is not already a
+        // declared outcome. See `proposableOutcomes`.
+        const named =
+          stalled._tag === "ActionBlocked" && "code" in stalled.failure
+            ? stalled.failure.code
+            : undefined
+        const candidates: ReadonlyArray<AssistCandidate> = proposableOutcomes(artifact, named)
+
+        const proposal = yield* consultAssist(
+          {
+            advisor: request.assist,
+            gate: assistGate,
+            budget: assistBudget,
+            // The unscrubbed url, for Policy. It never enters the consultation.
+            page: said.url
+          },
+          {
+            capability: capabilityRef(artifact),
+            stepId: step.id,
+            stepIntent: step.intent,
+            // Every field below that came off the live run goes through the
+            // run's own Evidence scrubber. All three, not just the tree: a
+            // Heritage Core url carries the member number in a query parameter
+            // after the search, and the sentence describing what stalled quotes
+            // the value the Step was looking for. What this run's log refuses to
+            // carry, its consultation refuses to send.
+            //
+            // The fields that are *not* scrubbed are the ones that cannot hold
+            // runtime data by construction: the question is a constant, and the
+            // capability ref, step id, intent and candidate codes come from the
+            // Artifact, which carries none (ADR-0008).
+            stalled: scrub(`${said.reason}. ${said.detail}`),
+            question: ASSIST_QUESTION,
+            url: scrub(said.url),
+            accessibility: scrub(said.accessibility),
+            candidates
+          }
+        )
+
+        if (proposal._tag === "Proposed") {
+          return {
+            _tag: "Assisted",
+            code: proposal.code,
+            confidence: proposal.confidence,
+            rationale: proposal.rationale,
+            proposalRef: proposal.proposalRef
+          }
+        }
+
+        return {
+          _tag: "Unassisted",
+          stalled,
+          // A run that never enabled the rung has nothing to report about it, and
+          // saying "assisted recovery was not enabled" on every ordinary
+          // escalation would train an Operator to skip the line that matters.
+          why: request.assist === undefined ? undefined : proposal.why
+        }
+      })
+
+    /** The two things the assisted rung may reach. Nothing else is in scope for it. */
+    const assistGate: AssistGate = {
+      authorise: (consultation) => policy.authoriseAssist(consultation),
+      record: (body) => evidence.record(body)
+    }
+
+    /**
      * Hand the live Session to a person, and wait.
      *
      * Asking `handoffAvailable` first is the whole difference between an
@@ -953,16 +1264,34 @@ export const replayCapability = (
      * reach a person before every declared recovery rule has had its turn;
      * `ActionBlocked` is producible only by `attemptAction`, which narrows to the
      * two zero-match failures and nothing else.
+     *
+     * ## Why the parameter is a `ForAPerson` and not just an `Unassisted`
+     *
+     * Two rungs sit above this one and each insists on having had its turn. The
+     * consultation's insistence is `Unassisted`, which only `attemptAssist`
+     * produces. The classification's is `Classified`, which only
+     * `classifyAsHumanRequired` produces — and which exists precisely because the
+     * consultation *must not* happen for a state a person has already ruled on
+     * (ADR-0005). A boolean saying "already classified, skip the model" would
+     * have been shorter and would have let either rung be skipped by anybody. A
+     * two-member union cannot: whichever arm arrives here, it names the
+     * expression that built it, and there is no third way to spell one.
+     *
+     * `why` is only ever a consultation's report, so it is read off the arm that
+     * can have one rather than defaulted onto both.
      */
     const handOff = (
       step: Step,
-      stalled: Stalled
+      forPerson: ForAPerson
     ): Effect.Effect<
       { readonly resumed: boolean; readonly escalation: Escalated | undefined },
       EvidenceUnwritable
     > =>
       Effect.gen(function* () {
+        const stalled = forPerson.stalled
         const said = describeStall(step, stalled)
+        /** Absent on the classified arm: nothing was asked, so there is no answer. */
+        const why = forPerson._tag === "Unassisted" ? forPerson.why : undefined
 
         if (!(yield* session.handoffAvailable)) {
           // A state nobody has classified reports the Hard Failure it always did:
@@ -991,7 +1320,15 @@ export const replayCapability = (
           stepId: step.id,
           stepIntent: step.intent,
           reason: said.reason,
-          detail: said.detail,
+          // What the rung above tried, when it was enabled. An Operator who has
+          // been woken deserves to know the system asked first and what it was
+          // told, not least because "the model was not sure" and "the model was
+          // sure and this deployment does not permit it to be listened to" send
+          // them to very different places.
+          detail:
+            why === undefined
+              ? said.detail
+              : `${said.detail} Assisted recovery did not settle it: ${why}.`,
           url: said.url,
           accessibility: said.accessibility
         })
@@ -1065,6 +1402,38 @@ export const replayCapability = (
         accessibility: stalled.state.accessibility
       }
     }
+
+    /**
+     * The caller-facing sentence for one outcome code.
+     *
+     * A declared outcome's own `title` where there is one. An assisted result may
+     * carry a code the Artifact *names* without having declared — that is the
+     * whole point of the rung — so the fallback says so plainly rather than
+     * inventing prose for a state no reviewer has written about. The model's
+     * rationale is deliberately not used here: it goes into Evidence, where it
+     * is attributed, and not into the field a caller might quote to a member.
+     */
+    const detailFor = (code: string, assisted = false): string => {
+      const declaration = declaredOutcome(artifact, code)
+      if (declaration !== undefined) return declaration.title
+      return assisted
+        ? `a state this capability names but has not declared, classified for this run by ` +
+          `assisted recovery. No reviewer has written what it means to a caller yet`
+        : `the capability reached ${code}`
+    }
+
+    /** What the `outcome` Evidence event records as the reason, for an assisted answer. */
+    const becauseAssisted = (assisted: Assisted): string =>
+      `assisted recovery proposed ${assisted.code} at confidence ` +
+      `${assisted.confidence.toFixed(2)}: ${assisted.rationale}`
+
+    const reachedByAssist = (step: Step, assisted: Assisted): ReachedOutcome => ({
+      code: assisted.code,
+      detail: detailFor(assisted.code, true),
+      stepId: step.id,
+      because: becauseAssisted(assisted),
+      assisted
+    })
 
     const escalated = (
       step: Step,
@@ -1352,7 +1721,18 @@ export const replayCapability = (
           ...common,
           steps,
           code: reached.code,
-          detail: reached.detail
+          detail: reached.detail,
+          // The three fields SPEC names, and only when they apply. A caller that
+          // has never heard of this rung sees the same result it always did;
+          // one that has can tell a proposed answer from an observed one without
+          // reading the Evidence, and follow `proposalRef` when it wants to.
+          ...(reached.assisted === undefined
+            ? {}
+            : {
+                assisted: true,
+                confidence: reached.assisted.confidence,
+                proposalRef: reached.assisted.proposalRef
+              })
         } satisfies ReplayResult
       }
 
@@ -1419,7 +1799,82 @@ interface ReachedOutcome {
   readonly stepId: string
   /** The branch conditions that held, in the Artifact's words. */
   readonly because: string
+  /**
+   * Present when a model proposed this code rather than the Artifact's own
+   * branch conditions matching it.
+   *
+   * Optional and absent on every deterministic outcome, which is what carries
+   * SPEC user story 38 — "an assisted result never counted as deterministic" —
+   * from the result contract into the engine: there is no way to construct one
+   * of these with the marker set except through `reachedByAssist`, and no way to
+   * reach that except through the rung.
+   */
+  readonly assisted?: Assisted
 }
+
+/**
+ * The assisted rung settled a stall.
+ *
+ * Produced only by `attemptAssist`, and note what it does not contain: no
+ * Target, no Action, no url. A classification cannot be turned into a gesture
+ * downstream because there is nothing in it to turn into one (ADR-0005).
+ */
+interface Assisted {
+  readonly _tag: "Assisted"
+  readonly code: string
+  readonly confidence: number
+  readonly rationale: string
+  /** `events.jsonl#assist-1`. Travels to the caller on the result. */
+  readonly proposalRef: string
+}
+
+/**
+ * A stall the assisted rung did not settle, and the only thing `handOff` takes.
+ *
+ * `attemptAssist` is the only expression that produces one, which is how "the
+ * assisted rung sits above the human one" becomes a fact the compiler enforces
+ * rather than an ordering of two statements. `why` is absent when the rung was
+ * not enabled: there is nothing to report about a consultation that never
+ * happened.
+ */
+interface Unassisted {
+  readonly _tag: "Unassisted"
+  readonly stalled: Stalled
+  readonly why: string | undefined
+}
+
+/**
+ * A stall the assisted rung was never asked about, because the Artifact had
+ * already answered.
+ *
+ * The other thing `handOff` takes, and `classifyAsHumanRequired` is the only
+ * expression that produces one. It exists as its own type rather than as a
+ * boolean on `Unassisted` for the reason the rest of this ladder is types:
+ * "the model was consulted and had nothing" and "the model was deliberately not
+ * consulted" are different facts about a run, and a flag lets them be set by
+ * anybody in either direction.
+ *
+ * `stalled` is narrowed to `HumanRequired`, so this arm cannot be used to walk an
+ * unclassified state past the consultation. Between the two members of
+ * `ForAPerson`, every path to `session.pause` has either had the assisted rung's
+ * turn or has a declaration saying why asking would be pointless — and both have
+ * had recovery's, because `classifyAsHumanRequired` takes an `Unrecovered` and
+ * `attemptAssist`'s `Unassisted` carries the `Stalled` it was given.
+ */
+interface Classified {
+  readonly _tag: "Classified"
+  readonly stalled: HumanRequired
+}
+
+/**
+ * The two ways a stall may legitimately reach a person, and there are exactly
+ * two.
+ *
+ * Widening this union is the only way to add a third, which is deliberately a
+ * change somebody has to make in this file, next to the sentence saying why the
+ * first two are the ones that exist.
+ */
+type ForAPerson = Unassisted | Classified
 
 /**
  * What a Step concluded when nothing went wrong.
@@ -1549,7 +2004,20 @@ interface Escalated {
  */
 type Performed =
   | { readonly _tag: "Acted"; readonly read: string | undefined; readonly url: string }
-  | { readonly _tag: "Answered"; readonly code: string; readonly because: string }
+  | {
+      readonly _tag: "Answered"
+      readonly code: string
+      readonly because: string
+      /**
+       * Set when the assisted rung supplied the code rather than the Artifact's
+       * own `onNoMatch: outcome:` declaring it.
+       *
+       * The two are the same shape and must not be the same fact: one is a
+       * classification a reviewer approved into a document, the other is one a
+       * model proposed for this run only.
+       */
+      readonly assisted?: Assisted
+    }
 
 /** A missing control, or a list that offered nothing matching. Never ambiguity. */
 type ZeroMatchFailure = Extract<
@@ -1571,6 +2039,31 @@ interface Blocked {
   readonly failure: ZeroMatchFailure
 }
 
+/** An Action whose subject was not on the screen, described for whoever arrives. */
+interface ActionBlocked {
+  readonly _tag: "ActionBlocked"
+  readonly failure: ZeroMatchFailure
+  /** The screen the Action was attempted against. What the Operator is shown. */
+  readonly state: SurfaceState
+}
+
+/**
+ * A stall this Capability has already learned always needs a person.
+ *
+ * `classifyAsHumanRequired` is the only expression that produces one, and it
+ * takes an `Unrecovered` — so this arm is still downstream of recovery having had
+ * its turn, exactly as the other two are. What it *is* upstream of is the
+ * assisted rung: a state a person has ruled on is never put to a model.
+ */
+interface HumanRequired {
+  readonly _tag: "HumanRequired"
+  /** The Artifact's code for this state. Derived from the Step, never named. */
+  readonly code: string
+  readonly declaration: RequiresHumanDeclaration
+  /** The Checkpoint failure that reached it, kept for the diagnostic half. */
+  readonly outcome: FailedCheckpoint
+}
+
 /**
  * Every way a Step stalls badly enough to want a person.
  *
@@ -1580,26 +2073,9 @@ interface Blocked {
  * type is what keeps them from being said interchangeably. `Unrecovered`: the
  * Checkpoint would not hold and nothing declared got past it. `ActionBlocked`:
  * the Action never ran, because its subject was not on the screen.
- * `HumanRequired`: the document already knows what this is, and it is the one
- * arm reachable without recovery having had a turn — deliberately, because
- * recovery is what it exists to skip.
+ * `HumanRequired`: the document already knows what this is.
  */
-type Stalled =
-  | Unrecovered
-  | {
-      readonly _tag: "ActionBlocked"
-      readonly failure: ZeroMatchFailure
-      /** The screen the Action was attempted against. What the Operator is shown. */
-      readonly state: SurfaceState
-    }
-  | {
-      readonly _tag: "HumanRequired"
-      /** The Artifact's code for this state. Derived from the Step, never named. */
-      readonly code: string
-      readonly declaration: RequiresHumanDeclaration
-      /** The Checkpoint failure that reached it, kept for the diagnostic half. */
-      readonly outcome: FailedCheckpoint
-    }
+type Stalled = Unrecovered | ActionBlocked | HumanRequired
 
 /**
  * Whether a problem is a zero match, and therefore a question rather than a

@@ -25,6 +25,22 @@
  */
 
 import { randomUUID } from "node:crypto"
+/**
+ * The composition root's one import of the model half, and the only place in
+ * this package that has one.
+ *
+ * `@cua/agent` owns the classification toolkit and the provider Layer; this file
+ * builds an `Advisor` out of them when `--assist` is given and hands it to the
+ * engine as a value. `engine.ts` never sees any of it: its requirement set is
+ * still the four services, `test/replay-has-no-model.test.ts` still asserts that
+ * set is exactly those four, and the source scan in the same file still finds no
+ * route to a model in any module the engine imports.
+ *
+ * That is the point of a port. Wiring belongs to whoever assembles a run, and
+ * assembling one is what a CLI is for; what must not happen is the executor
+ * being able to reach a model, and it cannot, whatever this file imports.
+ */
+import { modelAdvisor, providerFor } from "@cua/agent"
 import { serve } from "@cua/legacy-core"
 import {
   type CapabilityArtifact,
@@ -86,6 +102,14 @@ const usage = (): string =>
     "                    not hold. Use with --headed; the operator works in that",
     "                    window. Without it the run is unattended and a stuck",
     "                    checkpoint is a hard failure, because nobody is watching",
+    "  --assist          allow one bounded consultation of a model when a step",
+    "                    cannot be resolved, before anybody is woken. The model",
+    "                    has no acting operations available to it at all: it",
+    "                    reads the stuck screen and proposes one of this",
+    "                    capability's own outcome codes with a confidence. A",
+    "                    confident proposal returns an outcome marked assisted;",
+    "                    it never writes anything to artifacts/. Off by default,",
+    "                    and denied anyway by a policy with no assist: block",
     "  --operatorPort <n>       port for the operator interface (default 4180)",
     "  --handoffWait <seconds>  how long a paused run waits for someone",
     "  --noAmend         do not store what an intervention taught this capability.",
@@ -175,8 +199,37 @@ const report = (
         }
         break
       case "business_outcome":
-        yield* Console.log(`${result.capability}@${result.version}  ${result.code}`)
+        yield* Console.log(
+          `${result.capability}@${result.version}  ${result.code}` +
+            (result.assisted === true ? "  [ASSISTED]" : "")
+        )
         yield* Console.log(`  ${result.detail}`)
+        // Said here rather than left to the JSON, and said in full. A caller
+        // reading this line has to be able to tell a proposed answer from an
+        // observed one, know how sure the proposal was, know where to read it,
+        // and know that nothing was written to the capability as a result.
+        if (result.assisted === true) {
+          yield* Console.log("")
+          yield* Console.log(
+            `  assisted: a model proposed this outcome at confidence ` +
+              `${(result.confidence ?? 0).toFixed(2)}. It is NOT a deterministic result and`
+          )
+          yield* Console.log(
+            `            does not count as one for reliability purposes. The proposal, with`
+          )
+          yield* Console.log(
+            `            its rationale and the screen it was read off, is at ` +
+              `${result.proposalRef ?? "events.jsonl"}`
+          )
+          yield* Console.log(
+            `            in the evidence directory below. Nothing was written to ` +
+              `artifacts/: promoting`
+          )
+          yield* Console.log(
+            `            a proposal into a capability needs a person, through an ` +
+              `intervention (--handoff).`
+          )
+        }
         break
       case "intervention_required":
         yield* Console.log(`${result.capability}@${result.version}  INTERVENTION REQUIRED`)
@@ -214,7 +267,10 @@ const report = (
       // this should be able to see both facts at once.
       const recovered =
         step.recovered === undefined ? "" : `  (recovered from ${step.recovered})`
-      yield* Console.log(`  [${step.checkpoint}] ${step.id}  ${step.intent}${read}${recovered}`)
+      const assisted = step.assisted === true ? "  (assisted: proposed, not observed)" : ""
+      yield* Console.log(
+        `  [${step.checkpoint}] ${step.id}  ${step.intent}${read}${recovered}${assisted}`
+      )
     }
     yield* Console.log("")
     yield* Console.log(`policy:   ${policy.name} (${policy.source})`)
@@ -343,6 +399,25 @@ const run = (
     const attended = argv.switches.has("handoff")
     const waitSeconds = Number(argv.options["handoffWait"])
 
+    /**
+     * The assisted rung, or nothing.
+     *
+     * Off is the absence of a value: with no `--assist` the engine is handed no
+     * Advisor, records no `assist.*` event, and behaves exactly as it did before
+     * this ticket. The four demo runs in the write-up are all in that state.
+     *
+     * `providerFor` rather than a provider by name, so this file does not name a
+     * vendor either — `packages/agent/src/provider.ts` remains the only file in
+     * the workspace that does. A missing API key is not checked here on purpose:
+     * it surfaces as an `AssistUnavailable` at the moment of consultation, the
+     * rung reports that it could not settle the stall, and the run falls through
+     * to the person it would have reached anyway. A rung whose job is to avoid an
+     * escalation must never be able to cause one.
+     */
+    const assist = argv.switches.has("assist")
+      ? modelAdvisor({ model: providerFor({}) })
+      : undefined
+
     // Only now does anything open. The four services the engine requires, and
     // nothing else: there is no language model in this layer, which is what
     // ADR-0003's compile-time proof rests on.
@@ -406,7 +481,8 @@ const run = (
         artifact,
         inputs: inputs.success,
         baseUrl,
-        runId
+        runId,
+        ...(assist === undefined ? {} : { assist })
       })
 
       // Every episode this Session closed, read once, after the run is over.

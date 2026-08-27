@@ -21,6 +21,15 @@
  *      one available to a reviewer who does not want to take the type system's
  *      word for it.
  *
+ *      Ticket 15 makes the second half of that conditional, and the assertion
+ *      gets *stronger* rather than weaker for it. `decide` stays impossible: no
+ *      replay run may ever contain one, whatever flags it was given. `assist.*`
+ *      is now asserted in both directions — absent when the rung was not
+ *      enabled, and present when it was — because "no assist event unless assist
+ *      was explicitly enabled" is only worth testing if the events would
+ *      otherwise have appeared. An assertion that only ever checks the absent
+ *      case would pass just as well if the kinds were never emitted at all.
+ *
  * The source scan at the end is a fourth, weaker check: a model reached by raw
  * HTTP would not appear in any requirement set at all.
  */
@@ -36,6 +45,8 @@ import { Policy, policyFrom } from "@cua/policy"
 import { Session, automationOwnedSession } from "@cua/session"
 import { SurfaceAdapter, playwrightSurface } from "@cua/surface"
 import { replayCapability } from "@cua/replay"
+import { modelAdvisor } from "@cua/agent"
+import { scriptedModel } from "./support/scripted-model.ts"
 import {
   ACCOUNT_BALANCE,
   replay,
@@ -112,6 +123,43 @@ it.live("a real replay run's evidence contains no model decision", () =>
     // a replay log from a discovery log without inferring it from absences.
     const start = outcome.events.find((event) => event.kind === "run.start")
     expect(start && "mode" in start ? start.mode : undefined).toBe("replay")
+  })
+)
+
+it.live("a run with assisted recovery enabled records it, and still decides nothing", () =>
+  Effect.gen(function* () {
+    // The same claim from the other side. Member 88888 at 1.0.0 is the state the
+    // artifact names but has not classified, so the rung actually fires — which
+    // is what makes the absence asserted above mean something.
+    const outcome = yield* replay({
+      artifact: shippedArtifact(ACCOUNT_BALANCE, "1.0.0"),
+      inputs: { memberId: "88888" },
+      assist: modelAdvisor({
+        model: scriptedModel([
+          {
+            name: "classify",
+            params: {
+              proposedOutcome: "NO_MATCHING_ITEM",
+              confidence: 0.9,
+              rationale: "the account list offers only Checking"
+            }
+          }
+        ])
+      })
+    })
+
+    const kinds = outcome.events.map((event) => event.kind)
+
+    // `decide` is not conditional on anything. No replay run may ever contain
+    // one, and enabling the assisted rung does not make it a discovery run.
+    expect(kinds).not.toContain("decide")
+
+    // And the assisted rung emits its own kinds rather than borrowing that one,
+    // so a model consulted during replay cannot hide behind a discovery-shaped
+    // record (SPEC, "Evidence").
+    expect(kinds).toContain("assist.request")
+    expect(kinds).toContain("assist.proposal")
+    expect(kinds.filter((kind) => kind.startsWith("assist."))).toHaveLength(2)
   })
 )
 

@@ -45,7 +45,7 @@
 
 import { Result, Schema } from "effect"
 import { type OriginPattern, parseOriginPattern } from "./origins.ts"
-import { type ActionMode, ACTION_TYPES, riskOf } from "./Policy.ts"
+import { type ActionMode, ACTION_TYPES, CONSULTATION_RISK, riskOf } from "./Policy.ts"
 
 /**
  * How long a justification has to be before it counts as one.
@@ -71,6 +71,26 @@ export const PermittedAction = Schema.Struct({
 })
 export type PermittedAction = typeof PermittedAction.Type
 
+/**
+ * Permission to consult the Assisted Recovery model, and the reason for it.
+ *
+ * A separate block rather than an entry in `actions:`, because a consultation is
+ * not an Action: it performs nothing, it has no Target, and `ACTION_TYPES` is
+ * asserted equal to the Artifact's Action union and to the Discovery vocabulary.
+ * It carries a `because:` for the same reason `click` does — see
+ * `CONSULTATION_RISK` — and the check below is the same check, so a deployment
+ * cannot permit a screen to leave the building without somebody writing down why.
+ *
+ * Absent means denied. There is no default-allow here any more than anywhere
+ * else, which is what makes assisted recovery off twice over: the operator has
+ * to ask for it with `--assist`, and the deployment has to have permitted it.
+ */
+export const PermittedAssist = Schema.Struct({
+  /** Why this deployment accepts sending a stuck screen to a model. */
+  because: Schema.String
+})
+export type PermittedAssist = typeof PermittedAssist.Type
+
 /** A per-mode narrowing. Listed Action types must already be permitted overall. */
 export const ModeRule = Schema.Struct({
   actions: Schema.Array(Schema.String),
@@ -91,6 +111,11 @@ export const PolicyDocument = Schema.Struct({
   origins: Schema.Array(Schema.String).check(Schema.isMinLength(1)),
   /** Every Action type permitted. Anything absent is denied. */
   actions: Schema.Array(PermittedAction),
+  /**
+   * Whether this deployment permits Assisted Recovery to consult a model, and
+   * why. Absent means it does not.
+   */
+  assist: Schema.optional(PermittedAssist),
   /** Optional per-mode narrowing. A mode may remove Action types, never add. */
   modes: Schema.optional(
     Schema.Struct({
@@ -126,6 +151,8 @@ export interface CompiledPolicy {
   readonly origins: ReadonlyArray<OriginPattern>
   /** Mode to Action type to the entry that permitted it. Nothing else is permitted. */
   readonly permitted: ReadonlyMap<ActionMode, ReadonlyMap<string, PermittedAction>>
+  /** The consultation permission, or `undefined` when this Policy grants none. */
+  readonly assist: PermittedAssist | undefined
   readonly document: PolicyDocument
 }
 
@@ -225,6 +252,21 @@ export const compilePolicy = (
     permitted.set(mode, narrowed)
   }
 
+  // The consultation permission costs a written reason, exactly as a risky
+  // Action does, and is checked at load for the same reason: a policy that
+  // permitted one silently would never fail until the moment it mattered.
+  if (document.assist !== undefined) {
+    const because = document.assist.because.trim()
+    if (because.length < JUSTIFICATION_MINIMUM) {
+      problems.push(
+        `assist: is ${CONSULTATION_RISK}: it sends the screen a stuck run is looking at to a ` +
+          `model outside this system, and nothing recalls it afterwards. Permitting it needs a ` +
+          `because: of at least ${JUSTIFICATION_MINIMUM} characters saying why this deployment ` +
+          `accepts that, and this one has ${because.length}`
+      )
+    }
+  }
+
   if (problems.length > 0) return Result.fail(new PolicyInvalid({ source, problems }))
 
   return Result.succeed({
@@ -233,6 +275,7 @@ export const compilePolicy = (
     source,
     origins,
     permitted,
+    assist: document.assist,
     document
   })
 }

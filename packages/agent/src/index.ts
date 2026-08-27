@@ -97,6 +97,17 @@ export {
   providerFor
 } from "./provider.ts"
 
+export type { AdvisorOptions, AssistVerb } from "./assist.ts"
+export {
+  ASSIST_INSTRUCTIONS,
+  ASSIST_VERBS,
+  assistPrompt,
+  assistToolkit,
+  assistTools,
+  consultationPrompt,
+  modelAdvisor
+} from "./assist.ts"
+
 export type { CompileOptions } from "./compile.ts"
 export {
   CompilationRefused,
