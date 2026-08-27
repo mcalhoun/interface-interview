@@ -78,18 +78,26 @@ export const decide = (policy: CompiledPolicy, request: ActionRequest): PolicyVe
   }
 
   // (3) Where is the run right now?
-  if (request.page !== undefined && origin === undefined) {
-    // A blank page has no origin. Navigating away from one is the only sensible
-    // thing to do with it; acting on it is not, and the honest answer is that
-    // there is nothing here to act on.
+  //
+  // Fail closed on the absence of an origin, not only on an origin that fails to
+  // match. `page` is optional and `about:blank` has no origin, so there are two
+  // ways to arrive here with nothing to judge — and a caller that simply omitted
+  // `page` must not be a cheaper way past the allowlist than one that supplied
+  // an off-allowlist URL. Navigation keeps the exception, because opening a
+  // location is the only sensible thing to do with a browser that is not
+  // anywhere yet, and step (4) judges where it would go.
+  if (origin === undefined) {
     if (request.type !== "navigate") {
+      const where = request.page === undefined
+        ? "this request names no page"
+        : `no page is open (${request.page})`
       return verdict(
         "deny",
-        `no page is open (${request.page}), so there is nothing for ${request.type} to act on. ` +
+        `${where}, so there is nothing for ${request.type} to act on. ` +
           `Policy ${policy.name} allows an action only on an origin it can name`
       )
     }
-  } else if (origin !== undefined && allowedBy(policy.origins, origin) === undefined) {
+  } else if (allowedBy(policy.origins, origin) === undefined) {
     return verdict(
       "deny",
       `this run is on ${origin}, which policy ${policy.name} does not allow. ` +

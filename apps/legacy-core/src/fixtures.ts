@@ -239,7 +239,15 @@ export const dualLedgerPage = (): string =>
 <font face="Arial" size="2"><a href="/fixtures">Return to Diagnostic Screens</a></font>`
   )
 
-/** One ledger's document, as it appears inside its iframe. */
+/**
+ * One ledger's document, as it appears inside its iframe.
+ *
+ * The hidden `ledger` field is what makes `Post` land back on this same panel.
+ * The route needs `ledger=A|B` to know which document to render, and a GET form
+ * submits only its own fields — so without it, pressing `Post` in either frame
+ * navigated to `/fixtures/frames/panel?adjustment=...` and got a 404. A fixture
+ * whose only control is a dead end teaches the wrong thing about the fixture.
+ */
 export const ledgerPanel = (key: LedgerKey): string => {
   const ledger = LEDGERS[key]
   return `${DOCTYPE}
@@ -250,6 +258,7 @@ export const ledgerPanel = (key: LedgerKey): string => {
 </head>
 <body bgcolor="#ffffff" topmargin="4" leftmargin="4" marginwidth="0" marginheight="0">
 <form method="get" action="/fixtures/frames/panel">
+<input type="hidden" name="ledger" value="${key}">
 <table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
 <tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>${escape(ledger.heading)}</b></font></td></tr>
 <tr bgcolor="#ffffff"><td width="160">${caption("Posted Balance")}</td><td>${caption(ledger.posted)}</td></tr>

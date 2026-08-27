@@ -180,7 +180,38 @@ it.effect("the diagnostic screens carry the hazards they exist for", () =>
       const panel = yield* get(`/fixtures/frames/panel?ledger=${key}`)
       expect(panel).toContain("Posted Balance")
       expect(panel).toContain('title="Adjustment"')
+      // The panel's own form carries the ledger it belongs to. A GET form
+      // submits only its own fields, and this route needs `ledger` to know which
+      // document to render — without the hidden field, pressing `Post` in either
+      // frame landed on a 404, so the one control on the fixture was a dead end.
+      expect(panel).toContain(`<input type="hidden" name="ledger" value="${key}">`)
     }
+  })
+)
+
+it.effect("posting a ledger adjustment lands back on the same ledger", () =>
+  Effect.gen(function* () {
+    const { core } = yield* openCore
+
+    // What the browser actually sends when `Post` is pressed: the form's own
+    // fields, and nothing else. This is the request the fixture has to answer.
+    for (const [key, heading] of [
+      ["A", "Ledger A"],
+      ["B", "Ledger B"]
+    ]) {
+      const response = yield* Effect.promise(() =>
+        fetch(`${core.origin}/fixtures/frames/panel?ledger=${key}&adjustment=25.00`)
+      )
+      expect(response.status, `posting ledger ${key}`).toBe(200)
+      expect(yield* Effect.promise(() => response.text())).toContain(heading!)
+    }
+
+    // And the request the form used to send, so the hidden field above is
+    // visibly load-bearing rather than decorative.
+    const withoutLedger = yield* Effect.promise(() =>
+      fetch(`${core.origin}/fixtures/frames/panel?adjustment=25.00`)
+    )
+    expect(withoutLedger.status).toBe(404)
   })
 )
 

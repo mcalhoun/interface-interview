@@ -308,6 +308,19 @@ it("replaces every occurrence, longest value first, and percent-encoded forms to
   // Heritage Core puts values in query strings, where a space is not a space.
   expect(scrub("/search?name=Ada%20Lovelace")).toBe(`/search?name=${placeholderFor("spaced")}`)
   expect(scrub("hello Ada Lovelace")).toBe(`hello ${placeholderFor("spaced")}`)
+
+  // And there are two query-string spellings, not one. Every Heritage Core
+  // screen this system drives is a GET form, and a browser submits one as
+  // `application/x-www-form-urlencoded` — which writes a space as `+` where
+  // `encodeURIComponent` writes `%20`. A scrubber that knew only the second
+  // would let the value the URL bar is actually showing straight through.
+  expect(scrub("/search?name=Ada+Lovelace")).toBe(`/search?name=${placeholderFor("spaced")}`)
+
+  // The characters that are spelled the same either way are still covered once.
+  const ampersand = scrubbing([{ label: "odd", text: "a&b c" }])
+  expect(ampersand("?q=a%26b%20c")).toBe(`?q=${placeholderFor("odd")}`)
+  expect(ampersand("?q=a%26b+c")).toBe(`?q=${placeholderFor("odd")}`)
+  expect(ampersand("a&b c")).toBe(placeholderFor("odd"))
 })
 
 it("scrubs sensitive inputs and leaves declassified ones alone", () => {
@@ -360,6 +373,87 @@ it("catches a member number baked into a constant or an asserted string", () => 
   expect(found.length).toBe(1)
   expect(found[0]).toContain("checkpoint assertion 0")
   expect(found[0]).toContain(MEMBER_ID)
+})
+
+/**
+ * The positions the scan used to walk past.
+ *
+ * ADR-0008's structural half is only as good as its coverage, and coverage that
+ * is a list somebody extended when they remembered is not coverage. Three of
+ * these are the ones that matter most, because they are written by an *Amendment*
+ * — after a run met a state, from what that run saw on screen, which is precisely
+ * the moment a member number gets copied into a `textPresent`.
+ */
+it("walks the selection, the outcome branches and the recovery rules too", () => {
+  const artifact = shippedArtifact()
+  const target = {
+    role: "cell",
+    name: `Member ${MEMBER_ID}`,
+    strategy: "name",
+    robustness: "a target named after one member's screen is a runtime value in a fixed field"
+  }
+
+  const poisoned = {
+    ...artifact,
+    steps: [
+      {
+        id: "select-it",
+        intent: "Choose the account.",
+        action: {
+          type: "selectFromList" as const,
+          list: { within: { name: "Share and Deposit Accounts" }, itemRole: "link" },
+          // The field the scanner did not look at: `against` is a full ValueRef,
+          // so `{ from: constant }` is expressible here exactly as it is in a fill.
+          match: { against: { from: "constant" as const, text: `Account ${MEMBER_ID}` }, strategy: "tokenSubset" as const },
+          onNoMatch: { escalate: "NO_MATCHING_ITEM" },
+          onMultiple: { escalate: "AMBIGUOUS_MATCH" },
+          robustness: "written to put a constant in a selection, which is where one can hide"
+        },
+        checkpoint: {
+          description: "Something happened.",
+          expect: [{ assert: "targetPresent" as const, target }],
+          orOutcome: [
+            {
+              code: "MEMBER_NOT_FOUND",
+              when: [
+                { assert: "textPresent" as const, text: `No member record found for ${MEMBER_ID}` }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    recoverable: [
+      {
+        condition: "SESSION_EXPIRED",
+        description: "The session timed out.",
+        detect: [{ assert: "textPresent" as const, text: `Signed out of ${MEMBER_ID}` }],
+        remedy: [
+          {
+            intent: "Sign back on.",
+            action: {
+              type: "navigate" as const,
+              path: { from: "constant" as const, text: `/signon?member=${MEMBER_ID}` }
+            }
+          }
+        ],
+        resume: "at-step" as const,
+        repeatable: "reading a balance twice reads the same balance",
+        attempts: 2,
+        backoffMillis: 100
+      }
+    ]
+  }
+
+  const found = bakedInLiterals(poisoned, [MEMBER_ID])
+  const where = found.join(" | ")
+
+  expect(where).toContain("step select-it's match's constant")
+  expect(where).toContain("step select-it's checkpoint assertion 0's name")
+  expect(where).toContain("step select-it's MEMBER_NOT_FOUND branch condition 0")
+  expect(where).toContain("recoverable condition SESSION_EXPIRED's detect condition 0")
+  expect(where).toContain("recoverable condition SESSION_EXPIRED's remedy 0's path's constant")
+  expect(found.length).toBe(5)
 })
 
 // ---------------------------------------------------------------------------

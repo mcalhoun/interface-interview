@@ -234,6 +234,27 @@ export const evaluate = (
   })
 
 /**
+ * Every Assertion `evaluate` may put to the screen: `expect`, and the `when` of
+ * every declared outcome branch.
+ *
+ * This exists so the engine's `authorisedReader` can be given the whole set
+ * rather than half of it. A `targetReads` sitting in an outcome branch reads a
+ * live control exactly as one in `expect` does, and `evaluate` calls it through
+ * the same `context.read`. Authorising only `expect` would leave that read
+ * reaching the adapter with no `policy.check` in front of it and no deny path —
+ * the same bypass ticket 07 closed at the Checkpoint boundary, reopened one
+ * level in.
+ *
+ * **Keep this the definition of "what evaluation can look at".** If a later
+ * ticket gives a Checkpoint a third place to hold Assertions, it goes here, and
+ * the gate widens with it rather than being remembered separately.
+ */
+export const assertionsOf = (checkpoint: Checkpoint): ReadonlyArray<Assertion> => [
+  ...checkpoint.expect,
+  ...(checkpoint.orOutcome ?? []).flatMap((branch) => branch.when)
+]
+
+/**
  * The first assertion in the list that does not hold, or `undefined` if they all
  * do.
  *

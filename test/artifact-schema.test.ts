@@ -28,7 +28,8 @@ import {
   parseOutput,
   recoverableConditions
 } from "@cua/artifact"
-import { readFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 const shippedPath = (version: string) =>
@@ -408,6 +409,133 @@ ${recoverable}`
       )
     ).length
   ).toBeGreaterThan(0)
+})
+
+/**
+ * A regular expression that does not compile is not a schema problem — it is a
+ * perfectly well-shaped string. So it decodes, and then throws.
+ *
+ * Where it throws is what makes it worth refusing here. An input `pattern` is
+ * compiled inside `prepareInputs`, whose whole guarantee is that a bad call is a
+ * `Result` costing nothing; a `SyntaxError` out of it is not a `Result` and no
+ * caller catches one. A `stepRead` pattern is compiled inside a Checkpoint,
+ * where the throw becomes a defect on a channel typed `never` — it bypasses
+ * replay's failure reporting altogether, so the run has no result and its final
+ * Evidence event is never written. Both are free to catch when the document is
+ * read.
+ */
+it("refuses a pattern that is not a regular expression, wherever it is written", () => {
+  const withPattern = (pattern: string) => `
+capability: broken
+version: 1.0.0
+title: Broken
+summary: Declares a pattern that does not compile.
+authored: hand-written
+surface: { kind: web, product: Test, entry: / }
+inputs:
+  memberId:
+    type: string
+    description: A member number.
+    pattern: "${pattern}"
+outputs: {}
+steps:
+  - id: only
+    intent: Type it.
+    action:
+      type: fill
+      target: { role: textbox, name: Thing, strategy: name, robustness: because }
+      value: { from: parameter, name: memberId }
+    checkpoint:
+      description: It happened.
+      expect: [{ assert: textPresent, text: anything }]
+`
+
+  // The good one still parses, so this is a check and not a ban.
+  expectSuccess(parseArtifact("fine", withPattern("^[0-9]{4,10}$")))
+
+  const problems = expectProblems(parseArtifact("broken", withPattern("^[0-9")))
+  expect(problems.join(" ")).toContain("input memberId's pattern")
+  expect(problems.join(" ")).toContain("not a valid regular expression")
+
+  const inAssertion = expectProblems(
+    parseArtifact(
+      "broken",
+      `
+capability: broken
+version: 1.0.0
+title: Broken
+summary: Asserts with a pattern that does not compile.
+authored: hand-written
+surface: { kind: web, product: Test, entry: / }
+inputs: {}
+outputs: {}
+steps:
+  - id: read-it
+    intent: Read something.
+    action:
+      type: extract
+      target: { role: cell, name: Balance, strategy: name, robustness: because }
+    checkpoint:
+      description: It read a figure.
+      expect: [{ assert: stepRead, step: read-it, matches: "([0-9]+" }]
+`
+    )
+  )
+  expect(inAssertion.join(" ")).toContain("not a valid regular expression")
+})
+
+it("refuses an enum input with no values, which would reject everything", () => {
+  const problems = expectProblems(
+    parseArtifact(
+      "broken",
+      `
+capability: broken
+version: 1.0.0
+title: Broken
+summary: Declares an enum nothing can satisfy.
+authored: hand-written
+surface: { kind: web, product: Test, entry: / }
+inputs:
+  accountType:
+    type: enum
+    description: Which account.
+outputs: {}
+steps:
+  - id: only
+    intent: Type it.
+    action:
+      type: fill
+      target: { role: textbox, name: Thing, strategy: name, robustness: because }
+      value: { from: parameter, name: accountType }
+    checkpoint:
+      description: It happened.
+      expect: [{ assert: textPresent, text: anything }]
+`
+    )
+  )
+  // Legality is decided against `values`, so an empty one is a capability that
+  // parses, publishes a parameter, and then refuses every value a caller could
+  // pass — with a message listing nothing.
+  expect(problems.join(" ")).toContain("accountType is an enum and declares no values")
+})
+
+it("a file whose name is not a version is not listed as one", () => {
+  // `latest` is resolved by sorting the directory, and the comparator used to
+  // return `NaN` for a component like `0-rc` — which is not an ordering, so
+  // `Array.prototype.sort` was free to leave the list in any arrangement and
+  // `latest` could resolve to an older document than the one beside it.
+  const directory = mkdtempSync(join(tmpdir(), "artifact-store-"))
+  mkdirSync(join(directory, "test.capability"))
+  for (const name of ["1.0.0.yaml", "1.2.0.yaml", "1.10.0.yaml", "1.0.0-rc.1.yaml", "notes.yaml"]) {
+    writeFileSync(join(directory, "test.capability", name), "capability: test.capability\n")
+  }
+
+  const versions = listVersions(directory, "test.capability")
+
+  expect(versions).toEqual(["1.10.0", "1.2.0", "1.0.0"])
+  expect(versions).not.toContain("1.0.0-rc.1")
+  // Newest first, and numerically: the ordering `latest` depends on.
+  expect(versions[0]).toBe("1.10.0")
 })
 
 it("rejects text that is not an artifact at all", () => {

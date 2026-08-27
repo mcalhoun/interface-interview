@@ -21,7 +21,8 @@
 import { it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 import { expect } from "vitest"
-import { readdirSync, readFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { serve } from "@cua/legacy-core"
@@ -39,13 +40,36 @@ const SOURCE_DIRECTORY = join(
 const withoutComments = (text: string): string =>
   text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1")
 
+/**
+ * Every `.ts` file in the package, at any depth.
+ *
+ * Recursive on purpose, and hand-rolled rather than `readdirSync(dir, {
+ * recursive: true })` so it does not depend on a runtime option this repository
+ * has not declared support for. The package has no subdirectories today, so
+ * nothing is currently escaping — but this test is the whole of what makes
+ * ADR-0001 checkable rather than aspirational, and a guard that goes quietly
+ * blind the day somebody types `mkdir` is not a guard. The failure mode is
+ * silent by construction: the counts below would keep passing while the file
+ * doing the reaching was never read.
+ */
+const typescriptUnder = (root: string): ReadonlyArray<{ name: string; text: string }> => {
+  const found: Array<{ name: string; text: string }> = []
+  const visit = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name)
+      const name = prefix === "" ? entry.name : `${prefix}/${entry.name}`
+      if (entry.isDirectory()) visit(path, name)
+      else if (entry.name.endsWith(".ts")) {
+        found.push({ name, text: withoutComments(readFileSync(path, "utf8")) })
+      }
+    }
+  }
+  visit(root, "")
+  return found
+}
+
 const sourceFiles = (): ReadonlyArray<{ name: string; text: string }> =>
-  readdirSync(SOURCE_DIRECTORY)
-    .filter((name) => name.endsWith(".ts"))
-    .map((name) => ({
-      name,
-      text: withoutComments(readFileSync(join(SOURCE_DIRECTORY, name), "utf8"))
-    }))
+  typescriptUnder(SOURCE_DIRECTORY)
 
 it.live("the adapter exposes exactly the seven Surface methods and nothing else", () =>
   Effect.gen(function* () {
@@ -96,6 +120,24 @@ it("a Target has nowhere to put a selector", () => {
   })
   expect(decoded).toEqual({ role: "textbox", name: "Member Number" })
   expect(Object.keys(decoded)).not.toContain("selector")
+})
+
+it("the scan reads a file in a subdirectory, so the guard cannot go blind", () => {
+  // The three scans below are only worth their lines if they read the whole
+  // package. A non-recursive listing would keep passing forever while a file one
+  // directory down did whatever it liked — which is the failure a guard must not
+  // have, because nothing about it looks like a failure. So the walker is put
+  // against a tree with a subdirectory in it and required to find both files.
+  const root = mkdtempSync(join(tmpdir(), "surface-scan-"))
+  mkdirSync(join(root, "nested"))
+  writeFileSync(join(root, "top.ts"), "export const a = 1\n")
+  writeFileSync(join(root, "nested", "deep.ts"), 'page.locator("input")\n')
+  writeFileSync(join(root, "nested", "notes.md"), "not typescript\n")
+
+  const found = typescriptUnder(root)
+
+  expect(found.map((file) => file.name).sort()).toEqual(["nested/deep.ts", "top.ts"])
+  expect(found.find((file) => file.name === "nested/deep.ts")!.text).toContain(".locator(")
 })
 
 it("the package reaches the browser only through an accessibility ref", () => {

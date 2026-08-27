@@ -127,6 +127,12 @@ export const ActionRequest = Schema.Struct({
    * including a `fill` carrying a member's data — unchecked on whatever page it
    * landed on. Checking both ends is what makes the allowlist mean "the run stays
    * inside these origins" rather than "we looked at one string once".
+   *
+   * **Omitting it does not skip the check.** Optional here means "there may
+   * genuinely be no page yet", not "the origin guard is opt-in": `decide` denies
+   * every non-navigation Action whose origin it cannot name, whether that is
+   * because the page is `about:blank` or because the caller left this out. A
+   * field a caller can forget must never be the cheap way past a control.
    */
   page: Schema.optional(Schema.String),
   /** Which Step is asking, so a denial can be reported against a Step. */

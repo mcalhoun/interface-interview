@@ -30,17 +30,50 @@ import { ArtifactInvalid, formatArtifact, parseArtifact } from "./parse.ts"
 /** The repository's artifact directory, relative to the workspace root. */
 export const ARTIFACTS_DIRECTORY = "artifacts"
 
-/** Newest first. Numeric per component, so `1.10.0` beats `1.9.0`. */
+/**
+ * What a version file is called: three numbers, and nothing else.
+ *
+ * The convention was always this; it was never checked. A file called
+ * `1.0.0-rc.1.yaml` used to be listed as a version and then compared with
+ * `Number("0-rc")`, which is `NaN` — and a comparator returning `NaN` is not an
+ * ordering at all. `Array.prototype.sort` is free to leave such a list in any
+ * arrangement, so `latest` could resolve to an older Artifact than one sitting
+ * beside it, silently and differently on different engines. A resolution rule
+ * that reads the directory has to be able to say which names it is willing to
+ * read.
+ */
+const VERSION_FILE = /^\d+\.\d+\.\d+$/
+
+/**
+ * Newest first. Numeric per component, so `1.10.0` beats `1.9.0`.
+ *
+ * Total by construction: it only ever sees names `VERSION_FILE` admitted, and it
+ * still falls back to a string comparison rather than returning `NaN` if it is
+ * ever handed something else. A sort is one of the few places where being wrong
+ * is worse than throwing, because nothing downstream can tell.
+ */
 const byVersionDescending = (left: string, right: string): number => {
   const l = left.split(".").map(Number)
   const r = right.split(".").map(Number)
   for (let index = 0; index < Math.max(l.length, r.length); index += 1) {
-    const difference = (r[index] ?? 0) - (l[index] ?? 0)
-    if (difference !== 0) return difference
+    const here = l[index] ?? 0
+    const there = r[index] ?? 0
+    if (!Number.isFinite(here) || !Number.isFinite(there)) {
+      return here === there ? 0 : right.localeCompare(left)
+    }
+    if (there !== here) return there - here
   }
   return 0
 }
 
+/**
+ * Every stored version of one Capability, newest first.
+ *
+ * A `.yaml` file whose name is not a `MAJOR.MINOR.PATCH` version is not a
+ * version of this capability and is not listed. Refusing it here is what keeps
+ * the ordering meaningful; `loadArtifact` still accepts an explicit `version`
+ * argument, so nothing becomes unreadable, only unresolvable as `latest`.
+ */
 export const listVersions = (
   directory: string,
   capability: string
@@ -49,6 +82,7 @@ export const listVersions = (
     return readdirSync(join(directory, capability))
       .filter((name) => name.endsWith(".yaml"))
       .map((name) => name.slice(0, -".yaml".length))
+      .filter((version) => VERSION_FILE.test(version))
       .sort(byVersionDescending)
   } catch {
     return []

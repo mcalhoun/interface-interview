@@ -161,7 +161,13 @@ import {
   consultAssist,
   proposableOutcomes
 } from "./assist.ts"
-import { type CheckpointOutcome, type StepReadings, evaluate, resolveValue } from "./checkpoint.ts"
+import {
+  type CheckpointOutcome,
+  type StepReadings,
+  assertionsOf,
+  evaluate,
+  resolveValue
+} from "./checkpoint.ts"
 import { chooseItem } from "./selection.ts"
 import {
   type RecoveryBlocked,
@@ -365,16 +371,26 @@ export const replayCapability = (
      * same read it was permitted, and asking again on every hundred-millisecond
      * tick would bury the record under duplicates without deciding anything new.
      *
-     * **The invariant to keep.** Every assertion kind that calls `read` must be
-     * one this loop authorises. Today that is `targetReads` and only `targetReads`.
-     * A later ticket adding an assertion that reads a control has to add it here
-     * as well, or that read reaches the adapter unjudged.
+     * **Two invariants to keep, and they are different.**
+     *
+     * *Every assertion kind that calls `read` must be one this loop authorises.*
+     * Today that is `targetReads` and only `targetReads`. A later ticket adding
+     * an assertion that reads a control has to add it here as well, or that read
+     * reaches the adapter unjudged.
+     *
+     * *Every place a Checkpoint keeps assertions must reach this loop.* Callers
+     * pass `assertionsOf(checkpoint)`, which is `expect` **and** the `when` of
+     * every declared outcome branch. `evaluate` puts a branch's conditions to the
+     * screen through the same `context.read` as `expect`, so authorising only
+     * `expect` left a branch's `targetReads` reaching `surface.extract` with no
+     * `policy.check` in front of it and no deny path — ticket 07's bypass,
+     * reopened one level in. The set lives in `checkpoint.ts` beside `evaluate`
+     * so the two cannot drift.
      *
      * The assertions are a parameter rather than being read off the Step, because
      * a Recoverable Condition's `detect` list is made of the same Assertions and
      * is evaluated against the same live screen. A detection that read a control
-     * outside this gate would be the same bypass ticket 07 closed, reopened one
-     * rung lower.
+     * outside this gate would be the same bypass, reopened one rung lower.
      */
     const authorisedReader = (
       step: Step,
@@ -505,7 +521,7 @@ export const replayCapability = (
          */
         const verify = (page: string): Effect.Effect<CheckpointOutcome, StepProblem> =>
           Effect.gen(function* () {
-            const readTarget = yield* authorisedReader(step, page, step.checkpoint.expect)
+            const readTarget = yield* authorisedReader(step, page, assertionsOf(step.checkpoint))
             return yield* evaluate(
               { surface, inputs, readings, read: readTarget },
               step.checkpoint
@@ -1039,7 +1055,7 @@ export const replayCapability = (
       ): Effect.Effect<CheckpointOutcome, RecoveryBlocked> =>
         Effect.gen(function* () {
           const at = yield* surface.observe
-          const readTarget = yield* authorisedReader(step, at.url, checkpoint.expect)
+          const readTarget = yield* authorisedReader(step, at.url, assertionsOf(checkpoint))
           return yield* evaluate({ surface, inputs, readings, read: readTarget }, checkpoint)
         })
 

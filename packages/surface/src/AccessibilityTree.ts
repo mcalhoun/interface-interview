@@ -80,14 +80,41 @@ const readLines = (yaml: string): ReadonlyArray<Line> =>
     .filter((line) => line.trim() !== "")
     .map((line) => ({ indent: line.length - line.trimStart().length, body: line.trimStart() }))
 
-/** Reads a double-quoted scalar starting at `start`, honouring backslash escapes. */
+/** What a backslash escape stands for. Shared by YAML and by `JSON.stringify`. */
+const ESCAPES: Readonly<Record<string, string>> = {
+  n: "\n",
+  t: "\t",
+  r: "\r",
+  b: "\b",
+  f: "\f",
+  "0": "\0"
+}
+
+/**
+ * Reads a double-quoted scalar starting at `start`, honouring backslash escapes.
+ *
+ * The escapes are decoded rather than merely skipped over, which matters in both
+ * directions. Playwright's snapshot writer emits a name containing a newline as
+ * `\n`, and `formatAccessibilityTree` writes one back with `JSON.stringify` —
+ * the two agree on this alphabet, so treating `\n` as a literal `n` would both
+ * misread a real snapshot and break the round trip.
+ */
 const readQuoted = (source: string, start: number): { value: string; end: number } => {
   let value = ""
   let index = start + 1
   while (index < source.length) {
     const char = source[index]!
     if (char === "\\" && index + 1 < source.length) {
-      value += source[index + 1]!
+      const escaped = source[index + 1]!
+      if (escaped === "u" && index + 5 < source.length + 1) {
+        const code = source.slice(index + 2, index + 6)
+        if (/^[0-9a-fA-F]{4}$/.test(code)) {
+          value += String.fromCharCode(parseInt(code, 16))
+          index += 6
+          continue
+        }
+      }
+      value += ESCAPES[escaped] ?? escaped
       index += 2
       continue
     }
@@ -126,6 +153,16 @@ interface Head {
   readonly role: string
   readonly name: string | undefined
   readonly ref: string | undefined
+  /**
+   * The frame this node is the boundary of, from a `[frame=...]` tag.
+   *
+   * Playwright never writes one — `annotateFrames` puts it on afterwards from
+   * the browser's frame list. It is read back here so that
+   * `formatAccessibilityTree` stays a fixed point over a tree that has frames in
+   * it. Without this, re-parsing a rendered tree turned the frame name into an
+   * ordinary property and the next render moved it onto a line of its own.
+   */
+  readonly frame: string | undefined
   readonly properties: Record<string, string>
 }
 
@@ -135,6 +172,7 @@ const parseHead = (head: string): Head => {
   let index = role.length
   let name: string | undefined
   let ref: string | undefined
+  let frame: string | undefined
   const properties: Record<string, string> = {}
 
   while (index < head.length) {
@@ -156,6 +194,7 @@ const parseHead = (head: string): Head => {
       const key = equals === -1 ? attribute : attribute.slice(0, equals)
       const attributeValue = equals === -1 ? "true" : attribute.slice(equals + 1)
       if (key === "ref") ref = attributeValue
+      else if (key === "frame") frame = attributeValue
       else properties[key] = attributeValue
       index = close === -1 ? head.length : close + 1
       continue
@@ -163,7 +202,7 @@ const parseHead = (head: string): Head => {
     index += 1
   }
 
-  return { role, name, ref, properties }
+  return { role, name, ref, frame, properties }
 }
 
 /**
@@ -259,12 +298,22 @@ export const parseAccessibilityTree = (yaml: string): ObservedNode => {
 
       let inlineValue: string | undefined
       if (value === "|" || value === "|-") {
-        // A YAML block scalar: every deeper line belongs to this node's text.
-        const blockIndent = lines[cursor]?.indent ?? indent + 2
+        // A YAML block scalar: every *deeper* line belongs to this node's text.
+        //
+        // Deeper is the load-bearing word. A block scalar's content is more
+        // indented than the line that opened it, always — so if the next line is
+        // not, this block has no content and the node's text is empty. Taking
+        // the next line's indent unconditionally is what used to break here: a
+        // `|` immediately followed by a sibling gave `blockIndent === indent`,
+        // and the `>=` loop then ate that sibling and every one after it,
+        // silently deleting the rest of the block from the tree.
+        const nextIndent = lines[cursor]?.indent
         const parts: Array<string> = []
-        while (cursor < lines.length && lines[cursor]!.indent >= blockIndent) {
-          parts.push(lines[cursor]!.body)
-          cursor += 1
+        if (nextIndent !== undefined && nextIndent > indent) {
+          while (cursor < lines.length && lines[cursor]!.indent >= nextIndent) {
+            parts.push(lines[cursor]!.body)
+            cursor += 1
+          }
         }
         inlineValue = parts.join(" ")
       } else if (value !== undefined && value !== "") {
@@ -280,6 +329,7 @@ export const parseAccessibilityTree = (yaml: string): ObservedNode => {
         name: parsed.name,
         value: inlineValue,
         ref: parsed.ref,
+        frame: parsed.frame,
         properties: { ...parsed.properties, ...block.ownProperties },
         children: block.nodes
       })
@@ -333,9 +383,39 @@ export const withoutRefs = (node: ObservedNode): AccessibilityNode => ({
   children: node.children.map(withoutRefs)
 })
 
+/**
+ * Whether the parser reads this text back as itself when it is written bare.
+ *
+ * The renderer asks the reader rather than carrying a second, hand-maintained
+ * copy of the grammar, because the two drifting apart is exactly the defect this
+ * function exists to prevent. `formatAccessibilityTree` has to be a fixed point:
+ * Discovery's stuck detection hashes rendered snapshots, and a tree that renders
+ * to something parsing back as a *different* tree makes that hash mean nothing.
+ *
+ * Four ways a bare value fails to survive, all of them silently:
+ *
+ *   - it opens with `"` or `'`, so `unquote` reads a quoted scalar and drops
+ *     whatever followed the closing quote — `"hello" world` comes back `hello`;
+ *   - it is `|` or `|-`, which `parseBlock` reads as a block scalar header
+ *     rather than as text;
+ *   - it contains a `:`, which `splitHead` may take as the head separator;
+ *   - it has leading or trailing whitespace, which `readLines` and the
+ *     `.trim()` in `splitHead` remove.
+ *
+ * Anything that fails is emitted with `JSON.stringify`, whose escapes `readQuoted`
+ * decodes.
+ */
+const readsBackBare = (text: string): boolean =>
+  text !== "" &&
+  text !== "|" &&
+  text !== "|-" &&
+  text === text.trim() &&
+  !text.includes(":") &&
+  unquote(text) === text
+
 const renderValue = (value: string): string => {
   const flat = value.replace(/\s+/g, " ").trim()
-  return /^\s|\s$|:/.test(value) || flat === "" ? JSON.stringify(flat) : flat
+  return readsBackBare(flat) ? flat : JSON.stringify(flat)
 }
 
 /** Renders a tree back to the YAML shape a model or an operator reads. */

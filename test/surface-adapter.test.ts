@@ -16,6 +16,7 @@ import { Effect } from "effect"
 import { expect } from "vitest"
 import { serve } from "@cua/legacy-core"
 import {
+  type AccessibilityNode,
   type Target,
   formatAccessibilityTree,
   parseAccessibilityTree,
@@ -271,15 +272,150 @@ it.live("navigate reaches a page and reports what is there", () =>
 )
 
 it.live("the rendered accessibility tree round-trips, so a snapshot hash is stable", () =>
-  withSurface("/", (surface) =>
-    Effect.gen(function* () {
-      const state = yield* surface.observe
+  Effect.gen(function* () {
+    const core = yield* serve({ port: 0 })
+    const layer = playwrightSurface({ startUrl: core.origin + "/" })
+    yield* Effect.gen(function* () {
+      const surface = yield* SurfaceAdapter
 
       // Discovery's stuck detection hashes normalised snapshots. That only works
       // if rendering the tree is a fixed point, so pin it here rather than
       // discover it later as a loop that never terminates.
-      const reparsed = formatAccessibilityTree(parseAccessibilityTree(state.accessibility))
-      expect(reparsed).toBe(state.accessibility)
-    })
+      //
+      // Every screen the system drives, not just the entry page: the frames
+      // fixture is the one that carries `[frame=...]` tags, and Account Detail
+      // is the one whose iframe contents are inlined. A page-shaped claim is
+      // only as strong as the pages it was checked on.
+      for (const path of [
+        "/",
+        "/member?memberNumber=12345",
+        `/account?memberNumber=12345&accountNumber=${SAVINGS}`,
+        "/fixtures/nested-tables",
+        "/fixtures/duplicate-labels",
+        "/fixtures/frames"
+      ]) {
+        const state = yield* surface.navigate(core.origin + path)
+        const reparsed = formatAccessibilityTree(parseAccessibilityTree(state.accessibility))
+        expect(reparsed, `${path} does not render to a fixed point`).toBe(state.accessibility)
+      }
+    }).pipe(Effect.provide(layer))
+  }).pipe(Effect.scoped)
+)
+
+/**
+ * The same fixed-point claim, off the pages Heritage Core happens to render.
+ *
+ * Every string here is something a screen could put in a cell, and every one of
+ * them is a way the renderer and the parser could disagree. Two of these were
+ * genuine defects: a value opening with a quote came back truncated at the
+ * closing quote (`"hello" world` reparsed as `hello`), and a value that was
+ * exactly `|` reparsed as a block scalar header rather than as text. Both are
+ * silent — the tree simply loses a node's text — which is why the property is
+ * checked against adversarial input rather than against six known screens.
+ */
+it("rendering a tree and reading it back is a fixed point, whatever the text is", () => {
+  const awkward = [
+    '"hello" world',
+    "'tis the season",
+    "|",
+    "|-",
+    ">",
+    "Balance: $4,182.55",
+    "  padded  ",
+    "[ref=e31]",
+    "back \\ slash",
+    "# not a comment",
+    "line\nbreak",
+    "- dash",
+    "&anchor",
+    ""
+  ]
+
+  const tree: AccessibilityNode = {
+    role: "document",
+    properties: {},
+    children: [
+      ...awkward.map(
+        (text): AccessibilityNode => ({
+          role: "cell",
+          name: text,
+          value: text,
+          properties: { url: text },
+          children: [{ role: "text", value: text, properties: {}, children: [] }]
+        })
+      ),
+      {
+        role: "iframe",
+        frame: "ledgerone",
+        properties: {},
+        children: [{ role: "cell", name: "Posted Balance", properties: {}, children: [] }]
+      }
+    ]
+  }
+
+  const rendered = formatAccessibilityTree(tree)
+  const reparsed = parseAccessibilityTree(rendered)
+
+  // The property Discovery's stuck detection depends on: rendering is stable.
+  expect(formatAccessibilityTree(reparsed)).toBe(rendered)
+
+  // And the text really survives, rather than the two sides agreeing on a loss.
+  // A name is written verbatim; a value is whitespace-normalised on the way out,
+  // so that is what comes back.
+  awkward.forEach((text, index) => {
+    const node = reparsed.children[index]!
+    const flat = text.replace(/\s+/g, " ").trim()
+    expect(node.name, `name ${JSON.stringify(text)}`).toBe(text)
+    expect(node.value ?? "", `value ${JSON.stringify(text)}`).toBe(flat)
+    expect(node.properties.url ?? "", `property ${JSON.stringify(text)}`).toBe(flat)
+    expect(node.children[0]!.value ?? "", `child ${JSON.stringify(text)}`).toBe(flat)
+  })
+
+  // A frame name is a frame name on the way back, not an ordinary property.
+  const frame = reparsed.children[awkward.length]!
+  expect(frame.frame).toBe("ledgerone")
+  expect(frame.children[0]!.name).toBe("Posted Balance")
+})
+
+/**
+ * A `|` block scalar with nothing under it used to swallow its siblings.
+ *
+ * `blockIndent` took the next line's indent unconditionally, so a header with no
+ * content read the sibling's own indent as the block's, and the `>=` loop then
+ * consumed that sibling and everything after it. The nodes did not become
+ * malformed — they disappeared, which is the shape of bug a resolution failure
+ * blames on the screen.
+ */
+it("an empty block scalar does not eat the nodes after it", () => {
+  const tree = parseAccessibilityTree(
+    ['- cell "First": |', '- cell "Second"', '- cell "Third"', "  - text: inside"].join("\n")
   )
+
+  expect(tree.children.map((child) => child.name)).toEqual(["First", "Second", "Third"])
+  expect(tree.children[0]!.value ?? "").toBe("")
+  expect(tree.children[2]!.children[0]!.value).toBe("inside")
+})
+
+it.live("the layer owns the browser, and closing its scope closes it", () =>
+  Effect.gen(function* () {
+    const core = yield* serve({ port: 0 })
+
+    // Effect 4 has no `Layer.scoped`: `Layer.effect` is typed
+    // `Layer<I, E, Exclude<R, Scope.Scope>>` and runs its effect in the layer's
+    // own scope, which is what makes `Effect.acquireRelease` inside it the right
+    // and only spelling. This is that claim as behaviour rather than as a type:
+    // the adapter is carried out of the scope that built it, and the browser it
+    // was holding is gone.
+    const surface = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* SurfaceAdapter
+        // Alive inside the scope.
+        expect((yield* adapter.observe).url).toContain(core.origin)
+        return adapter
+      }).pipe(Effect.provide(playwrightSurface({ startUrl: core.origin + "/" })))
+    )
+
+    const afterwards = yield* Effect.result(surface.observe)
+    expect(afterwards._tag).toBe("Failure")
+  }).pipe(Effect.scoped)
 )

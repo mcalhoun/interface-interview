@@ -71,10 +71,19 @@ export const noScrubbing: Scrubber = (text) => text
  * the shorter one first leaves the tail of the longer one behind in the clear.
  * Sorting by descending length removes that whole class of near-miss.
  *
- * **Percent-encoded forms too.** Heritage Core puts the member number in a query
- * string, and a value containing a space or an `&` would appear there encoded and
- * survive a literal search. The encoded spelling is added as a second needle
- * whenever it differs from the first.
+ * **Encoded forms too, and there are two of them.** Heritage Core puts values in
+ * query strings, so a value containing a space or an `&` arrives there encoded
+ * and survives a literal search. `encodeURIComponent` is one spelling; the other
+ * is `application/x-www-form-urlencoded`, which is what a browser submits a GET
+ * form as — and it differs in exactly one place, writing a space as `+` where
+ * percent-encoding writes `%20`. Every Heritage Core screen this system drives
+ * is a GET form, so that is the spelling the URL bar actually shows. Both are
+ * added as needles whenever they differ from the plain text.
+ *
+ * Today's member numbers have no spaces and the two spellings coincide for them.
+ * `operatorPassword` is the value where it already matters, and the next
+ * sensitive parameter somebody declares is not going to be checked against this
+ * list first.
  *
  * **No minimum length.** A one-character sensitive value will replace every
  * occurrence of that character in the log and make it close to unreadable. That
@@ -83,12 +92,23 @@ export const noScrubbing: Scrubber = (text) => text
  */
 export const scrubbing = (values: Iterable<SensitiveText>): Scrubber => {
   const needles: Array<{ readonly find: string; readonly replace: string }> = []
+  const seen = new Set<string>()
   for (const value of values) {
     if (value.text.length === 0) continue
     const replace = placeholderFor(value.label)
-    needles.push({ find: value.text, replace })
-    const encoded = encodeURIComponent(value.text)
-    if (encoded !== value.text) needles.push({ find: encoded, replace })
+    const percentEncoded = encodeURIComponent(value.text)
+    for (const find of [
+      value.text,
+      percentEncoded,
+      // The form-encoded spelling: identical to the percent-encoded one except
+      // that a space is `+`. This is what a GET form submission puts in the URL,
+      // and therefore what the accessibility snapshot's `url` carries.
+      percentEncoded.replaceAll("%20", "+")
+    ]) {
+      if (seen.has(find)) continue
+      seen.add(find)
+      needles.push({ find, replace })
+    }
   }
   needles.sort((left, right) => right.find.length - left.find.length)
 

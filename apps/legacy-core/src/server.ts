@@ -43,6 +43,10 @@ export interface LegacyCore {
   readonly pageRequests: () => number
 }
 
+/** The port a URL is on, filling in the scheme's default when it names none. */
+const portFromUrl = (url: URL): number =>
+  url.port === "" ? (url.protocol === "https:" ? 443 : 80) : Number(url.port)
+
 export const serve = (
   options: LegacyCoreOptions = {}
 ): Effect.Effect<LegacyCore, never, Scope> =>
@@ -67,9 +71,12 @@ export const serve = (
     Effect.map(({ server, state, tenant }) => ({
       origin: server.url.origin,
       tenant,
-      // `server.port` is optional in Bun's types because a server can be bound to
-      // a unix socket; this one never is, so read the port back off the URL.
-      port: Number(server.url.port),
+      // `server.port` is optional in Bun's types because a server can be bound
+      // to a unix socket; this one never is, so it is always there and it is the
+      // number the OS actually assigned. The URL is only a fallback, and a poor
+      // one: `URL.port` is the empty string when the port is the default for the
+      // scheme, so a server bound to port 80 reported itself as port 0.
+      port: server.port ?? portFromUrl(server.url),
       pageRequests: state.pageRequests
     }))
   )

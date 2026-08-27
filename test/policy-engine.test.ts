@@ -299,6 +299,38 @@ describe("origin matching", () => {
     expect(acting.verdict).toBe("deny")
     expect(acting.reason).toMatch(/no page is open/)
   })
+
+  it("an action that names no page at all is denied for the same reason", () => {
+    // `page` is optional in `ActionRequest` — it is genuinely absent before
+    // anything is open. Optional must not mean the origin guard is opt-in: a
+    // caller that simply left the field out would otherwise be a cheaper way
+    // past the allowlist than one that supplied an off-allowlist URL, and the
+    // weakest call site would silently set the standard for all of them.
+    const policy = compiled({
+      actions: [
+        { type: "navigate" },
+        { type: "extract" },
+        { type: "fill", because: justification },
+        { type: "click", because: justification }
+      ]
+    })
+
+    for (const type of ["fill", "click", "extract"]) {
+      const verdict = decide(policy, asking(type))
+      expect(verdict.verdict, `${type} with no page`).toBe("deny")
+      expect(verdict.reason).toMatch(/names no page/)
+      expect(verdict.origin).toBeUndefined()
+    }
+
+    // Navigation keeps its exception: it is the one thing worth doing from
+    // nowhere, and where it would go is judged on its own.
+    expect(decide(policy, asking("navigate", { subject: "http://127.0.0.1:4173/" })).verdict).toBe(
+      "allow"
+    )
+    expect(decide(policy, asking("navigate", { subject: "http://elsewhere.test/" })).verdict).toBe(
+      "deny"
+    )
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -380,6 +412,73 @@ describe("a policy violation stops the run", () => {
       const check = outcome.events.find((event) => event.kind === "policy.check")
       expect(check && "verdict" in check ? check.verdict : undefined).toBe("deny")
       expect(check && "policy" in check ? check.policy : undefined).toBe("heritage-core-default")
+    })
+  )
+
+  it.live("a navigate path supplied as a parameter cannot leave the allowlist", () =>
+    Effect.gen(function* () {
+      // An Artifact's `navigate` takes a *path*, resolved against the tenant's
+      // base URL with `new URL(path, baseUrl)` — and an absolute URL wins over a
+      // base, so a `{ from: parameter }` path is somewhere a caller could put a
+      // whole foreign origin. Nothing in the engine special-cases that, and
+      // nothing needs to: Policy judges a navigate against the origin it would
+      // actually reach, which is what `new URL` just computed. This is that
+      // argument as a run rather than as a claim.
+      const stored = shippedArtifact()
+      const [first, ...rest] = stored.steps
+      const artifact: CapabilityArtifact = {
+        ...stored,
+        inputs: {
+          ...stored.inputs,
+          destination: {
+            type: "string",
+            description: "where the first step opens, supplied by the caller",
+            required: true
+          }
+        },
+        steps: [
+          {
+            ...first!,
+            action: { type: "navigate", path: { from: "parameter", name: "destination" } }
+          },
+          ...rest
+        ]
+      }
+
+      const outcome = yield* replay({
+        artifact,
+        // TEST-NET-2, absolute. The base URL the run was given is the allowed
+        // in-process fixture; this path ignores it entirely.
+        inputs: { memberId: "12345", destination: "http://198.51.100.7:8080/member" }
+      })
+
+      expect(outcome.result.result).toBe("failure")
+      if (outcome.result.result !== "failure") return
+      expect(outcome.result.failure.reason).toBe("policy_violation")
+      expect(outcome.result.failure.stepId).toBe("open-member-search")
+      expect(outcome.result.failure.observed).toMatch(
+        /198\.51\.100\.7:8080 is not an allowed origin/
+      )
+
+      // Nothing was opened, so nothing is on that origin to be acted on next.
+      expect(outcome.events.filter((event) => event.kind === "action")).toEqual([])
+
+      // And Policy was asked about the resolved destination, not about the path
+      // as written — which is the reason no separate check is needed.
+      //
+      // The subject reads as the placeholder because the evidence scrubber
+      // replaces the parameter's value wherever it appears, and it replaces the
+      // whole literal. That it matched at all is the proof: the subject Policy
+      // judged was character-for-character the URL the caller supplied. The
+      // verdict's own prose keeps the origin, which the scrubber has no needle
+      // for.
+      const check = outcome.events.find((event) => event.kind === "policy.check")
+      expect(check && "subject" in check ? check.subject : undefined).toBe(
+        "[redacted:destination]"
+      )
+      expect(check && "reason" in check ? check.reason : undefined).toMatch(
+        /198\.51\.100\.7:8080 is not an allowed origin/
+      )
     })
   )
 
@@ -558,6 +657,86 @@ describe("the chokepoint", () => {
         event.kind === "policy.check" ? [`${event.action}:${event.verdict}`] : []
       )
       expect(verdicts).toEqual(["navigate:allow", "fill:allow", "extract:deny"])
+    })
+  )
+
+  it.live("gates the reads an outcome branch makes, not only the ones in expect", () =>
+    Effect.gen(function* () {
+      // The same bypass, one level in. `orOutcome[].when` takes ordinary
+      // Assertions, so a `targetReads` can sit in a branch — and `evaluate` puts
+      // a branch's conditions to the screen through exactly the `context.read`
+      // that `expect` uses. Authorising only `expect` left that read reaching
+      // `surface.extract` with no `policy.check` in front of it and no deny
+      // path, which is the one thing a chokepoint cannot have. Measured before
+      // the fix: `{ navigate: 1, extract: 1 }` on the adapter, and a single
+      // `navigate:allow` verdict in the whole log.
+      //
+      // `expect` here is written so it cannot hold, because that is what makes
+      // the branch actually get evaluated.
+      const stored = shippedArtifact()
+      const [first, ...rest] = stored.steps
+      const tally: Record<string, number> = {}
+      const outcome = yield* replay({
+        artifact: {
+          ...stored,
+          steps: [
+            {
+              ...first!,
+              checkpoint: {
+                description: "a checkpoint whose intended state never arrives",
+                withinMillis: 0,
+                expect: [{ assert: "textPresent", text: "No Such Text On Any Screen" }],
+                orOutcome: [
+                  {
+                    code: "MEMBER_NOT_FOUND",
+                    when: [
+                      {
+                        assert: "targetReads",
+                        target: {
+                          role: "textbox",
+                          name: "Member Number",
+                          within: { name: "Member Number Search" },
+                          strategy: "scoped-accessible-name",
+                          robustness:
+                            "The search panel's own number field, named the way a screen " +
+                            "reader would announce it. Written here only to put a live read " +
+                            "inside an outcome branch, which is the position this test exists " +
+                            "to prove is gated."
+                        },
+                        equals: { from: "constant", text: "" }
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            ...rest
+          ]
+        },
+        inputs: { memberId: "12345" },
+        policy: compiled({
+          policy: "no-reading",
+          actions: [
+            { type: "navigate" },
+            { type: "fill", because: justification },
+            { type: "click", because: justification }
+          ]
+        }),
+        surface: countingSurface(tally)
+      })
+
+      expect(outcome.result.result).toBe("failure")
+      if (outcome.result.result !== "failure") return
+      expect(outcome.result.failure.reason).toBe("policy_violation")
+      expect(outcome.result.failure.stepId).toBe("open-member-search")
+
+      // Nothing read the screen. Without the gate this is 1.
+      expect(tally["extract"]).toBeUndefined()
+
+      const verdicts = outcome.events.flatMap((event) =>
+        event.kind === "policy.check" ? [`${event.action}:${event.verdict}`] : []
+      )
+      expect(verdicts).toEqual(["navigate:allow", "extract:deny"])
     })
   )
 })

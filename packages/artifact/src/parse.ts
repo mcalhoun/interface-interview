@@ -19,9 +19,10 @@
  */
 
 import { Result, Schema } from "effect"
-import { noMatchCode, noMatchOutcome } from "./Action.ts"
+import { type Action, noMatchCode, noMatchOutcome } from "./Action.ts"
 import { CapabilityArtifact } from "./CapabilityArtifact.ts"
-import type { Assertion } from "./Checkpoint.ts"
+import type { Assertion, Checkpoint } from "./Checkpoint.ts"
+import type { CapabilityTarget } from "./Target.ts"
 import type { ValueRef } from "./Value.ts"
 import { toYaml } from "./yaml.ts"
 
@@ -97,6 +98,24 @@ export const formatArtifact = (artifact: CapabilityArtifact): string =>
  * run typed, and refuse to write an Artifact that returns anything. It is
  * deliberately not part of `parseArtifact`, because reading a stored document is
  * not the moment you know what the runtime values were.
+ *
+ * ## Every position, not a list somebody remembered to extend
+ *
+ * The walk covers *every* place the document holds fixed text: a `ValueRef`
+ * constant, an assertion's literal, and a Target's own matching words. It covers
+ * them wherever they appear — a Step's Action and Checkpoint, a Checkpoint's
+ * outcome branches, and a Recoverable Condition's `detect` and `remedy`.
+ *
+ * The branches and the recovery rules matter more than they sound. Both are
+ * written by an Amendment *after* a run met the state, from what that run saw on
+ * screen — which is precisely the moment a member number gets copied into a
+ * `textPresent`. A scanner that walked only `expect` would have been blind to the
+ * documents most likely to carry one.
+ *
+ * A Target's `name`, `label`, `textNear` and scope are fixed text too: they are
+ * the words the Artifact will use to find a control on every future run. A
+ * discovered Target named after what one member's screen happened to say is the
+ * same mistake as a baked-in constant, wearing a different field name.
  */
 export const bakedInLiterals = (
   artifact: CapabilityArtifact,
@@ -118,18 +137,79 @@ export const bakedInLiterals = (
     if (ref.from === "constant") check(`${where}'s constant`, ref.text)
   }
 
+  /** The words a Target uses to find its control, every future run. */
+  const checkTarget = (where: string, target: CapabilityTarget): void => {
+    if (target.name !== undefined) check(`${where}'s name`, target.name)
+    if (target.label !== undefined) check(`${where}'s label`, target.label)
+    if (target.textNear !== undefined) check(`${where}'s textNear`, target.textNear)
+    if (target.within?.name !== undefined) check(`${where}'s scope`, target.within.name)
+  }
+
+  const checkAssertion = (where: string, assertion: Assertion): void => {
+    switch (assertion.assert) {
+      case "textPresent":
+      case "textAbsent":
+        check(where, assertion.text)
+        return
+      case "targetPresent":
+      case "targetAbsent":
+        checkTarget(where, assertion.target)
+        return
+      case "targetReads":
+        checkTarget(where, assertion.target)
+        checkValue(where, assertion.equals)
+        return
+      case "stepRead":
+        check(`${where}'s pattern`, assertion.matches)
+        return
+    }
+  }
+
+  const checkAction = (where: string, action: Action): void => {
+    switch (action.type) {
+      case "navigate":
+        checkValue(`${where}'s path`, action.path)
+        return
+      case "fill":
+        checkTarget(`${where}'s target`, action.target)
+        checkValue(`${where}'s value`, action.value)
+        return
+      case "click":
+      case "extract":
+        checkTarget(`${where}'s target`, action.target)
+        return
+      case "selectFromList":
+        checkValue(`${where}'s match`, action.match.against)
+        if (action.list.within?.name !== undefined) {
+          check(`${where}'s list scope`, action.list.within.name)
+        }
+        return
+    }
+  }
+
+  const checkCheckpoint = (where: string, checkpoint: Checkpoint): void => {
+    checkpoint.expect.forEach((assertion, index) =>
+      checkAssertion(`${where}'s checkpoint assertion ${index}`, assertion)
+    )
+    for (const branch of checkpoint.orOutcome ?? []) {
+      branch.when.forEach((assertion, index) =>
+        checkAssertion(`${where}'s ${branch.code} branch condition ${index}`, assertion)
+      )
+    }
+  }
+
   for (const step of artifact.steps) {
     const where = `step ${step.id}`
-    if (step.action.type === "navigate") checkValue(`${where}'s path`, step.action.path)
-    if (step.action.type === "fill") checkValue(`${where}'s value`, step.action.value)
-    step.checkpoint.expect.forEach((assertion, index) => {
-      const at = `${where}'s checkpoint assertion ${index}`
-      if (assertion.assert === "textPresent" || assertion.assert === "textAbsent") {
-        check(at, assertion.text)
-      }
-      if (assertion.assert === "targetReads") checkValue(at, assertion.equals)
-      if (assertion.assert === "stepRead") check(`${at}'s pattern`, assertion.matches)
-    })
+    checkAction(where, step.action)
+    checkCheckpoint(where, step.checkpoint)
+  }
+
+  for (const rule of artifact.recoverable ?? []) {
+    const where = `recoverable condition ${rule.condition}`
+    rule.detect.forEach((assertion, index) =>
+      checkAssertion(`${where}'s detect condition ${index}`, assertion)
+    )
+    rule.remedy.forEach((remedy, index) => checkAction(`${where}'s remedy ${index}`, remedy.action))
   }
 
   return found
@@ -313,6 +393,58 @@ const referentialProblems = (artifact: CapabilityArtifact): ReadonlyArray<string
       }
       checkValue(at, ref)
     })
+  }
+
+  // Regular expressions, and the enum that can never be satisfied.
+  //
+  // `pattern` and `stepRead.matches` are plain strings in the schema, so an
+  // invalid source decodes perfectly and then throws at the worst possible
+  // moment. `prepareInputs` is a pure `Result` whose whole guarantee is that a
+  // bad call costs nothing — a `SyntaxError` thrown out of it is not a `Result`
+  // and no caller is written to catch one. Inside a Checkpoint it is worse: the
+  // throw becomes a defect on a channel typed `never`, so it bypasses replay's
+  // failure reporting, and the run ends without its final Evidence event. Both
+  // are cheap to refuse when the document is read, which is the only moment
+  // that costs nothing at all.
+  const checkRegex = (where: string, source: string): void => {
+    try {
+      RegExp(source)
+    } catch (cause) {
+      problems.push(`${where} is not a valid regular expression: ${cause}`)
+    }
+  }
+
+  for (const [name, declaration] of Object.entries(artifact.inputs)) {
+    if (declaration.pattern !== undefined) {
+      checkRegex(`input ${name}'s pattern`, declaration.pattern)
+    }
+    // An enum with no values parses, and then rejects everything: `values` is the
+    // set legality is decided against, so an empty one makes the capability
+    // uncallable while looking like a declaration. Discovery reads these off the
+    // screen, and a screen that offered nothing is a discovery that found no
+    // list, not a parameter with no legal values.
+    if (declaration.type === "enum" && (declaration.values ?? []).length === 0) {
+      problems.push(
+        `input ${name} is an enum and declares no values, so no value a caller could pass ` +
+          `would be legal`
+      )
+    }
+  }
+
+  const checkPatterns = (where: string, assertions: ReadonlyArray<Assertion>): void => {
+    assertions.forEach((assertion, index) => {
+      if (assertion.assert === "stepRead") checkRegex(`${where} ${index}`, assertion.matches)
+    })
+  }
+
+  for (const step of artifact.steps) {
+    checkPatterns(`step ${step.id}'s checkpoint assertion`, step.checkpoint.expect)
+    for (const branch of step.checkpoint.orOutcome ?? []) {
+      checkPatterns(`step ${step.id}'s ${branch.code} branch condition`, branch.when)
+    }
+  }
+  for (const rule of artifact.recoverable ?? []) {
+    checkPatterns(`recoverable condition ${rule.condition}'s detect condition`, rule.detect)
   }
 
   for (const [name, output] of Object.entries(artifact.outputs)) {
