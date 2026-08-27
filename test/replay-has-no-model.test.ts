@@ -32,11 +32,16 @@ import { it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import { expect } from "vitest"
 import { Evidence, evidenceFiles } from "@cua/evidence"
-import { Policy, permissivePolicy } from "@cua/policy"
+import { Policy, policyFrom } from "@cua/policy"
 import { Session, automationOwnedSession } from "@cua/session"
 import { SurfaceAdapter, playwrightSurface } from "@cua/surface"
 import { replayCapability } from "@cua/replay"
-import { ACCOUNT_BALANCE, replay, shippedArtifact } from "./support/replay-harness.ts"
+import {
+  ACCOUNT_BALANCE,
+  replay,
+  shippedArtifact,
+  shippedPolicy
+} from "./support/replay-harness.ts"
 
 const REPLAY_SOURCE = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -67,7 +72,7 @@ it("the replay engine requires exactly the surface, policy, evidence and session
 it("the replay layer composes with no language model in it", () => {
   const services = Layer.mergeAll(
     playwrightSurface({}),
-    permissivePolicy,
+    policyFrom(shippedPolicy()),
     evidenceFiles({ root: "/tmp/cua-unused", runId: "unused", sessionId: "unused" }),
     automationOwnedSession("unused")
   )
@@ -139,10 +144,28 @@ it("every surface action in the engine goes through the policy chokepoint", () =
     .replace(/(^|[^:])\/\/.*$/gm, "$1")
 
   // Every acting call on the adapter must sit inside an `authorised(...)` block.
-  // Counting them is crude and that is the point: a fifth one appearing outside
+  // Counting them is crude and that is the point: another one appearing outside
   // the chokepoint changes this number and fails here (SPEC user story 57).
+  //
+  // Five, not four. Ticket 07 added the fifth: a Checkpoint's `targetReads`
+  // assertion reads a live control, which is an `extract`, and it used to reach
+  // the adapter from `checkpoint.ts` without passing Policy. It now runs from
+  // `authorisedReader`, which puts every read a Checkpoint declares through the
+  // same gate before the function that performs them is built. `checkpoint.ts`
+  // has none left, which the next assertion pins.
   const acting = [...engine.matchAll(/surface\s*\.\s*(navigate|click|fill|extract)\s*\(/g)]
-  expect(acting).toHaveLength(4)
+  expect(acting).toHaveLength(5)
+
+  // And the engine is the only file in the package that touches an acting method.
+  // Checkpoint evaluation takes `observe` and `resolveTarget` off the adapter and
+  // nothing else — its `EvaluationContext` has no other methods to reach for.
+  for (const { name, text } of readdirSync(REPLAY_SOURCE)
+    .filter((file) => file.endsWith(".ts") && file !== "engine.ts")
+    .map((file) => ({ name: file, text: readFileSync(join(REPLAY_SOURCE, file), "utf8") }))) {
+    expect(text, `${name} acts on the surface outside the policy gate`).not.toMatch(
+      /surface\s*\.\s*(navigate|click|fill|extract)\s*\(/
+    )
+  }
 
   const authorisedBlocks = [...engine.matchAll(/authorised\s*\(/g)]
   expect(authorisedBlocks.length).toBeGreaterThan(0)

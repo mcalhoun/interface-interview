@@ -1,0 +1,77 @@
+# Policy — the statement of what this system may do.
+#
+# Read this file instead of the code. Everything the automation is permitted to
+# do is on this page: which origins it may touch, which actions it may take, and,
+# for anything that cannot be undone, the reason somebody accepted the risk.
+#
+# Two things are true of this document by construction, and both are enforced
+# when it loads rather than described here and hoped for:
+#
+#   * Nothing is permitted that is not written down. There is no allow-all, and
+#     an action type absent from `actions:` is denied. A missing or malformed
+#     policy file stops the run — there is no unrestricted fallback.
+#   * A risky action cannot be permitted silently. `click` and `fill` can commit
+#     a change that cannot be undone, so each needs a `because:` on its entry.
+#     Delete the reason and this policy no longer loads.
+#
+# What is NOT here, deliberately: rules about individual paths within an allowed
+# origin, rate limits, and time windows. The origin allowlist constrains where
+# the browser may go, not which endpoint inside it. See the note beside the risk
+# table in packages/policy/src/Policy.ts.
+
+policy: heritage-core-default
+
+description: >
+  The operating policy for unattended automation against Heritage Core Member
+  Services. It permits the whole action vocabulary, because a capability that
+  reads a balance still has to type a member number into a search box and press
+  Search, and it confines every one of those actions to a Heritage Core
+  installation.
+
+  This is the policy `bun run replay` uses when no --policy is given. For a
+  capability that genuinely only reads, prefer `read-only`, which cannot type or
+  press anything at all.
+
+# Every origin an action may happen on, or navigate to. Patterns, not URLs: `*`
+# in the port position matches any port, and a `*.` host prefix matches any host
+# under that domain. Matching is done on the scheme, host and port that URL
+# parsing produced, never on the text of a URL, so a link like
+# http://elsewhere.example/?next=http://127.0.0.1:4173 does not match anything
+# here.
+origins:
+  # The demo fixture. Heritage Core starts in-process on an ephemeral port, so
+  # the port cannot be pinned. Both spellings of loopback are listed because
+  # which one appears depends on how the fixture was started.
+  - http://127.0.0.1:*
+  - http://localhost:*
+  # A tenant installation, in the shape a real one would take. A second tenant
+  # is one more line here and no change to any Capability Artifact, because an
+  # Artifact records a path and never an origin.
+  - https://mss.heritagecu.example
+
+actions:
+  # The reading half of the vocabulary. Neither commits anything, and re-running
+  # either leaves the core banking system exactly as it was.
+  - type: navigate
+  - type: extract
+
+  # The writing half. Permitted here, with reasons, because the capabilities
+  # this deployment runs cannot work without them.
+  - type: fill
+    because: >
+      Every field this deployment's capabilities fill is a search field on a
+      query form — member number, account number — and filling one commits
+      nothing on its own. It is classified risky because a value typed into the
+      wrong box is how a transfer acquires the wrong payee, and because the
+      values are member data. The control that keeps that from happening is the
+      Target robustness argument recorded against each fill in its Capability
+      Artifact, which a reviewer approves before the artifact runs.
+  - type: click
+    because: >
+      Clicking is how a search is submitted and how an account is opened from a
+      member's list, and there is no way to read a balance out of Heritage Core
+      without doing both. It is the action that actually commits, so the
+      capabilities approved for unattended replay are read-only ones: nothing in
+      artifacts/ presses a control that posts a transaction. That is a property
+      of the approved artifacts rather than of this line, which is why the
+      artifacts are reviewed and versioned.

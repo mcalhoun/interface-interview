@@ -58,6 +58,7 @@
       "name": "@cua/policy",
       "version": "0.0.0",
       "dependencies": {
+        "@cua/artifact": "workspace:*",
         "effect": "4.0.0-rc.112",
       },
     },

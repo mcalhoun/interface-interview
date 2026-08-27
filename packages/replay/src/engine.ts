@@ -50,6 +50,7 @@ import { type ActionRequest, Policy } from "@cua/policy"
 import { Session } from "@cua/session"
 import {
   type SurfaceAdapterService,
+  type Target as SurfaceTarget,
   type TargetFailure,
   SurfaceAdapter,
   describeTarget
@@ -111,16 +112,23 @@ export const replayCapability = (
      * Action in this engine goes through here; nothing calls the adapter's
      * `navigate`, `click`, `fill` or `extract` anywhere else, and
      * `test/replay-has-no-model.test.ts` counts the call sites to keep it that way.
+     *
+     * `page` is the URL the run is on when it asks. Policy checks every Action
+     * against the origin it happens *on*, and a navigation additionally against
+     * where it goes; without the first half, a click that followed a link
+     * off-allowlist would leave everything after it unchecked (ticket 07).
      */
     const authorised = <A>(
       step: Step,
+      type: string,
       subject: string,
+      page: string | undefined,
       act: (surface: SurfaceAdapterService) => Effect.Effect<A, ReplayFailure>
     ): Effect.Effect<A, ReplayFailure | EvidenceUnwritable> =>
       Effect.gen(function* () {
         const at = { stepId: step.id, stepIntent: step.intent }
 
-        yield* session.claim(`${step.action.type} ${subject}`).pipe(
+        yield* session.claim(`${type} ${subject}`).pipe(
           Effect.catch((lost) =>
             Effect.fail<ReplayFailure>({
               reason: "control_lost",
@@ -133,10 +141,11 @@ export const replayCapability = (
         )
 
         const proposal: ActionRequest = {
-          type: step.action.type,
+          type,
           subject,
           stepId: step.id,
-          mode: "replay"
+          mode: "replay",
+          ...(page === undefined ? {} : { page })
         }
         const verdict = yield* policy.authorise(proposal)
         yield* evidence.record({
@@ -145,13 +154,16 @@ export const replayCapability = (
           action: proposal.type,
           subject,
           verdict: verdict.verdict,
-          reason: verdict.reason
+          reason: verdict.reason,
+          policy: verdict.policy,
+          risk: verdict.risk,
+          ...(verdict.origin === undefined ? {} : { origin: verdict.origin })
         })
         if (verdict.verdict === "deny") {
           return yield* Effect.fail<ReplayFailure>({
             reason: "policy_violation",
             ...at,
-            expected: `policy to permit ${proposal.type}`,
+            expected: `policy ${verdict.policy} to permit ${proposal.type}`,
             observed: verdict.reason,
             action: proposal.type,
             subject
@@ -159,6 +171,44 @@ export const replayCapability = (
         }
 
         return yield* act(surface)
+      })
+
+    /**
+     * Authorises every read a Checkpoint declares, then hands back the reader.
+     *
+     * A `targetReads` assertion reads a live control, which is an `extract` by
+     * any other name, and an `extract` the Policy engine never saw would be a
+     * second path to the adapter — the one thing a chokepoint cannot have. So the
+     * reads are put through the same gate the Step's own Action went through, and
+     * the function that performs them does not exist until the gate has allowed
+     * them all. `EvaluationContext` takes only `observe` and `resolveTarget` off
+     * the adapter, so Checkpoint evaluation has no way to construct one itself.
+     *
+     * Authorisation is per Checkpoint rather than per poll: evaluation retries the
+     * same read it was permitted, and asking again on every hundred-millisecond
+     * tick would bury the record under duplicates without deciding anything new.
+     *
+     * **The invariant to keep.** Every assertion kind that calls `read` must be
+     * one this loop authorises. Today that is `targetReads` and only `targetReads`.
+     * A later ticket adding an assertion that reads a control has to add it here
+     * as well, or that read reaches the adapter unjudged.
+     */
+    const authorisedReader = (
+      step: Step,
+      page: string
+    ): Effect.Effect<
+      (target: SurfaceTarget) => Effect.Effect<string, TargetFailure>,
+      ReplayFailure | EvidenceUnwritable
+    > =>
+      Effect.gen(function* () {
+        for (const assertion of step.checkpoint.expect) {
+          if (assertion.assert !== "targetReads") continue
+          const target = toSurfaceTarget(assertion.target)
+          yield* authorised(step, "extract", describeTarget(target), page, () =>
+            Effect.succeed(undefined)
+          )
+        }
+        return (target: SurfaceTarget) => surface.extract(target)
       })
 
     // -----------------------------------------------------------------------
@@ -192,10 +242,19 @@ export const replayCapability = (
           accessibility: before.accessibility
         })
 
-        const read = yield* performAction(step, before.url)
-        if (read !== undefined) readings.set(step.id, read)
+        const performed = yield* performAction(step, before.url)
+        if (performed.read !== undefined) readings.set(step.id, performed.read)
+        const read = performed.read
 
-        const outcome = yield* evaluate({ surface, inputs, readings }, step.checkpoint).pipe(
+        // Authorised against wherever the Action left the run, not where it
+        // started: a click that followed a link off the allowlist is exactly the
+        // case this is here to catch.
+        const readTarget = yield* authorisedReader(step, performed.url)
+
+        const outcome = yield* evaluate(
+          { surface, inputs, readings, read: readTarget },
+          step.checkpoint
+        ).pipe(
           Effect.catch((unavailable) =>
             Effect.fail(
               fail({
@@ -241,7 +300,7 @@ export const replayCapability = (
       })
 
     /**
-     * Carries out one Action and returns what it read, if it read anything.
+     * Carries out one Action, and reports what it read and where it left the run.
      *
      * A Target is resolved inside the same authorisation as the Action that uses
      * it, so a resolution can never be reused across a policy decision. It also
@@ -249,11 +308,19 @@ export const replayCapability = (
      * control, next to the strategy the Artifact declared for it — a Target that
      * starts resolving for a different reason than the recorded one is then
      * visible in the record rather than silently fine.
+     *
+     * The `url` it returns is the adapter's own report of where the Surface ended
+     * up, taken from the state each acting method returns rather than from a
+     * second observation. That is what the Step's Checkpoint reads are then
+     * authorised against.
      */
     const performAction = (
       step: Step,
       url: string
-    ): Effect.Effect<string | undefined, ReplayFailure | EvidenceUnwritable> =>
+    ): Effect.Effect<
+      { readonly read: string | undefined; readonly url: string },
+      ReplayFailure | EvidenceUnwritable
+    > =>
       Effect.gen(function* () {
         const action = step.action
         const fail = failing(step)
@@ -262,7 +329,7 @@ export const replayCapability = (
           const path = resolveValue({ inputs, readings }, action.path)
           if (path === undefined) return yield* Effect.fail(unresolvable(fail, action.path))
           const destination = new URL(path, baseUrl).toString()
-          yield* authorised(step, destination, (surface) =>
+          const opened = yield* authorised(step, "navigate", destination, url, (surface) =>
             surface.navigate(destination).pipe(
               Effect.catch((unavailable) =>
                 Effect.fail(
@@ -281,14 +348,14 @@ export const replayCapability = (
             action: "navigate",
             target: destination
           })
-          return undefined
+          return { read: undefined, url: opened.url }
         }
 
         const surfaceTarget = toSurfaceTarget(action.target)
         const described = describeTarget(surfaceTarget)
         const onTargetFailure = targetFailed(fail, action.type, described, url)
 
-        const outcome = yield* authorised(step, described, (surface) =>
+        const outcome = yield* authorised(step, action.type, described, url, (surface) =>
           Effect.gen(function* () {
             const resolution = yield* surface
               .resolveTarget(surfaceTarget)
@@ -300,17 +367,23 @@ export const replayCapability = (
                 if (value === undefined) {
                   return yield* Effect.fail(unresolvable(fail, action.value))
                 }
-                yield* surface.fill(surfaceTarget, value).pipe(Effect.catch(onTargetFailure))
-                return { resolution, read: undefined }
+                const filled = yield* surface
+                  .fill(surfaceTarget, value)
+                  .pipe(Effect.catch(onTargetFailure))
+                return { resolution, read: undefined, url: filled.url }
               }
-              case "click":
-                yield* surface.click(surfaceTarget).pipe(Effect.catch(onTargetFailure))
-                return { resolution, read: undefined }
+              case "click": {
+                const clicked = yield* surface
+                  .click(surfaceTarget)
+                  .pipe(Effect.catch(onTargetFailure))
+                return { resolution, read: undefined, url: clicked.url }
+              }
               case "extract": {
                 const read = yield* surface
                   .extract(surfaceTarget)
                   .pipe(Effect.catch(onTargetFailure))
-                return { resolution, read }
+                // An extract moves nothing, so the run is still where it was.
+                return { resolution, read, url }
               }
             }
           })
@@ -326,7 +399,7 @@ export const replayCapability = (
           rationale: outcome.resolution.rationale
         })
 
-        return outcome.read
+        return { read: outcome.read, url: outcome.url }
       })
 
     /** Builds the declared outputs from what the Steps read. */
