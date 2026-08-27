@@ -72,6 +72,7 @@ export type {
   OutputValues
 } from "./Outputs.ts"
 export {
+  currencyOf,
   describeOutputValue,
   Money as MoneySchema,
   OutputDeclaration as OutputDeclarationSchema,
@@ -89,10 +90,14 @@ export { CapabilityTarget as CapabilityTargetSchema, toSurfaceTarget } from "./T
 
 export {
   ARTIFACTS_DIRECTORY,
+  ArtifactNotWritable,
   listCapabilities,
   listVersions,
-  loadArtifact
+  loadArtifact,
+  writeArtifact
 } from "./store.ts"
+
+export { toYaml } from "./yaml.ts"
 
 export type { ValueRef } from "./Value.ts"
 export { describeValueRef, ValueRef as ValueRefSchema } from "./Value.ts"

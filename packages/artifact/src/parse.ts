@@ -22,6 +22,7 @@ import { Result, Schema } from "effect"
 import { CapabilityArtifact } from "./CapabilityArtifact.ts"
 import type { Assertion } from "./Checkpoint.ts"
 import type { ValueRef } from "./Value.ts"
+import { toYaml } from "./yaml.ts"
 
 /** The Artifact could not be read, or does not hang together. A Hard Failure. */
 export class ArtifactInvalid extends Schema.TaggedError<ArtifactInvalid>()("ArtifactInvalid", {
@@ -64,9 +65,18 @@ export const parseArtifact = (
     : Result.fail(new ArtifactInvalid({ source, problems }))
 }
 
-/** Round-trips an Artifact back to YAML, for the compiler and for schema tests. */
+/**
+ * Round-trips an Artifact back to YAML, for the compiler and for schema tests.
+ *
+ * Written with `toYaml` rather than `Bun.YAML.stringify`, which emits flow style —
+ * a whole Artifact on one line. See `yaml.ts`: an Artifact is a review document,
+ * and a document with no readable diff cannot be the thing a reviewer approves.
+ * The *reader* is still Bun's, so nothing here invents a dialect: the round trip
+ * in `test/artifact-schema.test.ts` formats every stored version, parses it back
+ * with `Bun.YAML.parse`, and requires the result to be identical.
+ */
 export const formatArtifact = (artifact: CapabilityArtifact): string =>
-  Bun.YAML.stringify(Schema.encodeSync(CapabilityArtifact)(artifact))
+  toYaml(Schema.encodeSync(CapabilityArtifact)(artifact))
 
 /**
  * Every fixed literal in the document that contains one of `values`.

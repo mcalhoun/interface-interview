@@ -20,11 +20,11 @@
  * and ticket 11 adds the writing half next to it.
  */
 
-import { readdirSync, readFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { Result } from "effect"
+import { Result, Schema } from "effect"
 import type { CapabilityArtifact } from "./CapabilityArtifact.ts"
-import { ArtifactInvalid, parseArtifact } from "./parse.ts"
+import { ArtifactInvalid, formatArtifact, parseArtifact } from "./parse.ts"
 
 /** The repository's artifact directory, relative to the workspace root. */
 export const ARTIFACTS_DIRECTORY = "artifacts"
@@ -98,6 +98,68 @@ export const loadArtifact = (
           ]
         })
       )
+}
+
+/**
+ * A version already exists, so nothing was written.
+ *
+ * Immutability is the whole reason this is an error rather than a silent
+ * overwrite. SPEC: "Immutable versioned files, one per version... Immutability
+ * makes 'reviewable before production use' demonstrable." A compiler that could
+ * replace `1.0.0` would mean the document a reviewer approved and the document
+ * that ran are only the same file by convention, and a diff between two versions
+ * would stop being evidence of anything.
+ */
+export class ArtifactNotWritable extends Schema.TaggedError<ArtifactNotWritable>()(
+  "ArtifactNotWritable",
+  { path: Schema.String, reason: Schema.String }
+) {
+  override get message(): string {
+    return `${this.path}: ${this.reason}`
+  }
+}
+
+/**
+ * Writes one version of a Capability Artifact, and refuses to write it twice.
+ *
+ * The writing half of the seam `loadArtifact` opens. Two rules, both structural:
+ *
+ *   - **An existing version is never overwritten.** A new version is a new file.
+ *   - **What is written has already been read back.** The document is formatted,
+ *     re-parsed through `parseArtifact`, and only then does the file appear — so
+ *     an Artifact that would fail to load cannot reach the store, and the compiler
+ *     cannot leave a half-valid document behind for someone to debug later.
+ *
+ * Ticket 13's Amendment is a second call to this function with a higher version,
+ * not an edit.
+ */
+export const writeArtifact = (
+  directory: string,
+  artifact: CapabilityArtifact
+): Result.Result<string, ArtifactInvalid | ArtifactNotWritable> => {
+  const path = join(directory, artifact.capability, `${artifact.version}.yaml`)
+  if (existsSync(path)) {
+    return Result.fail(
+      new ArtifactNotWritable({
+        path,
+        reason:
+          `version ${artifact.version} of ${artifact.capability} is already stored. ` +
+          `Artifacts are immutable: write a new version rather than replacing this one`
+      })
+    )
+  }
+
+  const yaml = formatArtifact(artifact)
+  const readBack = parseArtifact(path, yaml)
+  if (Result.isFailure(readBack)) return Result.fail(readBack.failure)
+
+  try {
+    mkdirSync(join(directory, artifact.capability), { recursive: true })
+    writeFileSync(path, yaml, { encoding: "utf8", flag: "wx" })
+  } catch (cause) {
+    return Result.fail(new ArtifactNotWritable({ path, reason: String(cause) }))
+  }
+  return Result.succeed(path)
 }
 
 /** Every Capability with at least one stored version. Ticket 17's catalog reads this. */

@@ -38,6 +38,7 @@
 
 import type { Redacted } from "effect"
 import type { ProvenancedValue } from "./Provenance.ts"
+import { literalToCheck } from "./redaction.ts"
 import type { StuckTrigger } from "./Stuck.ts"
 
 // ---------------------------------------------------------------------------
@@ -197,3 +198,23 @@ export const isCompilable = (trajectory: Trajectory): boolean =>
  */
 export const parameterNames = (trajectory: Trajectory): ReadonlyArray<string> =>
   trajectory.parameters.map((parameter) => parameter.name)
+
+/**
+ * Every literal this run typed, in the clear, for `bakedInLiterals` and nothing
+ * else.
+ *
+ * The one function here that hands back plaintext. It is a list of needles for a
+ * check that is about to run and then be forgotten — `compile.ts` passes it
+ * straight to `bakedInLiterals`, holds no reference to it, and never puts a value
+ * from it into a message. Anything else that wants these characters is almost
+ * certainly a leak: the compiler's entire job is to replace them with parameter
+ * references.
+ *
+ * A Trajectory read back off disk carries placeholders rather than values here,
+ * because the wrapper is what was serialised. That is not a hole — the Goal is
+ * still intact, and every `goalDerived` literal is by construction a token subset
+ * of it, so the goal-echo half of ADR-0008 catches the same mistakes without
+ * needing the values at all.
+ */
+export const literalsTyped = (trajectory: Trajectory): ReadonlyArray<string> =>
+  trajectory.parameters.map((parameter) => literalToCheck(parameter.literal))

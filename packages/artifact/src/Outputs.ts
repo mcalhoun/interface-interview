@@ -84,6 +84,30 @@ const SYMBOLS: ReadonlyMap<string, string> = new Map([
   ["€", "EUR"]
 ])
 
+/** A reading that is shaped like an amount: an optional glyph, then digits. */
+const AMOUNT = /^(?<symbol>[^\d\s-]*)\s*(?<sign>-?)(?<digits>[\d,]+(?:\.\d{1,2})?)$/u
+
+/**
+ * The currency a reading's own rendering means, or `undefined` if it is not money.
+ *
+ * Ticket 11's compiler asks this of what an `extract` actually read, to decide
+ * whether the output it declares is `money` and which code to write down. It is
+ * the same table `parseOutput` judges a replayed reading against, exported rather
+ * than copied: a compiler that inferred `USD` from one table while the engine
+ * rejected it against another would produce Artifacts that fail on their first
+ * run.
+ *
+ * The glyph is not evidence, only a starting point — the Artifact records the
+ * code as a claim a reviewer can disagree with, and `parseOutput` then holds
+ * every future run to it. That is why an unrecognised glyph returns `undefined`
+ * (declare `text` and say so) rather than guessing at the institution's currency.
+ */
+export const currencyOf = (read: string): string | undefined => {
+  const match = AMOUNT.exec(read.trim())
+  const symbol = match?.groups?.["symbol"]
+  return symbol === undefined || symbol === "" ? undefined : SYMBOLS.get(symbol)
+}
+
 export const parseOutput = (
   name: string,
   declaration: OutputDeclaration,
@@ -104,7 +128,7 @@ export const parseOutput = (
           observed: "no currency declared"
         })
       }
-      const match = /^(?<symbol>[^\d\s-]*)\s*(?<sign>-?)(?<digits>[\d,]+(?:\.\d{1,2})?)$/u.exec(text)
+      const match = AMOUNT.exec(text)
       if (match?.groups === undefined) {
         return Result.fail({
           output: name,

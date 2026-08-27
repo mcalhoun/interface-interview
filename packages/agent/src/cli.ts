@@ -29,10 +29,12 @@ import {
   PROVIDER_NAMES,
   discover,
   discoveredSecrets,
+  compileArtifact,
   isProviderName,
   providerFor
 } from "./index.ts"
 import type { Trajectory } from "./index.ts"
+import { ARTIFACTS_DIRECTORY, writeArtifact } from "@cua/artifact"
 import { serve } from "@cua/legacy-core"
 import { evidenceFiles } from "@cua/evidence"
 import {
@@ -64,9 +66,15 @@ const usage = (): string =>
     `  --maxSeconds <n>  wall-clock bound (default: ${DEFAULT_BOUNDS.maxMillis / 1000})`,
     "  --headed          watch it happen in a visible browser",
     "  --json            print the whole trajectory rather than a summary",
+    "  --emit <name>     on success, compile the run into a stored Capability",
+    "                    Artifact under that name and write it to artifacts/",
+    "  --artifactVersion <ver>  the version to cut with --emit (default: 1.0.0)",
+    "  --product <text>  the vendor product to record with --emit; discovery",
+    "                    observes an accessibility tree, not a product name",
     "",
-    "example:",
+    "examples:",
     "  bun run discover \"Look up the savings account balance of member 12345\"",
+    "  bun run discover \"...\" --emit member.account-balance.discovered",
     "",
     "policies:",
     ...listPolicies(POLICIES_DIRECTORY).map((name) => `  ${name}`)
@@ -259,6 +267,39 @@ const program = Effect.gen(function*() {
   }).pipe(Effect.provide(services))
 
   yield* report(trajectory, argv.switches.has("json"))
+
+  // The whole point, when asked for: a successful run leaves a stored,
+  // reviewable, callable Capability behind with nobody transcribing anything.
+  //
+  // Compiled here, in the process that did the run, because this is the only
+  // place the values behind the parameters still exist — which is what lets all
+  // three of the compiler's gates actually look for something. Compiling the
+  // written-down trajectory later works too and `bun run compile` does it, but
+  // that file has been scrubbed and two of the three gates go quiet. See
+  // `compile-cli.ts`.
+  const emitAs = argv.options["emit"]
+  if (emitAs !== undefined && trajectory.conclusion.conclusion === "reached") {
+    const compiled = compileArtifact(trajectory, {
+      capability: emitAs,
+      version: argv.options["artifactVersion"] ?? "1.0.0",
+      ...(argv.options["product"] === undefined ? {} : { product: argv.options["product"] })
+    })
+    if (Result.isFailure(compiled)) {
+      yield* Console.log("")
+      yield* Console.error(`compilation refused for ${emitAs}:`)
+      for (const reason of compiled.failure.reasons) yield* Console.error(`  - ${reason}`)
+      process.exitCode = 1
+    } else {
+      const written = writeArtifact(ARTIFACTS_DIRECTORY, compiled.success)
+      yield* Console.log("")
+      if (Result.isFailure(written)) {
+        yield* Console.error(written.failure.message)
+        process.exitCode = 1
+      } else {
+        yield* Console.log(`artifact: ${written.success}`)
+      }
+    }
+  }
 
   // Stuck is not a crash — it is the loop doing its job — but it is not a
   // completed one either, and a caller scripting this needs to be able to tell.
