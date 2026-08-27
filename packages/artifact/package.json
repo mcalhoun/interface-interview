@@ -4,5 +4,9 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
-  "types": "src/index.ts"
+  "types": "src/index.ts",
+  "dependencies": {
+    "@cua/surface": "workspace:*",
+    "effect": "4.0.0-rc.112"
+  }
 }

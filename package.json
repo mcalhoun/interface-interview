@@ -9,6 +9,7 @@
   "scripts": {
     "app": "bun run apps/legacy-core/src/main.ts",
     "surface": "bun run packages/surface/src/cli.ts",
+    "replay": "bun run packages/replay/src/cli.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun run --bun vitest run"
   },

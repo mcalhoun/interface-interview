@@ -7,3 +7,9 @@ dist/
 .DS_Store
 bun.lockb
 .scratch/
+
+# One directory per run, named by run id. Every `bun run replay` adds another,
+# so day-to-day runs stay out of the tree. Ticket 18 commits a curated set of
+# genuine discovery and replay runs as a deliverable; those are added with
+# `git add -f`.
+evidence/
