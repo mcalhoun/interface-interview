@@ -31,16 +31,34 @@
  * and the outer boundary folds it into the `failure` class of `ReplayResult`. So
  * the public signature has `never` in its error channel: every outcome is a value
  * the caller branches on, which is the entire point of the result contract.
+ *
+ * ## Business Outcomes are not in that channel
+ *
+ * A Step whose Checkpoint reaches a declared Business Outcome ends the run, and
+ * it would be trivial to end it by failing with a signal value and folding that
+ * at the boundary. It is deliberately not done that way. `runStep` *returns* the
+ * outcome it reached, so a legitimate domain answer never travels through an
+ * error channel at any point in its life, not even briefly and internally.
+ *
+ * That matters because the brief names confusing a domain answer for a failure as
+ * the most common design mistake in this problem, and every mechanism that makes
+ * the mistake easy is one that lets an outcome share a road with a fault: a
+ * `catch` written for `SurfaceUnavailable` catches it too, a log line that prints
+ * the error channel prints it, an exit code derived from "did the effect fail"
+ * reports it. Keeping it on the success channel means none of those can happen by
+ * accident, and the type of `runStep` says so.
  */
 
 import { Effect, Result } from "effect"
 import {
   type CapabilityArtifact,
+  type Checkpoint,
   type OutputValue,
   type ResolvedInputs,
   type Step,
   type ValueRef,
   capabilityRef,
+  declaredOutcome,
   describeValueRef,
   parseOutput,
   toSurfaceTarget
@@ -54,7 +72,7 @@ import {
   SurfaceAdapter,
   describeTarget
 } from "@cua/surface"
-import { type StepReadings, evaluate, resolveValue } from "./checkpoint.ts"
+import { type CheckpointOutcome, type StepReadings, evaluate, resolveValue } from "./checkpoint.ts"
 import type { ReplayFailure, ReplayFailureBody, ReplayResult, StepRecord } from "./ReplayResult.ts"
 import { describeResult } from "./ReplayResult.ts"
 
@@ -165,7 +183,15 @@ export const replayCapability = (
     // One step
     // -----------------------------------------------------------------------
 
-    const runStep = (step: Step): Effect.Effect<void, ReplayFailure | EvidenceUnwritable> =>
+    /**
+     * Runs one Step. Returns the Business Outcome it reached, if it reached one.
+     *
+     * `ReachedOutcome | undefined` on the *success* channel is the shape that
+     * keeps a domain answer off the same road as a fault. See the module note.
+     */
+    const runStep = (
+      step: Step
+    ): Effect.Effect<ReachedOutcome | undefined, ReplayFailure | EvidenceUnwritable> =>
       Effect.gen(function* () {
         const fail = failing(step)
 
@@ -211,9 +237,8 @@ export const replayCapability = (
           kind: "checkpoint",
           stepId: step.id,
           description: step.checkpoint.description,
-          verdict: outcome.held ? "held" : "failed",
-          expected: outcome.held ? step.checkpoint.description : outcome.expected,
-          observed: outcome.held ? "the intended state was reached" : outcome.observed,
+          verdict: outcome.verdict,
+          ...describeVerdict(step.checkpoint, outcome),
           waitedMillis: outcome.waitedMillis
         })
 
@@ -221,11 +246,23 @@ export const replayCapability = (
           id: step.id,
           intent: step.intent,
           action: step.action.type,
-          checkpoint: outcome.held ? "held" : "failed",
+          checkpoint: outcome.verdict,
           ...(read === undefined ? {} : { read })
         })
 
-        if (!outcome.held) {
+        if (outcome.verdict === "outcome") {
+          // Not a failure, and so not a `fail`. The declaration is what supplies
+          // the caller-facing wording; the engine only knows the code.
+          const declaration = declaredOutcome(artifact, outcome.code)
+          return {
+            code: outcome.code,
+            detail: declaration?.title ?? `the capability reached ${outcome.code}`,
+            stepId: step.id,
+            because: outcome.because
+          }
+        }
+
+        if (outcome.verdict === "failed") {
           return yield* Effect.fail(
             fail({
               reason: "checkpoint_failed",
@@ -238,6 +275,8 @@ export const replayCapability = (
             })
           )
         }
+
+        return undefined
       })
 
     /**
@@ -379,7 +418,39 @@ export const replayCapability = (
         }))
       })
 
-      for (const step of artifact.steps) yield* runStep(step)
+      for (const [index, step] of artifact.steps.entries()) {
+        const reached = yield* runStep(step)
+        if (reached === undefined) continue
+
+        // The application answered, and the answer is part of its domain. The run
+        // stops here and stops *successfully*: no failure is constructed, none is
+        // recorded, and the remaining Steps are reported as never attempted rather
+        // than as having gone wrong.
+        for (const skipped of artifact.steps.slice(index + 1)) {
+          steps.push({
+            id: skipped.id,
+            intent: skipped.intent,
+            action: skipped.action.type,
+            checkpoint: "not_reached"
+          })
+        }
+
+        yield* evidence.record({
+          kind: "outcome",
+          stepId: reached.stepId,
+          code: reached.code,
+          detail: reached.detail,
+          matched: reached.because
+        })
+
+        return {
+          result: "business_outcome",
+          ...common,
+          steps,
+          code: reached.code,
+          detail: reached.detail
+        } satisfies ReplayResult
+      }
 
       const outputs = yield* collectOutputs
       yield* evidence.record({
@@ -417,6 +488,48 @@ export const replayCapability = (
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * A declared Business Outcome, reached at a Step.
+ *
+ * Not a `ReplayFailure` and not shaped like one. It has no `expected`/`observed`
+ * pair because nothing went wrong: `because` says what was observed, and there is
+ * nothing it was observed *instead of* that anyone needs to be told about.
+ */
+interface ReachedOutcome {
+  readonly code: string
+  /** The caller-facing sentence, from the Artifact's declaration of this code. */
+  readonly detail: string
+  readonly stepId: string
+  /** The branch conditions that held, in the Artifact's words. */
+  readonly because: string
+}
+
+/**
+ * The `expected` / `observed` pair for a Checkpoint's Evidence event.
+ *
+ * Written so that reading the log tells the three verdicts apart without knowing
+ * the schema: an outcome says the application answered, and says with what.
+ */
+const describeVerdict = (
+  checkpoint: Checkpoint,
+  outcome: CheckpointOutcome
+): { readonly expected: string; readonly observed: string } => {
+  switch (outcome.verdict) {
+    case "held":
+      return {
+        expected: checkpoint.description,
+        observed: "the intended state was reached"
+      }
+    case "outcome":
+      return {
+        expected: checkpoint.description,
+        observed: `the declared outcome ${outcome.code} was reached instead, on branch ${outcome.branch}: ${outcome.because}`
+      }
+    case "failed":
+      return { expected: outcome.expected, observed: outcome.observed }
+  }
+}
 
 /** Attaches the Step a failure happened in, so no failure can omit it. */
 const failing =

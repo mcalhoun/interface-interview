@@ -14,7 +14,10 @@ import { expect, it } from "vitest"
 import { Result, Schema } from "effect"
 import {
   ARTIFACTS_DIRECTORY,
+  AssertionSchema,
   CapabilityArtifactSchema,
+  declaredOutcome,
+  declaredOutcomeCodes,
   formatArtifact,
   isSensitive,
   listCapabilities,
@@ -230,4 +233,147 @@ it("turns a scraped amount into money, and refuses one in the wrong currency", (
 
   const empty = parseOutput("balance", declaration, "   ")
   expect(Result.isFailure(empty)).toBe(true)
+})
+
+// ---------------------------------------------------------------------------
+// Declared Business Outcomes
+//
+// The artifact is where a capability's domain contract lives, and `outcomes` is
+// the half of it that is not the happy path. What is pinned here is that the
+// contract is complete in both directions: a caller cannot receive a code the
+// document does not explain, and the document cannot claim a code no run can
+// produce. A one-directional check would leave the more embarrassing half open.
+// ---------------------------------------------------------------------------
+
+it("the shipped artifact declares its business outcomes, so a reviewer sees every answer it can give", () => {
+  const artifact = expectSuccess(parseShipped())
+
+  expect(declaredOutcomeCodes(artifact)).toEqual(["MEMBER_NOT_FOUND"])
+
+  const notFound = declaredOutcome(artifact, "MEMBER_NOT_FOUND")
+  expect(notFound).toBeDefined()
+  // `title` is what the caller reads back as `detail`, so it has to be a sentence
+  // about the domain rather than a status word.
+  expect(notFound?.title).toMatch(/member/i)
+  // And the prose has to make the case that this is an answer, not a fault. A
+  // code with a one-word gloss is not a reviewable contract.
+  expect(notFound?.summary.length).toBeGreaterThan(200)
+  expect(notFound?.discoveredFrom).toBeDefined()
+})
+
+it("a declared outcome is reachable from a checkpoint branch written in the ordinary assertion vocabulary", () => {
+  const artifact = expectSuccess(parseShipped())
+  const branches = artifact.steps.flatMap((step) => step.checkpoint.orOutcome ?? [])
+
+  expect(branches.map((branch) => branch.code)).toEqual(["MEMBER_NOT_FOUND"])
+
+  const branch = branches[0]!
+  expect(branch.when.length).toBeGreaterThan(0)
+  // Nothing about recognising a domain answer is privileged. Every branch
+  // condition decodes as an ordinary Assertion — the same vocabulary, evaluated
+  // against the same accessibility tree, as the intended state it stands beside.
+  for (const assertion of branch.when) {
+    expect(Result.isSuccess(Schema.decodeUnknownResult(AssertionSchema)(assertion))).toBe(true)
+  }
+  // And it asserts only on screen text, never on this run's input. An artifact
+  // carries no runtime data.
+  expect(JSON.stringify(branch)).not.toContain("99999")
+})
+
+it("rejects a checkpoint branch returning a code the artifact does not declare", () => {
+  const problems = expectProblems(
+    parseArtifact(
+      "broken",
+      `
+capability: broken
+version: 1.0.0
+title: Broken
+summary: Returns a code with nothing saying what it means.
+authored: hand-written
+surface: { kind: web, product: Test, entry: / }
+inputs: {}
+outputs: {}
+steps:
+  - id: only
+    intent: Press a button and hope.
+    action:
+      type: click
+      target: { role: button, name: Go, strategy: name, robustness: because }
+    checkpoint:
+      description: It happened.
+      expect: [{ assert: textPresent, text: anything }]
+      orOutcome:
+        - code: UNDOCUMENTED_STATE
+          when: [{ assert: textPresent, text: something else }]
+`
+    )
+  )
+  expect(problems.join(" ")).toContain("UNDOCUMENTED_STATE")
+})
+
+it("rejects a declared outcome no checkpoint branch can reach", () => {
+  const problems = expectProblems(
+    parseArtifact(
+      "broken",
+      `
+capability: broken
+version: 1.0.0
+title: Broken
+summary: Advertises a behaviour it does not have.
+authored: hand-written
+surface: { kind: web, product: Test, entry: / }
+inputs: {}
+outputs: {}
+outcomes:
+  NEVER_HAPPENS:
+    title: Something that cannot occur.
+    summary: A promise to a caller that no run can keep.
+steps:
+  - id: only
+    intent: Press a button.
+    action:
+      type: click
+      target: { role: button, name: Go, strategy: name, robustness: because }
+    checkpoint:
+      description: It happened.
+      expect: [{ assert: textPresent, text: anything }]
+`
+    )
+  )
+  expect(problems.join(" ")).toContain("NEVER_HAPPENS")
+})
+
+it("rejects an outcome code that is not something a caller can switch on", () => {
+  const problems = expectProblems(
+    parseArtifact(
+      "broken",
+      `
+capability: broken
+version: 1.0.0
+title: Broken
+summary: Uses a sentence where an identifier belongs.
+authored: hand-written
+surface: { kind: web, product: Test, entry: / }
+inputs: {}
+outputs: {}
+outcomes:
+  "member not found":
+    title: A code that is really a message.
+    summary: Prose belongs in title and summary, not in the identifier.
+steps:
+  - id: only
+    intent: Press a button.
+    action:
+      type: click
+      target: { role: button, name: Go, strategy: name, robustness: because }
+    checkpoint:
+      description: It happened.
+      expect: [{ assert: textPresent, text: anything }]
+      orOutcome:
+        - code: "member not found"
+          when: [{ assert: textPresent, text: nothing here }]
+`
+    )
+  )
+  expect(problems.length).toBeGreaterThan(0)
 })

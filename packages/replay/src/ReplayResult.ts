@@ -2,11 +2,13 @@
  * The result contract: what a caller gets back, and what they are allowed to
  * conclude from it.
  *
- * Four classes, all four defined now even though only `Success` is reachable at
- * this ticket. The brief calls the distinction between them the most common
- * design mistake in this problem, and a taxonomy that arrives one class per
- * ticket is a taxonomy that gets bolted onto an engine already shaped around
- * success-or-exception. Defining all four first forces the engine's shape.
+ * Four classes. `Success` and `BusinessOutcome` are reachable; the other two are
+ * defined and unreachable until tickets 12 and 15. The brief calls the
+ * distinction between them the most common design mistake in this problem, and a
+ * taxonomy that arrives one class per ticket is a taxonomy that gets bolted onto
+ * an engine already shaped around success-or-exception. Defining all four first
+ * forced the engine's shape, and it is why adding `BusinessOutcome` at ticket 04
+ * changed no signature.
  *
  * | Class                  | Means                                        | The caller should |
  * | ---------------------- | -------------------------------------------- | ----------------- |
@@ -27,8 +29,6 @@
  *
  * ## Seams
  *
- *   - ticket 04 constructs `BusinessOutcome` from a Checkpoint's declared outcome
- *     branch. The class and its `code` field need no change.
  *   - ticket 12 constructs `InterventionRequired`. It carries the Session id
  *     because an Operator has to be able to find the browser window.
  *   - ticket 15 sets `assisted` on a `BusinessOutcome` reached through Assisted
@@ -51,8 +51,15 @@ export const StepRecord = Schema.Struct({
   id: Schema.String,
   intent: Schema.String,
   action: Schema.String,
-  /** `held` for every Step in a Success. */
-  checkpoint: Schema.Literals(["held", "failed", "not_reached"]),
+  /**
+   * `held` for every Step in a Success.
+   *
+   * `outcome` marks the one Step whose Checkpoint reached a declared Business
+   * Outcome; every Step after it is `not_reached`, because they were never
+   * attempted. Neither is `failed`, and the distinction is visible in the step
+   * list a caller prints without having to consult the result class.
+   */
+  checkpoint: Schema.Literals(["held", "outcome", "failed", "not_reached"]),
   /** What the Step read, for `extract` Steps. Absent otherwise. */
   read: Schema.optional(Schema.String)
 })
@@ -195,10 +202,16 @@ const Success = Schema.Struct({
 /**
  * The application answered, and the answer is part of its domain.
  *
- * Ticket 04's `MEMBER_NOT_FOUND` is the first. `code` comes from the Artifact's
- * declared outcomes, never inferred by the engine: SPEC is explicit that a state
- * becomes a Business Outcome because of what a human did when they met it, not
- * because a config file named it.
+ * `MEMBER_NOT_FOUND` is the first. `code` comes from the Artifact's declared
+ * outcomes, never inferred by the engine: SPEC is explicit that a state becomes a
+ * Business Outcome because of what a human did when they met it, not because a
+ * config file named it.
+ *
+ * A run ending here **succeeded**. It exits zero, its Evidence contains no
+ * failure, and every field of `ReplayFailure` is absent because none of them
+ * applies — there is no `expected`, no `observed` and no Step to page anyone
+ * about. `detail` is the caller-facing sentence from the Artifact's declaration,
+ * so what the caller reads is what a reviewer approved.
  */
 const BusinessOutcome = Schema.Struct({
   result: Schema.Literal("business_outcome"),

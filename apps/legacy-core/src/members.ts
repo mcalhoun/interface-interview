@@ -1,8 +1,20 @@
 /**
  * The member book Heritage Core serves from.
  *
- * Only member `12345`, the happy path, exists at this point. Later tickets add
- * `99999`, `88888`, `77777` and `55555` alongside it.
+ * | Number  | What the screen does                          | Added at  |
+ * | ------- | --------------------------------------------- | --------- |
+ * | `12345` | A normal member with two accounts             | ticket 01 |
+ * | `99999` | Not on file: the Member Not Found screen       | ticket 04 |
+ * | `88888` | Checking only, no savings                     | ticket 12 |
+ * | `77777` | Restricted, needs supervisor authorisation    | ticket 13 |
+ * | `55555` | Slow load behind a transient overlay          | ticket 06 |
+ *
+ * `99999` is not an entry below and never will be. It is well-formed, it passes
+ * the search field's own validation, and it is simply not a member — which is
+ * what the search is being asked. The book answers that question with `undefined`
+ * and the route turns it into a screen; there is no "known absent" list, because
+ * a real core has no such thing either and a typo has to reach the same answer.
+ * `99999` is the number SPEC names for the scenario and the one the tests use.
  */
 
 export interface Account {

@@ -16,6 +16,10 @@ summary: >
   Looks a member up by number in Heritage Core Member Services, opens their
   primary savings account, and reads back the available and current balances.
 
+  Returns two balances when the member exists, and the MEMBER_NOT_FOUND outcome
+  when the number searched is not on file. Both are answers. A caller has to
+  handle both, and neither is an error — see the outcomes section below.
+
   Read-only. Nothing in this capability changes anything in the core banking
   system: every action is a navigation, a search field, or a reading. That is
   what makes it safe to replay unattended.
@@ -66,6 +70,39 @@ outputs:
       than the available balance when a hold is in force.
     from:
       step: read-current-balance
+
+# The other half of this capability's signature. `outputs` above says what comes
+# back when the flow completes; this says what comes back when Heritage Core's own
+# domain answers something else instead.
+#
+# Every code here is reachable from an `orOutcome` branch on some step's
+# checkpoint below, and every branch's code appears here. The artifact is rejected
+# at parse time if either is untrue, so this list is the complete set of values a
+# caller can receive besides the balances — not a sample of them.
+outcomes:
+  MEMBER_NOT_FOUND:
+    title: No member record exists for the number searched.
+    summary: >
+      The search ran, Heritage Core understood it, and the answer is that the
+      credit union has no member with that number. Nothing is broken and nothing
+      needs looking at: this is a fact about the membership, and it is the answer
+      a caller asked for as much as a balance would have been.
+
+      A caller should treat this the way a teller does — tell the member the
+      number was not found and check it with them. It is not a condition to retry,
+      escalate or page anyone about, and a run that ends here has succeeded.
+
+      Worth knowing how invisible this is from outside the screen: Heritage Core
+      answers it with HTTP 200 and a perfectly well-formed page. Nothing throws,
+      nothing times out, and no status code distinguishes it from a member who
+      does exist. It is recognisable only by reading the screen, which is why the
+      recognition lives in a checkpoint branch and not in error handling.
+    discoveredFrom: >
+      Hand-written at 1.0.0 alongside the rest of this document. In the shape
+      ticket 11's compiler will emit, this field records the intervention that
+      produced the outcome: the operator who met this screen, observed it,
+      changed nothing and returned control, and the confirmation that made it
+      declarable rather than an escalation.
 
 steps:
   # ---------------------------------------------------------------------------
@@ -173,6 +210,23 @@ steps:
               The account list's own heading cell. Present on every member record
               regardless of how many accounts the member holds, so it confirms we
               are on Member Detail rather than confirming this member's data.
+      # The other screen this submit legitimately reaches. Tried only when the
+      # expectation above does not hold, so a member record can never be re-read
+      # as an absence.
+      orOutcome:
+        - code: MEMBER_NOT_FOUND
+          when:
+            # The screen heading. Heritage Core's own words for this state, and
+            # the thing an operator reads first.
+            - assert: textPresent
+              text: Member Not Found
+            # And the message under it, so the branch cannot be satisfied by a
+            # heading alone on some future screen that borrows the phrase. The
+            # assertion stops before the number itself: the sentence opener is
+            # screen text, the number is this run's input, and an artifact carries
+            # no runtime data.
+            - assert: textPresent
+              text: No member record found for member number
 
   # ---------------------------------------------------------------------------
   # SEAM — ticket 09 replaces this single step with a generic selectFromList over

@@ -12,6 +12,7 @@ import {
   accountDetailPanel,
   crossReferencePage,
   memberDetailPage,
+  memberNotFoundPage,
   memberSearchPage,
   systemMessagePage
 } from "./render.ts"
@@ -36,18 +37,20 @@ export const handle = (request: Request): Response => {
       return html(memberSearchPage())
 
     case "/member": {
-      const memberNumber = url.searchParams.get("memberNumber") ?? ""
+      const memberNumber = (url.searchParams.get("memberNumber") ?? "").trim()
+
+      // Nothing was searched for, so nothing was answered. An operator error, and
+      // the only case on this route that is not a domain answer.
+      if (memberNumber === "") return html(systemMessagePage("No member number entered."), 400)
+
       const member = findMember(memberNumber)
-      if (member === undefined) {
-        return html(
-          systemMessagePage(
-            memberNumber.trim() === ""
-              ? "No member number entered."
-              : `Member number ${memberNumber.trim()} could not be retrieved.`
-          ),
-          404
-        )
-      }
+
+      // The search ran and the answer is that no such member exists. That is a
+      // fact about the membership, not a fault, so it is served the way the real
+      // system serves it: HTTP 200 and an ordinary screen. Classifying this
+      // correctly is only possible by reading that screen.
+      if (member === undefined) return html(memberNotFoundPage(memberNumber))
+
       return html(memberDetailPage(member))
     }
 

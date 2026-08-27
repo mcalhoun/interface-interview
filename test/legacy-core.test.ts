@@ -89,6 +89,7 @@ it.effect("every page is server-rendered hostile markup", () =>
       "/member?memberNumber=12345",
       `/account?memberNumber=12345&accountNumber=${SAVINGS}`,
       `/account/panel?memberNumber=12345&accountNumber=${SAVINGS}`,
+      "/member?memberNumber=99999",
       "/xref?legacyMemberNumber=ABC123"
     ]
 
@@ -102,5 +103,43 @@ it.effect("every page is server-rendered hostile markup", () =>
       )
       expect(page, `${path} is not table based`).toMatch(/<table/i)
     }
+  })
+)
+
+it.effect("a member who does not exist gets a real screen and an HTTP 200, not an error", () =>
+  Effect.gen(function* () {
+    const { core } = yield* openCore
+    const response = yield* Effect.promise(() =>
+      fetch(`${core.origin}/member?memberNumber=99999`)
+    )
+    const page = yield* Effect.promise(() => response.text())
+
+    // The single most important byte on the wire. Heritage Core understood the
+    // search and answered it; the answer is that there is no such member. Nothing
+    // at the transport layer says otherwise, so anything hoping to classify this
+    // by status code, `response.ok` or a thrown exception is told "success" and
+    // handed a page with no balances on it.
+    expect(response.status).toBe(200)
+    expect(response.ok).toBe(true)
+
+    expect(page).toContain("Member Not Found")
+    expect(page).toContain("No member record found for member number 99999.")
+
+    // Not the generic system-message page. A request that could not be carried
+    // out and a request that was carried out and came back empty are different
+    // things, and this fixture only teaches the distinction if it draws it.
+    expect(page).not.toContain("System Message")
+  })
+)
+
+it.effect("an empty search is an operator error, and does not borrow the not-found screen", () =>
+  Effect.gen(function* () {
+    const { core } = yield* openCore
+    const response = yield* Effect.promise(() => fetch(`${core.origin}/member?memberNumber=`))
+    const page = yield* Effect.promise(() => response.text())
+
+    expect(response.status).toBe(400)
+    expect(page).toContain("System Message")
+    expect(page).not.toContain("Member Not Found")
   })
 )

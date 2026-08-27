@@ -30,7 +30,6 @@
  *
  * ## Seams
  *
- *   - ticket 04 adds `outcomes:` here and a branch to `Checkpoint`.
  *   - ticket 06 adds `recoverable:` rules here.
  *   - ticket 14 adds `requiresHuman:` entries, write-once.
  *   - ticket 16 adds Tenant Overrides as scoped deltas *against* this document,
@@ -39,6 +38,7 @@
 
 import { Schema } from "effect"
 import { Action } from "./Action.ts"
+import { type OutcomeDeclaration, OutcomeDeclarations } from "./BusinessOutcomes.ts"
 import { Checkpoint } from "./Checkpoint.ts"
 import { InputDeclarations } from "./Inputs.ts"
 import { OutputDeclarations } from "./Outputs.ts"
@@ -94,6 +94,21 @@ export const CapabilityArtifact = Schema.Struct({
   surface: SurfaceDeclaration,
   inputs: InputDeclarations,
   outputs: OutputDeclarations,
+  /**
+   * The Business Outcomes this Capability can return instead of its outputs.
+   *
+   * The domain contract, and the second half of a caller's signature: `outputs`
+   * says what comes back when the flow completes, `outcomes` says what comes back
+   * when the application's own domain answers something else. A reviewer reading
+   * only this document can therefore see every value the Capability can produce,
+   * which is the point of declaring them rather than letting the engine infer a
+   * class from the shape of a screen.
+   *
+   * Optional and empty on a Capability that has learned none yet. Each code here
+   * has to be reachable from some Checkpoint's `orOutcome`, and every branch's
+   * code has to appear here; `parseArtifact` enforces both directions.
+   */
+  outcomes: Schema.optional(OutcomeDeclarations),
   steps: Schema.Array(Step).check(Schema.isMinLength(1))
 })
 export type CapabilityArtifact = typeof CapabilityArtifact.Type
@@ -101,3 +116,23 @@ export type CapabilityArtifact = typeof CapabilityArtifact.Type
 /** `member.account-balance@1.0.0`, the way Evidence and the catalog name a run. */
 export const capabilityRef = (artifact: CapabilityArtifact): string =>
   `${artifact.capability}@${artifact.version}`
+
+/**
+ * The declaration for one Business Outcome code, or `undefined`.
+ *
+ * The accessor exists so that nothing outside this module reads `outcomes`
+ * directly and has to remember it is optional. `parseArtifact` guarantees every
+ * code a Checkpoint can reach is declared, so a caller that has a code from a
+ * branch will always get a declaration back — but the type says `undefined`
+ * anyway, because a guarantee enforced somewhere else is not one the compiler
+ * knows about.
+ */
+export const declaredOutcome = (
+  artifact: CapabilityArtifact,
+  code: string
+): OutcomeDeclaration | undefined => artifact.outcomes?.[code]
+
+/** Every Business Outcome code this Capability declares, in document order. */
+export const declaredOutcomeCodes = (
+  artifact: CapabilityArtifact
+): ReadonlyArray<string> => Object.keys(artifact.outcomes ?? {})
