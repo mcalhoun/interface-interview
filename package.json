@@ -1,0 +1,33 @@
+{
+  "name": "computer-use-automation",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "app": "bun run apps/legacy-core/src/main.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun run --bun vitest run"
+  },
+  "dependencies": {
+    "@cua/agent": "workspace:*",
+    "@cua/artifact": "workspace:*",
+    "@cua/evidence": "workspace:*",
+    "@cua/legacy-core": "workspace:*",
+    "@cua/operator": "workspace:*",
+    "@cua/policy": "workspace:*",
+    "@cua/replay": "workspace:*",
+    "@cua/session": "workspace:*",
+    "@cua/surface": "workspace:*",
+    "effect": "4.0.0-rc.112"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.0.0-rc.112",
+    "@types/bun": "1.4.0",
+    "playwright": "1.62.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

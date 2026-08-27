@@ -1,0 +1,8 @@
+{
+  // Workspace packages resolve through the symlinks Bun writes into
+  // `node_modules/@cua/*`, so typecheck, Vitest and `bun run` all agree on where
+  // `@cua/surface` lives. Deliberately no `paths` mapping: a second resolution
+  // mechanism is a second thing to drift.
+  "extends": "./tsconfig.base.json",
+  "include": ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts", "test/**/*.ts", "*.ts"]
+}
