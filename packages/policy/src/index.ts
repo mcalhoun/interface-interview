@@ -14,11 +14,19 @@
  * Artifact cannot declassify itself.
  */
 
-export type { ActionMode, ActionRequest, PolicyVerdict, Risk } from "./Policy.ts"
+export type {
+  ActionMode,
+  ActionRequest,
+  ConsultationRequest,
+  PolicyVerdict,
+  Risk
+} from "./Policy.ts"
 export {
   ACTION_TYPES,
   ActionMode as ActionModeSchema,
   ActionRequest as ActionRequestSchema,
+  CONSULTATION_RISK,
+  ConsultationRequest as ConsultationRequestSchema,
   Policy,
   PolicyVerdict as PolicyVerdictSchema,
   RISK,
@@ -27,18 +35,25 @@ export {
   riskOf
 } from "./Policy.ts"
 
-export type { CompiledPolicy, ModeRule, PermittedAction, PolicyDocument } from "./PolicyDocument.ts"
+export type {
+  CompiledPolicy,
+  ModeRule,
+  PermittedAction,
+  PermittedAssist,
+  PolicyDocument
+} from "./PolicyDocument.ts"
 export {
   compilePolicy,
   JUSTIFICATION_MINIMUM,
   ModeRule as ModeRuleSchema,
   parsePolicy,
   PermittedAction as PermittedActionSchema,
+  PermittedAssist as PermittedAssistSchema,
   PolicyDocument as PolicyDocumentSchema,
   PolicyInvalid
 } from "./PolicyDocument.ts"
 
-export { decide } from "./decide.ts"
+export { decide, decideAssist } from "./decide.ts"
 
 export type { OriginPattern } from "./origins.ts"
 export { allowedBy, originMatches, originOf, parseOriginPattern } from "./origins.ts"

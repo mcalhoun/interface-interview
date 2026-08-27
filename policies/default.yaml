@@ -86,3 +86,35 @@ actions:
       artifacts/ presses a control that posts a transaction. That is a property
       of the approved artifacts rather than of this line, which is why the
       artifacts are reviewed and versioned.
+
+# Assisted recovery: the middle rung of the ladder, permitted here, with a
+# reason, because it is what keeps people from being paged for states the
+# system can work out.
+#
+# What this permits is *not* an action. The consulted model has no acting
+# operations available to it at all — no click, no fill, no target of any kind
+# is representable in what it can return (ADR-0005). It reads the accessibility
+# structure of the one screen a run is stuck on and returns a proposed outcome
+# code, a confidence and a rationale, chosen from the codes the capability's own
+# artifact already names.
+#
+# What it costs is that the screen leaves the building. That is why this block
+# needs a written reason exactly as `click` and `fill` do, and why it sits here
+# rather than in `actions:` — it is a different kind of thing, and a reviewer
+# should have to decide about it separately.
+#
+# Still off unless `bun run replay ... --assist` asks for it. This line permits
+# it; it does not turn it on.
+assist:
+  because: >
+    Heritage Core is a synthetic demo fixture over synthetic member data, and
+    the screen sent is the accessibility text of a single stuck step, scrubbed
+    of this run's own sensitive parameter values by the same scrubber that
+    writes the evidence log. What is bought for it is the rung between
+    deterministic replay and waking somebody: a capability that meets a state
+    its artifact names but has not yet classified can be told what that state
+    means, once, and return an answer marked as assisted rather than raising an
+    intervention nobody needed. Against a real installation this line is the one
+    a reviewer should argue about hardest, and the honest default for a tenant
+    with real member data on the page is to delete it — replay still runs, the
+    ladder simply skips a rung and wakes a person instead.

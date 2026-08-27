@@ -9,6 +9,25 @@
 export type { AmendmentRequest, ProposedAmendment } from "./amend.ts"
 export { proposeAmendment } from "./amend.ts"
 
+export type {
+  Advisor,
+  AssistCandidate,
+  AssistConsultation,
+  AssistGate,
+  AssistOptions,
+  AssistOutcome,
+  AssistReply
+} from "./assist.ts"
+export {
+  ASSIST_BUDGET_PER_RUN,
+  ASSIST_CONFIDENCE_FLOOR,
+  ASSIST_QUESTION,
+  AssistUnavailable,
+  consultAssist,
+  isProposable,
+  proposableOutcomes
+} from "./assist.ts"
+
 export type { CheckpointOutcome, EvaluationContext, StepReadings } from "./checkpoint.ts"
 export { DEFAULT_CHECKPOINT_MILLIS, evaluate as evaluateCheckpoint, resolveValue } from "./checkpoint.ts"
 

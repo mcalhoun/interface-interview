@@ -25,7 +25,7 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { Effect, Layer, Result } from "effect"
-import { decide } from "./decide.ts"
+import { decide, decideAssist } from "./decide.ts"
 import { Policy } from "./Policy.ts"
 import { type CompiledPolicy, PolicyInvalid, parsePolicy } from "./PolicyDocument.ts"
 
@@ -92,5 +92,6 @@ export const listPolicies = (directory: string): ReadonlyArray<string> => {
 export const policyFrom = (policy: CompiledPolicy): Layer.Layer<Policy> =>
   Layer.succeed(Policy)({
     name: policy.name,
-    authorise: (request) => Effect.succeed(decide(policy, request))
+    authorise: (request) => Effect.succeed(decide(policy, request)),
+    authoriseAssist: (request) => Effect.succeed(decideAssist(policy, request))
   })

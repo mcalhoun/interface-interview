@@ -156,6 +156,51 @@ export const PolicyVerdict = Schema.Struct({
 })
 export type PolicyVerdict = typeof PolicyVerdict.Type
 
+/**
+ * One consultation of the Assisted Recovery model, in terms Policy can judge.
+ *
+ * Not an `ActionRequest`, and deliberately not a member of the Action
+ * vocabulary. A consultation performs nothing on the Surface: it *reads* the
+ * page the run is stuck on and sends that text to a model. So there is no
+ * `subject` to check an origin against and no Target to describe — the only
+ * questions Policy has are whether this deployment permits consulting a model at
+ * all, and whether the screen it would send is one this run was allowed to be
+ * on.
+ *
+ * Keeping it out of `ActionRequest` is what stops `ACTION_TYPES` from growing a
+ * member that is not an Action. That list is asserted equal to the Discovery
+ * vocabulary and to the Artifact's Action union, and a consultation belongs to
+ * neither.
+ */
+export const ConsultationRequest = Schema.Struct({
+  /** The Step whose stall is being classified, so a denial reports against it. */
+  stepId: Schema.String,
+  /**
+   * The page the run is stuck on. Its text is what would leave the building, so
+   * it is the thing the origin allowlist is checked against.
+   */
+  page: Schema.String,
+  mode: ActionMode
+})
+export type ConsultationRequest = typeof ConsultationRequest.Type
+
+/**
+ * How much a consultation can cost, in the same vocabulary as an Action.
+ *
+ * `risky`, and it is worth saying why, because a model that cannot act looks on
+ * its face like the safest thing in the system. What is irreversible about a
+ * consultation is not what it does to the application — it does nothing — but
+ * what it does to the screen: once a member's details have been sent to a third
+ * party, no later decision recalls them. Classifying it with `click` and `fill`
+ * means it costs the same thing they cost in a Policy document, which is a
+ * written reason from whoever accepted it.
+ *
+ * As with `RISK`, this is a property of the vocabulary and not of a deployment.
+ * A Policy file may decide whether to permit a consultation; it may not decide
+ * that consulting is cheap.
+ */
+export const CONSULTATION_RISK: Risk = "risky"
+
 export class Policy extends Context.Service<Policy, {
   /**
    * May this Action happen?
@@ -166,6 +211,21 @@ export class Policy extends Context.Service<Policy, {
    * was stopped, or the control is unauditable.
    */
   readonly authorise: (request: ActionRequest) => Effect.Effect<PolicyVerdict>
+  /**
+   * May the Assisted Recovery rung consult a model about this stalled Step?
+   *
+   * Separate from `authorise` because it answers a different question about a
+   * different kind of thing, and folding it in would have meant either widening
+   * `ActionRequest` with fields an Action has no use for or adding a member to
+   * the Action vocabulary that performs no Action. A Policy that says nothing
+   * about consulting denies it, like everything else this engine does not
+   * mention (ADR-0005, and `policies/default.yaml`).
+   *
+   * Total, for the same reason `authorise` is: a denial is a verdict the rung
+   * records as Evidence and falls back from, never an exception that skips the
+   * record.
+   */
+  readonly authoriseAssist: (request: ConsultationRequest) => Effect.Effect<PolicyVerdict>
   /** Which document is in force, for the run's own record. */
   readonly name: string
 }>()("cua/policy/Policy") {}

@@ -144,11 +144,22 @@ it("defines every event kind SPEC lists, including the ones replay may never emi
   // contains no decide event" to be a claim worth testing.
   expect(KINDS_FORBIDDEN_IN_REPLAY).toEqual(["decide"])
 
-  // The `recovery.*` kinds are the one addition to SPEC's list, added for the
-  // reason SPEC gives for `assist.*` having its own kinds rather than reusing
-  // `decide`: getting past a transient state unattended must not be able to hide
-  // inside an ordinary `action` or a re-run `checkpoint`. Pinning the whole set
-  // here means a fifteenth kind is a decision somebody has to make on purpose.
+  // Four additions to SPEC's list, and both groups are added for the reason SPEC
+  // itself gives for `assist.*` having its own kinds rather than reusing
+  // `decide`.
+  //
+  // The `recovery.*` three: getting past a transient state unattended must not
+  // be able to hide inside an ordinary `action` or a re-run `checkpoint`.
+  //
+  // `assist.declined` (ticket 15): a consultation that produced no proposal must
+  // say so and say why. Without it, a rung that could not reach a model and a
+  // rung whose answer was dropped on the floor look identical in the log, and
+  // "every assisted-recovery decision recorded as evidence" would hold only for
+  // the decisions that went well.
+  //
+  // Pinning the whole set here means a further kind is a decision somebody has
+  // to make on purpose.
   const RECOVERY_KINDS = ["recovery.detected", "recovery.attempt", "recovery.resolved"]
-  expect(kinds).toEqual(new Set([...SPEC_KINDS, ...RECOVERY_KINDS]))
+  const ASSIST_KINDS = ["assist.declined"]
+  expect(kinds).toEqual(new Set([...SPEC_KINDS, ...RECOVERY_KINDS, ...ASSIST_KINDS]))
 })

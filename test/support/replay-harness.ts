@@ -33,7 +33,7 @@ import {
 } from "@cua/policy"
 import { automationOwnedSession } from "@cua/session"
 import { playwrightSurface } from "@cua/surface"
-import { type ReplayResult, evidenceForRun, replayCapability } from "@cua/replay"
+import { type Advisor, type ReplayResult, evidenceForRun, replayCapability } from "@cua/replay"
 import { Effect, Layer, Result } from "effect"
 
 /** The capability this ticket's tracer bullet runs. */
@@ -101,6 +101,16 @@ export const replay = (options: {
    * are armed. Ticket 06's session-expiry toggle is one of these.
    */
   readonly core?: Omit<LegacyCoreOptions, "port" | "hostname">
+  /**
+   * The Assisted Recovery rung, when a test is exercising it.
+   *
+   * Absent by default, exactly as `--assist` is off by default, so every test
+   * written before ticket 15 runs against an engine with no rung at all. A test
+   * that wants one builds it from `@cua/agent`'s `modelAdvisor` over a scripted
+   * `LanguageModel` layer, which is the same construction the CLI makes with a
+   * real provider Layer.
+   */
+  readonly assist?: Advisor
 }): Effect.Effect<ReplayOutcome, unknown> =>
   Effect.gen(function* () {
     const core = yield* serve({ port: 0, ...options.core })
@@ -122,7 +132,8 @@ export const replay = (options: {
       artifact: options.artifact,
       inputs: prepared.success,
       baseUrl: options.baseUrl ?? core.origin,
-      runId
+      runId,
+      ...(options.assist === undefined ? {} : { assist: options.assist })
     }).pipe(
       Effect.provide(
         Layer.mergeAll(

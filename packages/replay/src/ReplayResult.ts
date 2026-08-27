@@ -70,7 +70,17 @@ export const StepRecord = Schema.Struct({
    * not, without reading the Evidence log — and a Step that recovered is still a
    * Step that held, which is the distinction the whole taxonomy rests on.
    */
-  recovered: Schema.optional(Schema.String)
+  recovered: Schema.optional(Schema.String),
+  /**
+   * True on the one Step whose stall the Assisted Recovery rung classified.
+   *
+   * Beside `recovered` and for the same reason: a caller reading the step list
+   * should be able to see that a run did not go straight through, and *how* it
+   * did not, without consulting the Evidence. The difference between them is the
+   * difference the whole ladder is about — a recovered Step got past a state on
+   * its own, an assisted one had a state explained to it.
+   */
+  assisted: Schema.optional(Schema.Boolean)
 })
 export type StepRecord = typeof StepRecord.Type
 
@@ -307,9 +317,24 @@ const BusinessOutcome = Schema.Struct({
   /**
    * True when Assisted Recovery proposed this rather than the Artifact declaring
    * it (ticket 15). An assisted result never counts as deterministic.
+   *
+   * Absent, rather than `false`, on every deterministic outcome. A field that is
+   * always present invites `if (result.assisted)` to be written as though the
+   * two answers were the same kind of thing with a flag between them; absence is
+   * what a caller who has never heard of this rung gets, and it is correct for
+   * them.
    */
   assisted: Schema.optional(Schema.Boolean),
-  confidence: Schema.optional(Schema.Finite)
+  /** The model's own confidence, `0` to `1`. Present exactly when `assisted` is. */
+  confidence: Schema.optional(Schema.Finite),
+  /**
+   * Where the proposal is, in this run's Evidence: `events.jsonl#assist-1`.
+   *
+   * Relative to `evidenceDirectory`, which is already on every result. A caller
+   * that wants to know *why* an assisted answer was given has the rationale, the
+   * confidence and the screen it was read off, one file away.
+   */
+  proposalRef: Schema.optional(Schema.String)
 })
 
 /** Automation stopped and a person has the live Session (ticket 12). */
@@ -345,7 +370,17 @@ export const describeResult = (result: ReplayResult): string => {
     case "success":
       return `success: ${Object.keys(result.outputs).length} output(s) over ${result.steps.length} step(s)`
     case "business_outcome":
-      return `business outcome ${result.code}: ${result.detail}`
+      // The assisted half is in the headline rather than a footnote. This string
+      // is what `run.end` records and what a CLI prints first, and a proposed
+      // answer that reads exactly like a deterministic one is the confusion the
+      // marker exists to prevent.
+      return (
+        `business outcome ${result.code}: ${result.detail}` +
+        (result.assisted === true
+          ? ` (assisted: proposed at confidence ${(result.confidence ?? 0).toFixed(2)}, ` +
+            `not a deterministic result)`
+          : "")
+      )
     case "intervention_required":
       return `intervention required at step ${result.stepId}: ${result.reason}`
     case "failure":

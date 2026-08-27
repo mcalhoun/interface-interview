@@ -27,7 +27,13 @@
  */
 
 import type { CompiledPolicy } from "./PolicyDocument.ts"
-import { type ActionRequest, type PolicyVerdict, riskOf } from "./Policy.ts"
+import {
+  type ActionRequest,
+  type ConsultationRequest,
+  type PolicyVerdict,
+  CONSULTATION_RISK,
+  riskOf
+} from "./Policy.ts"
 import { allowedBy, originOf } from "./origins.ts"
 
 export const decide = (policy: CompiledPolicy, request: ActionRequest): PolicyVerdict => {
@@ -124,5 +130,84 @@ export const decide = (policy: CompiledPolicy, request: ActionRequest): PolicyVe
     `policy ${policy.name} permits ${request.type} (${risk})` +
       (origin === undefined ? "" : ` on ${origin}`) +
       (because === undefined || because.length === 0 ? "" : ` — ${because}`)
+  )
+}
+
+/**
+ * Applying a Policy to one consultation of the Assisted Recovery model.
+ *
+ * Three questions, and they are not the three an Action is asked. There is no
+ * Action type to classify and no destination to check, because a consultation
+ * performs nothing and goes nowhere: it reads the page the run is stuck on and
+ * sends that text to a model.
+ *
+ *   1. **Is this Replay asking?** Assisted Recovery is a Replay rung. Discovery
+ *      reaches a model openly, through its own requirement set, and a Discovery
+ *      run arriving at this door would be a second route to a model that
+ *      ADR-0003's type-level proof says nothing about.
+ *   2. **Does this deployment permit it at all?** A Policy with no `assist:`
+ *      block denies, like everything else it does not mention.
+ *   3. **Is the run somewhere it was allowed to be?** The screen is what leaves
+ *      the building, so the origin it came from is what the allowlist judges. A
+ *      run that has wandered off-allowlist must not have its page read out to a
+ *      third party on the way to the escalation it is about to raise.
+ *
+ * `risk` is `CONSULTATION_RISK` on every verdict, allow or deny. It is a
+ * property of what was asked for rather than of the answer, and an auditor
+ * counting what a Policy let through wants to see the class either way.
+ */
+export const decideAssist = (
+  policy: CompiledPolicy,
+  request: ConsultationRequest
+): PolicyVerdict => {
+  const origin = originOf(request.page)
+  const at = origin === undefined ? {} : { origin }
+
+  const verdict = (verdict: "allow" | "deny", reason: string): PolicyVerdict => ({
+    verdict,
+    reason,
+    policy: policy.name,
+    risk: CONSULTATION_RISK,
+    ...at
+  })
+
+  if (request.mode !== "replay") {
+    return verdict(
+      "deny",
+      `assisted recovery is a replay rung, and this request came from ${request.mode} mode. ` +
+        `Discovery reaches a model through its own requirement set, not through this gate`
+    )
+  }
+
+  if (policy.assist === undefined) {
+    return verdict(
+      "deny",
+      `policy ${policy.name} does not permit consulting a model. A policy permits only what it ` +
+        `writes down, and this one has no assist: block`
+    )
+  }
+
+  if (origin === undefined) {
+    return verdict(
+      "deny",
+      `no page is open (${request.page}), so there is nothing to classify. Policy ` +
+        `${policy.name} allows a consultation only about an origin it can name`
+    )
+  }
+
+  if (allowedBy(policy.origins, request.page) === undefined) {
+    return verdict(
+      "deny",
+      `this run is on ${origin}, which policy ${policy.name} does not allow. A screen this ` +
+        `run should not be looking at is a screen it must not send anywhere. ` +
+        `Allowed origins: ${policy.origins.map((pattern) => pattern.source).join(", ")}`
+    )
+  }
+
+  const because = policy.assist.because.trim()
+  return verdict(
+    "allow",
+    `policy ${policy.name} permits a classification-only consultation (${CONSULTATION_RISK}) ` +
+      `on ${origin} — ${because}`
   )
 }

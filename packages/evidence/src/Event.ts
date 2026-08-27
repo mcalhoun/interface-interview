@@ -227,15 +227,63 @@ const RecoveryResolved = event("recovery.resolved", {
 // The rest of the recovery ladder. Defined here, emitted by tickets 12 and 15.
 // ---------------------------------------------------------------------------
 
+/**
+ * The Assisted Recovery rung was reached, and this is what it asked.
+ *
+ * `assistId` joins the pair. It is what a `business_outcome` result's
+ * `proposalRef` points at, so a caller holding an assisted answer can find the
+ * proposal it came from in the log without matching on timestamps (SPEC user
+ * story 37: "a pointer to the evidence").
+ *
+ * Every request is followed by exactly one of `assist.proposal` or
+ * `assist.declined`, so a consultation is never a question mark in the log: an
+ * auditor can always see what came back, or why nothing did.
+ */
 const AssistRequest = event("assist.request", {
+  /** `assist-1`. Unique within a run, and the run is bounded to one. */
+  assistId: Schema.String,
   reason: Schema.String,
   question: Schema.String
 })
 
+/**
+ * What the model proposed. Recorded whether or not the run acted on it.
+ *
+ * `accepted` is the half an auditor needs and the run's own result cannot
+ * supply: a proposal below the confidence floor is recorded and refused, and a
+ * log that only kept the accepted ones would make the floor invisible.
+ */
 const AssistProposal = event("assist.proposal", {
+  assistId: Schema.String,
   proposedOutcome: Schema.String,
   confidence: Schema.Finite,
-  rationale: Schema.String
+  rationale: Schema.String,
+  /** Whether the run returned this to its caller as an assisted outcome. */
+  accepted: Schema.Boolean
+})
+
+/**
+ * The consultation produced no proposal, and this is why.
+ *
+ * A third `assist.*` kind, one past the two SPEC enumerates, added for exactly
+ * the reason the three `recovery.*` kinds were: SPEC's list is a floor, and a
+ * rung that can decline silently is a rung nobody can audit. Without it, a
+ * `--assist` run whose model was unreachable, or which could not tell what it
+ * was looking at, leaves a request and then nothing — indistinguishable in the
+ * log from a bug that dropped the answer on the floor.
+ *
+ * It is deliberately *not* an `assist.proposal` with an empty outcome. A
+ * proposal that was never made must not be shaped like one that was, or
+ * anything counting proposals counts it.
+ *
+ * A Policy refusal produces one of these too, alongside the `policy.check` that
+ * carries the verdict itself, so the reason a run reached a person is in one
+ * place rather than assembled from two kinds.
+ */
+const AssistDeclined = event("assist.declined", {
+  assistId: Schema.String,
+  /** In the words the next rung down reports, and an Operator is shown. */
+  reason: Schema.String
 })
 
 const InterventionRaise = event("intervention.raise", {
@@ -280,6 +328,7 @@ export const EvidenceEvent = Schema.Union([
   RecoveryResolved,
   AssistRequest,
   AssistProposal,
+  AssistDeclined,
   InterventionRaise,
   InterventionHumanAction,
   InterventionResolve,
