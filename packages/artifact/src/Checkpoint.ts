@@ -12,25 +12,38 @@
  * Every assertion is evaluated against Surface State — the accessibility tree,
  * the location, and what earlier Steps read. None of them can reach markup.
  *
- * ## Seam for ticket 04 (declared Business Outcomes)
+ * ## Expecting one of several states
  *
- * A Checkpoint here asserts one intended state. Ticket 04 needs a Checkpoint to
- * expect *one of several* states and to end the run cleanly when a declared
- * outcome's branch matches. The shape to add is a sibling of `expect`:
+ * `expect` is the state the Step is *for*. `orOutcome` is the list of other
+ * states the application is known to answer with, each naming a Business Outcome
+ * code the caller can branch on. A Checkpoint with branches says: this is what
+ * should happen, and here is what else this screen legitimately does.
  *
  *     checkpoint:
- *       description: ...
- *       expect: [...]                 # the intended state
- *       orOutcome:                    # ticket 04
+ *       description: Member Detail is showing.
+ *       expect:
+ *         - assert: textPresent
+ *           text: Member Detail
+ *       orOutcome:
  *         - code: MEMBER_NOT_FOUND
- *           when: [{ assert: textPresent, text: "could not be retrieved" }]
+ *           when:
+ *             - assert: textPresent
+ *               text: Member Not Found
  *
- * Nothing below needs to change for that; `evaluate` already reports which
- * assertions hold, so a branch selector is a fold over the same result.
+ * A branch is written in the same assertion vocabulary as `expect`, because
+ * recognising a domain answer and confirming an intended state are the same act
+ * of reading a screen. Nothing about a branch is privileged: it cannot reach
+ * markup, cannot consult a model, and cannot match on anything an Artifact did
+ * not write down first.
+ *
+ * The ordering — `expect` first, branches only if it does not hold — is what
+ * makes the two impossible to confuse. A screen that satisfies the intended state
+ * is never re-read as an outcome.
  */
 
 import { Schema } from "effect"
 import { describeTarget } from "@cua/surface"
+import { OutcomeCode } from "./BusinessOutcomes.ts"
 import { CapabilityTarget, toSurfaceTarget } from "./Target.ts"
 import { ValueRef, describeValueRef } from "./Value.ts"
 
@@ -99,11 +112,36 @@ export const Assertion = Schema.Union([
 ])
 export type Assertion = typeof Assertion.Type
 
+/**
+ * One alternative state this Step's screen is known to reach, and the Business
+ * Outcome code that state means.
+ *
+ * Every assertion in `when` must hold for the branch to be taken, and the code
+ * must be declared in the Artifact's `outcomes:` — `parseArtifact` rejects one
+ * that is not, so a code a caller can receive always has prose explaining it.
+ */
+export const OutcomeBranch = Schema.Struct({
+  code: OutcomeCode,
+  /** Every one must hold. An empty list would match every screen. */
+  when: Schema.Array(Assertion).check(Schema.isMinLength(1))
+})
+export type OutcomeBranch = typeof OutcomeBranch.Type
+
 export const Checkpoint = Schema.Struct({
   /** What reaching this state means, in an operator's words. Shown on failure. */
   description: Schema.String,
   /** Every assertion must hold. An empty list is not a Checkpoint. */
   expect: Schema.Array(Assertion).check(Schema.isMinLength(1)),
+  /**
+   * Other states this screen legitimately reaches, tried in order and only when
+   * `expect` does not hold. Reaching one ends the run as a Business Outcome:
+   * successfully, with a code, reporting no failure anywhere.
+   *
+   * Absent on most Checkpoints. A Step whose screen has exactly one legitimate
+   * next state should say so by having no branches, rather than by declaring a
+   * branch nothing can reach.
+   */
+  orOutcome: Schema.optional(Schema.Array(OutcomeBranch).check(Schema.isMinLength(1))),
   /**
    * How long the state has to settle. Heritage Core does full page loads, so a
    * Checkpoint is a bounded poll rather than an instant read.
@@ -131,3 +169,14 @@ export const describeAssertion = (assertion: Assertion): string => {
       return `what step ${assertion.step} read to match /${assertion.matches}/`
   }
 }
+
+/**
+ * How a taken branch reads in Evidence and in a result: the conditions that were
+ * actually true, in the Artifact's own words.
+ *
+ * This is the "which checkpoint branch matched" half of the record. A code alone
+ * would say what the system concluded; this says what it saw in order to conclude
+ * it, which is the part a reviewer can disagree with.
+ */
+export const describeBranch = (branch: OutcomeBranch): string =>
+  branch.when.map(describeAssertion).join("; and ")

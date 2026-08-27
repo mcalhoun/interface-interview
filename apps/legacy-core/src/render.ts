@@ -213,6 +213,49 @@ export const accountDetailPanel = (member: Member, account: Account): string => 
 </html>
 `
 
+/**
+ * Member Not Found: what Heritage Core shows when a well-formed member number is
+ * not on file.
+ *
+ * This screen is the fixture for the distinction the whole system turns on. The
+ * search worked. The application understood the request and answered it. The
+ * answer is "there is no such member", which is a fact about the credit union's
+ * members rather than a fault in anything — so it arrives as a normal screen with
+ * **HTTP 200**, exactly the way the real thing does. A caller who treats this as
+ * an error is wrong about the domain, not defensive.
+ *
+ * Two consequences follow from the 200, and both are the point:
+ *
+ *   - Nothing at the transport layer signals it. Anyone hoping to classify this
+ *     by status code, thrown exception or `response.ok` gets "success" and a page
+ *     full of the wrong data.
+ *   - It is only distinguishable by *reading the screen*, which is what makes a
+ *     Checkpoint's declared outcome branch the mechanism that recognises it.
+ *
+ * The message names the number searched, so a real operator can see they typed
+ * what they meant to. The stable part — the screen heading and the sentence
+ * opener — carries no runtime value, so an Artifact can assert on it.
+ */
+export const memberNotFoundPage = (memberNumber: string): string =>
+  shell(
+    "Heritage Core - Member Not Found",
+    `<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>
+<font face="Arial" size="2"><b>Member Not Found</b></font>
+</td></tr></table>
+<br>
+<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
+<tr bgcolor="#c0c0c0"><td><font face="Arial" size="2"><b>Member Number Search Results</b></font></td></tr>
+<tr bgcolor="#ffffff"><td>${caption(
+      `No member record found for member number ${memberNumber}.`
+    )}</td></tr>
+<tr bgcolor="#ffffff"><td>${caption(
+      "Verify the number and search again. Numbers issued before the 1998 conversion are not member numbers and will not be found on this screen."
+    )}</td></tr>
+</table>
+<br>
+<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`
+  )
+
 /** Cross-reference lookup result. Legacy numbers were retired at conversion. */
 export const crossReferencePage = (legacyMemberNumber: string): string =>
   shell(
@@ -230,9 +273,15 @@ export const crossReferencePage = (legacyMemberNumber: string): string =>
   )
 
 /**
- * The system message page. Heritage Core answers every unusable request this way.
- * Ticket 04 owns what a genuinely absent member looks like as a Business Outcome;
- * this is only the generic fallback so the server always answers something.
+ * The system message page. Heritage Core answers every *unusable* request this
+ * way: a transaction code that is not mapped, a search submitted with nothing in
+ * it, an account number that does not belong to the member on the URL.
+ *
+ * Deliberately not what an absent member gets. A request that could not be
+ * carried out and a request that was carried out and came back empty are
+ * different things, and collapsing them onto one screen is the mistake that makes
+ * a legitimate domain answer look like a fault. Absent members get
+ * `memberNotFoundPage` instead.
  */
 export const systemMessagePage = (message: string): string =>
   shell(

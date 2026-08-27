@@ -8,6 +8,11 @@
  * is rejected when it is read rather than three Steps into a live run against a
  * banking system.
  *
+ * The same applies to the Business Outcomes an Artifact declares. A Checkpoint
+ * branch returning an undeclared code, or a declared code no branch can reach,
+ * are both documents that lie about the Capability's domain contract — and a
+ * contract is only worth reading if something checks it.
+ *
  * This is the check ticket 11's compiler has to satisfy. Emitting an Artifact
  * that fails `parseArtifact` is a compiler bug, and having the check exist first
  * is why the ordering in SPEC's build order puts Replay before Discovery.
@@ -75,6 +80,9 @@ const referentialProblems = (artifact: CapabilityArtifact): ReadonlyArray<string
   const stepIds = new Set<string>()
   /** Steps that bind a reading, in order, so a forward reference is catchable. */
   const readBefore = new Set<string>()
+  const declared = new Set(Object.keys(artifact.outcomes ?? {}))
+  /** Outcome codes some Checkpoint branch can actually produce. */
+  const reachable = new Set<string>()
 
   for (const step of artifact.steps) {
     if (stepIds.has(step.id)) problems.push(`step id ${step.id} is used more than once`)
@@ -119,6 +127,29 @@ const referentialProblems = (artifact: CapabilityArtifact): ReadonlyArray<string
     step.checkpoint.expect.forEach((assertion, index) =>
       checkAssertion(`${where}'s checkpoint assertion ${index}`, assertion)
     )
+    for (const branch of step.checkpoint.orOutcome ?? []) {
+      // A code a caller can receive with no prose saying what it means is a
+      // domain contract with a hole in it.
+      if (!declared.has(branch.code)) {
+        problems.push(
+          `${where}'s outcome branch returns ${branch.code}, which is not declared in outcomes`
+        )
+      }
+      reachable.add(branch.code)
+      branch.when.forEach((assertion, index) =>
+        checkAssertion(`${where}'s ${branch.code} branch condition ${index}`, assertion)
+      )
+    }
+  }
+
+  // ...and the other direction. A declared outcome no Checkpoint can reach is a
+  // document claiming a behaviour the Capability does not have, which is worse
+  // than not documenting it: a reviewer approves the claim, and a caller writes a
+  // branch that never runs.
+  for (const code of declared) {
+    if (!reachable.has(code)) {
+      problems.push(`outcome ${code} is declared but no checkpoint branch can reach it`)
+    }
   }
 
   for (const [name, output] of Object.entries(artifact.outputs)) {

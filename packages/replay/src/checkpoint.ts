@@ -25,13 +25,43 @@
  * 06's transient conditions, which wait on one thing and do not need to explain
  * themselves.
  *
+ * ## Three verdicts, not two
+ *
+ * A Checkpoint's intended state either was reached or was not — but "was not" is
+ * two entirely different things, and collapsing them is the mistake this system
+ * exists to avoid. The application may be broken, or the application may have
+ * answered a question the caller asked and the answer is simply not the happy
+ * path. Searching for a member who does not exist is the second, and it is a
+ * result the caller needs rather than a fault anyone should be paged about.
+ *
+ * So `evaluate` returns `held`, `outcome` or `failed`:
+ *
+ *   - **held** — every assertion in `expect` is true.
+ *   - **outcome** — `expect` is not true, and every condition of a Business
+ *     Outcome branch the Artifact declared *is*. Terminal, and not a failure.
+ *   - **failed** — neither, within the bound. A Hard Failure.
+ *
+ * `expect` is always tried first, on every pass, so a screen that satisfies the
+ * intended state can never be re-read as an outcome. Branches are tried in the
+ * order the Artifact lists them.
+ *
+ * A matching branch returns **immediately**, without waiting out the remaining
+ * bound. That is not an optimisation: a declared outcome is a definite state, not
+ * a state that has yet to settle, and making a legitimate domain answer cost a
+ * five-second timeout would be treating it as a failure in everything but name.
+ *
  * ## Seam for ticket 06 (recoverable conditions)
  *
- * A Checkpoint that does not hold within its bound returns `CheckpointOutcome`
+ * A Checkpoint that reaches neither within its bound returns `verdict: "failed"`
  * with the state that defeated it. Ticket 06 inspects that state for a known
  * transient condition, does something bounded about it, and calls `evaluate`
  * again — re-evaluating rather than assuming the fix worked, which its checklist
  * requires. The return type already carries everything that needs.
+ *
+ * The order to add it in is: `expect`, then declared outcomes, then recoverable
+ * conditions. An outcome is what the application *means*; a recoverable condition
+ * is a state the application is passing through. Checking recovery first would
+ * let a transient-overlay rule swallow a terminal domain answer.
  */
 
 import { Effect } from "effect"
@@ -41,6 +71,7 @@ import {
   type ResolvedInputs,
   type ValueRef,
   describeAssertion,
+  describeBranch,
   toSurfaceTarget
 } from "@cua/artifact"
 import type {
@@ -58,17 +89,35 @@ const POLL_INTERVAL_MILLIS = 100
 /** What earlier Steps read, keyed by the Step that read it. */
 export type StepReadings = ReadonlyMap<string, string>
 
+/** What every verdict carries, whichever one it is. */
+interface Observed {
+  readonly state: SurfaceState
+  readonly waitedMillis: number
+}
+
 export type CheckpointOutcome =
-  | { readonly held: true; readonly state: SurfaceState; readonly waitedMillis: number }
-  | {
-      readonly held: false
-      readonly state: SurfaceState
-      readonly waitedMillis: number
-      /** The first assertion that did not hold, rendered as "expected ...". */
+  /** The intended state was reached. */
+  | ({ readonly verdict: "held" } & Observed)
+  /**
+   * A declared Business Outcome branch matched instead. Terminal and successful:
+   * the run stops here and the caller gets `code` to branch on.
+   */
+  | ({
+      readonly verdict: "outcome"
+      readonly code: string
+      /** Which branch, zero-based, for anyone reading the Artifact alongside. */
+      readonly branch: number
+      /** The conditions that held, in the Artifact's words. Goes into Evidence. */
+      readonly because: string
+    } & Observed)
+  /** Neither, within the bound. */
+  | ({
+      readonly verdict: "failed"
+      /** The first assertion of `expect` that did not hold, as "expected ...". */
       readonly expected: string
       /** What was there instead. Never a stack trace. */
       readonly observed: string
-    }
+    } & Observed)
 
 export interface EvaluationContext {
   readonly surface: SurfaceAdapterService
@@ -77,11 +126,14 @@ export interface EvaluationContext {
 }
 
 /**
- * Polls until every assertion holds, or the Checkpoint's bound expires.
+ * Polls until the intended state holds, a declared outcome branch matches, or the
+ * Checkpoint's bound expires.
  *
- * Fails only when the Surface itself is unreachable. An assertion that does not
- * hold is a *value*, because "the state was not reached" is information the
- * caller acts on, not an exception it catches.
+ * Fails only when the Surface itself is unreachable. Neither of the other two
+ * verdicts is an error channel: "the intended state was not reached" and "the
+ * domain answered something else" are both information the caller acts on, and a
+ * Business Outcome in particular must never travel as an exception — the moment
+ * it does, every `catch` upstream starts treating a legitimate answer as a fault.
  */
 export const evaluate = (
   context: EvaluationContext,
@@ -95,23 +147,56 @@ export const evaluate = (
     // already true costs nothing. Most of them are.
     while (true) {
       const state = yield* context.surface.observe
-      let firstFailure: { expected: string; observed: string } | undefined
+      const firstFailure = yield* firstUnmet(context, checkpoint.expect, state)
 
-      for (const assertion of checkpoint.expect) {
-        const observed = yield* check(context, assertion, state)
-        if (observed !== undefined) {
-          firstFailure = { expected: describeAssertion(assertion), observed }
-          break
+      if (firstFailure === undefined) {
+        return { verdict: "held", state, waitedMillis: Date.now() - startedAt }
+      }
+
+      // The intended state is not here. Before concluding anything about that,
+      // ask whether this is one of the states the Artifact said the application
+      // legitimately reaches.
+      const branches = checkpoint.orOutcome ?? []
+      for (const [branch, declared] of branches.entries()) {
+        if ((yield* firstUnmet(context, declared.when, state)) !== undefined) continue
+        return {
+          verdict: "outcome",
+          code: declared.code,
+          branch,
+          because: describeBranch(declared),
+          state,
+          waitedMillis: Date.now() - startedAt
         }
       }
 
       const waitedMillis = Date.now() - startedAt
-      if (firstFailure === undefined) return { held: true, state, waitedMillis }
       if (waitedMillis >= bound) {
-        return { held: false, state, waitedMillis, ...firstFailure }
+        return { verdict: "failed", state, waitedMillis, ...firstFailure }
       }
       yield* Effect.sleep(POLL_INTERVAL_MILLIS)
     }
+  })
+
+/**
+ * The first assertion in the list that does not hold, or `undefined` if they all
+ * do.
+ *
+ * Shared by `expect` and by every outcome branch, deliberately: a branch is
+ * evaluated by exactly the same code, against exactly the same observation, as
+ * the intended state it is an alternative to. There is no separate, laxer path
+ * for recognising a domain answer.
+ */
+const firstUnmet = (
+  context: EvaluationContext,
+  assertions: ReadonlyArray<Assertion>,
+  state: SurfaceState
+): Effect.Effect<{ expected: string; observed: string } | undefined, SurfaceUnavailable> =>
+  Effect.gen(function* () {
+    for (const assertion of assertions) {
+      const observed = yield* check(context, assertion, state)
+      if (observed !== undefined) return { expected: describeAssertion(assertion), observed }
+    }
+    return undefined
   })
 
 /**

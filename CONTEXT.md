@@ -65,7 +65,7 @@ _Avoid_: snapshot, DOM, page state, screen
 ### Outcomes
 
 **Business Outcome**:
-An expected result of the application's own domain that the caller needs to know about, such as a member not existing. A legitimate answer, never a failure.
+An expected result of the application's own domain that the caller needs to know about, such as a member not existing. A legitimate answer, never a failure. Always declared in the Capability Artifact and recognised by a condition written there in advance, never inferred at run time from the shape of a screen.
 _Avoid_: error, exception, negative result
 
 **Recoverable Condition**:

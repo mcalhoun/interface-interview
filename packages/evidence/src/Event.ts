@@ -114,16 +114,32 @@ const ActionEvent = event("action", {
 
 const CheckpointEvent = event("checkpoint", {
   description: Schema.String,
-  verdict: Schema.Literals(["held", "failed"]),
+  /**
+   * Three verdicts, because "the intended state was not reached" is two different
+   * things. `outcome` means a Business Outcome branch the Artifact declared
+   * matched instead — a terminal, legitimate answer, and emphatically not a
+   * `failed`. Anything reading this log to count failures has to be able to tell
+   * them apart, so they are separate literals rather than a flag on one.
+   */
+  verdict: Schema.Literals(["held", "outcome", "failed"]),
   expected: Schema.String,
   observed: Schema.String,
   waitedMillis: Schema.Int
 })
 
 const Outcome = event("outcome", {
-  /** `SUCCESS`, or a declared Business Outcome code once ticket 04 lands. */
+  /** `SUCCESS`, or the code of a declared Business Outcome the run reached. */
   code: Schema.String,
-  detail: Schema.String
+  detail: Schema.String,
+  /**
+   * For a Business Outcome: the Checkpoint branch conditions that held, in the
+   * Artifact's own words.
+   *
+   * The code says what the system concluded. This says what it observed in order
+   * to conclude it, which is the half a reviewer can check the Artifact against
+   * and disagree with. Absent on `SUCCESS`, which concluded nothing.
+   */
+  matched: Schema.optional(Schema.String)
 })
 
 // ---------------------------------------------------------------------------

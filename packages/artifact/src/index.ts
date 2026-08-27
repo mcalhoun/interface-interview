@@ -10,17 +10,28 @@
 export type { Action, ActionType } from "./Action.ts"
 export { Action as ActionSchema } from "./Action.ts"
 
-export type { Assertion, Checkpoint } from "./Checkpoint.ts"
+export type { OutcomeCode, OutcomeDeclaration, OutcomeDeclarations } from "./BusinessOutcomes.ts"
+export {
+  OutcomeCode as OutcomeCodeSchema,
+  OutcomeDeclaration as OutcomeDeclarationSchema,
+  OutcomeDeclarations as OutcomeDeclarationsSchema
+} from "./BusinessOutcomes.ts"
+
+export type { Assertion, Checkpoint, OutcomeBranch } from "./Checkpoint.ts"
 export {
   Assertion as AssertionSchema,
   Checkpoint as CheckpointSchema,
-  describeAssertion
+  describeAssertion,
+  describeBranch,
+  OutcomeBranch as OutcomeBranchSchema
 } from "./Checkpoint.ts"
 
 export type { CapabilityArtifact, Step, SurfaceDeclaration } from "./CapabilityArtifact.ts"
 export {
   CapabilityArtifact as CapabilityArtifactSchema,
   capabilityRef,
+  declaredOutcome,
+  declaredOutcomeCodes,
   Step as StepSchema,
   SurfaceDeclaration as SurfaceDeclarationSchema
 } from "./CapabilityArtifact.ts"
