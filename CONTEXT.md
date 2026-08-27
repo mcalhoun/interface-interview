@@ -28,6 +28,10 @@ _Avoid_: skill, tool, automation, macro
 The typed, versioned, human-readable document describing how a Capability is carried out: its inputs, outputs, steps, checkpoints and known outcomes. Immutable once written.
 _Avoid_: script, recording, flow, playbook, definition
 
+**Capability Catalog**:
+The agent-facing list of every stored Capability, each as a callable signature: what it takes, what it returns, which Business Outcomes it can answer with instead, and the exact line that invokes it. A view over the Capability Artifacts on disk, never a second store. Shows a parameter's domain and withholds a sensitive parameter's value.
+_Avoid_: registry, index, manifest, directory
+
 **Step**:
 One named unit within a Capability Artifact, pairing an Action with the Checkpoint that confirms it landed.
 _Avoid_: instruction, command, node

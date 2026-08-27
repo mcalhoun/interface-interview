@@ -7,6 +7,23 @@
  * reading any code. Start there.
  */
 
+export type {
+  Catalog,
+  CatalogEntry,
+  CatalogOutcome,
+  CatalogParameter,
+  CatalogReturn
+} from "./catalog.ts"
+export {
+  REPLAY_COMMAND,
+  catalogEntry,
+  describeCatalog,
+  describeCatalogEntry,
+  invocationOf,
+  readCatalog,
+  readCatalogEntry
+} from "./catalog.ts"
+
 export type { Action, ActionType, ItemList, SelectFromListAction } from "./Action.ts"
 export { Action as ActionSchema, describeItemList } from "./Action.ts"
 
