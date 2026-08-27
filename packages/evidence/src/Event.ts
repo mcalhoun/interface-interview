@@ -250,9 +250,21 @@ const InterventionHumanAction = event("intervention.human_action", {
 
 const InterventionResolve = event("intervention.resolve", {
   operator: Schema.String,
-  /** What the Operator said this state means. Ticket 13 and 14 learn from it. */
+  /** Whether the run can carry on from here. About this episode. */
   classification: Schema.String,
-  detail: Schema.String
+  detail: Schema.String,
+  /**
+   * The Operator's answer to the one question asked at return-of-control:
+   * should automation handle this state itself next time?
+   *
+   * About the *state*, not this episode, which is why it is a second field
+   * rather than another value of `classification`. Together with the
+   * `intervention.human_action` events on the same step — whether the Operator
+   * did anything at all — this is the whole input to ADR-0004's table, so an
+   * auditor can re-derive a learned classification from the log alone rather
+   * than having to trust the Amendment that came out of it.
+   */
+  nextTime: Schema.String
 })
 
 export const EvidenceEvent = Schema.Union([

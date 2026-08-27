@@ -249,6 +249,46 @@ const SUPERVISOR_HOLD: Member = {
 }
 
 /**
+ * Ticket 13's member: a checking account, and no savings account at all.
+ *
+ * The most important thing about this record is how *ordinary* it is. Nothing is
+ * held, nothing is restricted, nothing is slow, and every screen renders exactly
+ * as it does for `12345`. The account list is a perfectly good account list; it
+ * simply has one row in it.
+ *
+ * That is what makes it the fixture for the distinction the brief calls the most
+ * common design mistake in this problem. A capability asked for the savings
+ * balance finds no savings account, and there is nothing on the screen to
+ * distinguish "the domain said no" from "the automation cannot see it". The
+ * difference is not observable at all — which is why it has to be *learned* from
+ * what a person did when they met it, rather than inferred from the page.
+ *
+ * Deliberately not a second restriction, a second empty table or a "no accounts"
+ * message. Any of those would give the system something to recognise, and
+ * recognising it would be the answer smuggled in as perception.
+ */
+const CHECKING_ONLY: Member = {
+  memberNumber: "88888",
+  name: "MARGUERITE A ELLSWORTH",
+  memberSince: "06/14/2019",
+  status: "Active",
+  taxIdMasked: "xxx-xx-4417",
+  branch: "002 - NORTHGATE",
+  accounts: [
+    {
+      accountNumber: "0000088888-D10",
+      description: "Checking",
+      type: "DRAFT",
+      openedOn: "06/14/2019",
+      status: "Active",
+      availableBalance: "$1,046.73",
+      currentBalance: "$1,046.73",
+      lastActivityOn: "08/24/2026"
+    }
+  ]
+}
+
+/**
  * The member whose record the application is slow and awkward about serving.
  *
  * Nothing here says so: the record is ordinary, and the difficulty lives entirely
@@ -288,7 +328,7 @@ const TRANSIENT: Member = {
 }
 
 const MEMBERS: ReadonlyMap<string, Member> = new Map(
-  [HAPPY_PATH, LABEL_VARIANT, TWO_SAVINGS, TRANSIENT, SUPERVISOR_HOLD].map((member) => [
+  [HAPPY_PATH, LABEL_VARIANT, TWO_SAVINGS, TRANSIENT, SUPERVISOR_HOLD, CHECKING_ONLY].map((member) => [
     member.memberNumber,
     member
   ])

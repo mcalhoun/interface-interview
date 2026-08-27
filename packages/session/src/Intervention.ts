@@ -60,21 +60,45 @@ export interface OperatorAction {
  * `intervention_required` — which is an honest answer rather than a failure,
  * because the automation is not broken and there is nothing to page anyone about.
  *
- * ## Extension point for ticket 13
+ * ## Two axes, kept apart
  *
- * Ticket 13 asks the Operator one further question at this moment — whether
- * automation should handle this state itself next time — and turns the answer
- * into an Artifact Amendment. That is an added field on `ControlReturn` and an
- * added control on the return-of-control form, not a new mechanism: this type,
- * `returnControl`, the `intervention.resolve` Evidence event and the operator
- * interface's `/return` handler are all already the single place it happens.
+ * This field answers one question only: **can the run carry on from here?** It
+ * is about *this episode*. `nextTime` below answers a different one — what
+ * should automation do when it meets this state again — which is about the
+ * *state*, and outlives the run entirely.
  *
- * Widening this union is how the answer gets said. `business_outcome` (ticket
- * 13) and `requires_human` (ticket 14) are the two values it grows, and both are
- * classifications of the *state* rather than of this episode — which is the
- * distinction that makes the answer worth storing in an Artifact at all.
+ * Ticket 13 deliberately did not widen this union with `business_outcome`.
+ * Folding the two together would make a state's classification a function of
+ * whether one run happened to be resumable, and those are independent: member
+ * `88888` is a perfectly good Business Outcome *and* an unresolvable episode,
+ * because there is no savings account for anybody to conjure into existence. A
+ * union that could not express that would have forced a lie into one field or
+ * the other.
  */
 export type ControlReturnClassification = "resolved" | "unresolved"
+
+/**
+ * The one question, asked once, at return-of-control.
+ *
+ * SPEC: "The operator UI resolves the ambiguity between rows two and three with
+ * a single question at return-of-control: should automation do what you just
+ * did, or always stop here? That is a per-case judgment by the person who
+ * resolved it, the way real runbooks form, not an upfront policy."
+ *
+ * One question is the entire learning mechanism, and it is deliberately not
+ * enough on its own to say what was learned. It says what the Operator *wants*;
+ * what they *did* — `actions`, and specifically whether it is empty — says which
+ * kind of thing they are asking for. `classify` in `Learning.ts` is where the two
+ * meet, and it is ADR-0004's table.
+ *
+ * `not_asked` is a real answer and not an absence. A pause that expired, or a
+ * return driven by something other than the operator interface, closed without
+ * anybody being asked, and a record that said `undefined` would leave a reader
+ * unable to tell that from an interface that forgot to ask. Nothing is learned
+ * from it either way, which is the point: an unanswered question teaches
+ * nothing, and it should take a value to say so.
+ */
+export type NextTimeAnswer = "automation_handles_it" | "always_stop_here" | "not_asked"
 
 /** What an Operator submits when they hand the Session back. */
 export interface ControlReturn {
@@ -83,6 +107,8 @@ export interface ControlReturn {
   readonly classification: ControlReturnClassification
   /** What they did, or why they could not. Free text, in their own words. */
   readonly detail: string
+  /** Their answer to the one question. Required, so it can never be implied. */
+  readonly nextTime: NextTimeAnswer
 }
 
 /**
@@ -106,6 +132,11 @@ export interface InterventionRecord {
    */
   readonly classification: ControlReturnClassification | "unattended" | undefined
   readonly detail: string | undefined
+  /**
+   * What the Operator answered when asked how automation should treat this state
+   * next time. `not_asked` until somebody is asked, and after an expiry.
+   */
+  readonly nextTime: NextTimeAnswer
 }
 
 /**
@@ -134,5 +165,6 @@ export const raise = (intervention: Intervention): InterventionRecord => ({
   actions: [],
   returnedAt: undefined,
   classification: undefined,
-  detail: undefined
+  detail: undefined,
+  nextTime: "not_asked"
 })

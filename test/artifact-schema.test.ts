@@ -23,6 +23,7 @@ import {
   listCapabilities,
   listVersions,
   loadArtifact,
+  noMatchCode,
   parseArtifact,
   parseOutput,
   recoverableConditions
@@ -126,9 +127,16 @@ it("an action that names no single control still argues for how it picks one", (
     expect(selection.match.strategy).toBe("tokenSubset")
     // Both ways it can fail to land on exactly one item are declared up front,
     // and under different codes, because they mean different things.
-    expect(selection.onNoMatch.escalate).toBe("NO_MATCHING_ITEM")
-    expect(selection.onMultiple.escalate).toBe("AMBIGUOUS_MATCH")
-    expect(selection.onNoMatch.escalate).not.toBe(selection.onMultiple.escalate)
+    //
+    // At 1.0.0 both are still `escalate:` — the author knew a selection could
+    // match nothing or several things, and did not know what either would
+    // *mean* at an institution they had never seen. Ticket 13 promotes the
+    // no-match half to `outcome:` at 1.1.0, after a person met the state and
+    // said what it was; see the amendment test for that direction. `onMultiple`
+    // has no such form and never will (SPEC: never a coin flip).
+    expect(selection.onNoMatch).toEqual({ escalate: "NO_MATCHING_ITEM" })
+    expect(selection.onMultiple).toEqual({ escalate: "AMBIGUOUS_MATCH" })
+    expect(noMatchCode(selection.onNoMatch)).not.toBe(selection.onMultiple.escalate)
   }
 })
 
@@ -413,8 +421,11 @@ it("resolves the latest stored version, and lists what is callable", () => {
   const versions = listVersions(ARTIFACTS_DIRECTORY, "member.account-balance")
   expect(versions).toContain("1.0.0")
 
+  // 1.1.0 since ticket 13: `latest` follows the amendment, which is the point of
+  // amending rather than editing. A caller who wants the version from before the
+  // intervention asks for it by name, below.
   expect(expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance")).version).toBe(
-    "1.0.0"
+    "1.1.0"
   )
   // A pinned version still resolves to itself; `latest` is a convenience, not
   // the only way in.
@@ -434,16 +445,40 @@ it("the shipped artifact declares the recovery rules it can get past unattended"
   ])
 })
 
-it("v1.1.0 and v1.2.0 are left free for the outcomes an intervention teaches", () => {
-  // SPEC's scenario table reserves those two for members 88888 and 77777 —
-  // changes a human confirmed, each landing in its own file beside the
-  // intervention record that justified it. Ticket 09's selection and ticket 06's
-  // recovery rules are corrections to a hand-written document rather than things
-  // learned, so both belong in 1.0.0. Taking a reserved slot would blur the one
-  // diff worth showing.
+it("v1.1.0 was claimed by an intervention, and v1.2.0 is still free for one", () => {
+  // SPEC's scenario table reserves those two for changes a human confirmed, each
+  // landing in its own file beside the intervention record that justified it.
+  //
+  // v1.1.0 has now been claimed, and claimed the way it was meant to be: not by
+  // hand, but by an Operator meeting `88888`'s account list, changing nothing,
+  // and answering the one question at return-of-control. Ticket 09's selection
+  // and ticket 06's recovery rules stayed in 1.0.0 precisely so this slot would
+  // be free for that, and the assertion below is what the two of them were
+  // protecting.
+  //
+  // v1.2.0 is untouched and stays reserved for ticket 14's requires-human state.
   const versions = listVersions(ARTIFACTS_DIRECTORY, "member.account-balance")
-  expect(versions).not.toContain("1.1.0")
+  expect(versions).toContain("1.1.0")
   expect(versions).not.toContain("1.2.0")
+
+  // And it is a *learned* version, not a hand-written one. The two things that
+  // make it so, both visible in the file: the state that used to escalate is now
+  // declared, and its declaration says which intervention taught it.
+  const learned = expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance", "1.1.0"))
+  const selection = learned.steps.flatMap((step) =>
+    step.action.type === "selectFromList" ? [step.action] : []
+  )[0]!
+  expect(selection.onNoMatch).toEqual({ outcome: "NO_MATCHING_ITEM" })
+
+  const declaration = learned.outcomes?.["NO_MATCHING_ITEM"]
+  expect(declaration?.discoveredFrom).toContain("Learned from intervention")
+  expect(declaration?.discoveredFrom).toContain("recorded no actions on the live session")
+  expect(declaration?.discoveredFrom).toContain("ADR-0004")
+
+  // 1.0.0 is untouched. An amendment is a new file, never an edit, which is the
+  // whole reason the diff between the two is worth anything.
+  const before = expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance", "1.0.0"))
+  expect(before.outcomes?.["NO_MATCHING_ITEM"]).toBeUndefined()
 })
 
 it("turns a scraped amount into money, and refuses one in the wrong currency", () => {

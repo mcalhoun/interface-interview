@@ -352,7 +352,35 @@ export const replayCapability = (
           accessibility: before.accessibility
         })
 
-        const performed = yield* performAction(step, step.action, before)
+        // Rung 4 for an Action that could not be performed at all. See
+        // `performOrHandOff`: the ladder below a Checkpoint that failed and the
+        // ladder below an Action that never ran are the same ladder, reached at
+        // different moments and resumed on different terms.
+        const attempt = yield* performOrHandOff(step, before)
+        const performed = attempt.performed
+
+        // The Artifact says this state is one of its own answers. The Step is
+        // over; there is no Checkpoint to ask, because there was no Action whose
+        // effect a Checkpoint could confirm.
+        if (performed._tag === "Answered") {
+          const declaration = declaredOutcome(artifact, performed.code)
+          steps.push({
+            id: step.id,
+            intent: step.intent,
+            action: step.action.type,
+            checkpoint: "outcome"
+          })
+          return {
+            reached: {
+              code: performed.code,
+              detail: declaration?.title ?? `the capability reached ${performed.code}`,
+              stepId: step.id,
+              because: performed.because
+            },
+            afterHandoff: attempt.afterHandoff
+          }
+        }
+
         if (performed.read !== undefined) readings.set(step.id, performed.read)
         const read = performed.read
 
@@ -424,7 +452,10 @@ export const replayCapability = (
         //      recovery has had its turn does not type-check.
         let outcome: CheckpointOutcome = yield* verify(performed.url)
         let escalation: Escalated | undefined
-        let afterHandoff = false
+        // Possibly already true: an Operator may have been in the Session before
+        // the Action could run at all, in which case this Step has had a person
+        // in it whatever the Checkpoint goes on to say.
+        let afterHandoff = attempt.afterHandoff
         let recovered: string | undefined
         let exhausted: Extract<RecoveryOutcome, { attempted: true }> | undefined
 
@@ -475,7 +506,7 @@ export const replayCapability = (
                 // second time: report it and let a person read the record.
                 escalation = escalated(
                   step,
-                  outcome,
+                  outcome.state.accessibility,
                   `control was returned as resolved, but ${outcome.expected} is still not true`
                 )
               }
@@ -543,6 +574,129 @@ export const replayCapability = (
 
         return { reached: undefined, afterHandoff }
       })
+
+    /**
+     * Perform a Step's Action, and take it down the ladder if its subject was
+     * not on the screen at all.
+     *
+     * ## Which failures come here, and why only those
+     *
+     * Exactly two: `target_missing` and `no_matching_item`. Both are *zero
+     * matches* — the screen rendered perfectly well and the thing the Step wanted
+     * is not on it. SPEC: "Zero matches retries fallback strategies and then
+     * enters the ladder, because a missing control is as likely to be domain
+     * truth as breakage, and telling those apart is exactly the question being
+     * escalated."
+     *
+     * `target_ambiguous` is deliberately absent and always will be. Two controls
+     * answering to one Target is a Capability that has stopped being precise
+     * enough, and no confirmation from anybody makes picking one of them a
+     * correct answer. SPEC calls it a hard failure, never a coin flip.
+     *
+     * ## The resume semantics differ from a Checkpoint's, and this is why
+     *
+     * When a Checkpoint fails, the Action landed and the *state* is the problem,
+     * so resuming re-asks the Checkpoint: `evaluate` is idempotent, a person has
+     * just changed the state by hand, and asking again is how the run finds out
+     * what they did. Re-running the Action there would be redundant at best and
+     * irreversible at worst.
+     *
+     * Here the opposite holds. The Action never ran — `chooseItem` decides before
+     * the chokepoint, and `resolveTarget` fails before the adapter is asked to
+     * press anything — so re-asking the Checkpoint would prove nothing whatever.
+     * It would fail for the reason it was always going to fail: the Step's own
+     * gesture has not happened. What a returned session has to be given is the
+     * Step itself, from the top.
+     *
+     * **That is not a repeat, which is why it needs no `repeatable:`
+     * justification.** `unsafeRepeats` exists because an `at-step` recovery rule
+     * re-performs an Action that *may already have landed*, so a Capability whose
+     * Actions are risky has to say in writing why doing one twice is safe.
+     * Nothing landed here: both zero-match failures are raised strictly before
+     * the Surface is touched, so this is the Action's first attempt rather than
+     * its second. Demanding a justification for repeating something that never
+     * happened would teach the wrong lesson about when one is needed.
+     *
+     * ## Once, and then a record
+     *
+     * One re-attempt. If the screen still offers nothing after a person has been
+     * in the Session and said they resolved it, the run stops with a record
+     * rather than pausing again. Escalating twice for one state is how a run
+     * stops being something a person attends and starts being something that
+     * keeps interrupting them.
+     *
+     * ## Recovery does not get a turn on this path
+     *
+     * A declared Recoverable Condition is written against "the screen that
+     * defeated a step's checkpoint", and `resume: here` means re-evaluate that
+     * Checkpoint — which, as above, is meaningless for a Step whose Action has
+     * not run. Serving both paths would need every rule to say which it is for.
+     * Left undone deliberately rather than approximated: the cost is that a
+     * transient interstitial met at this exact moment wakes a person, and both
+     * transients this Capability declares are met at an earlier Step's
+     * Checkpoint.
+     */
+    const performOrHandOff = (
+      step: Step,
+      before: SurfaceState
+    ): Effect.Effect<
+      { readonly performed: Performed; readonly afterHandoff: boolean },
+      StepProblem
+    > =>
+      Effect.gen(function* () {
+        const first = yield* attemptAction(step, before)
+        if (first._tag !== "Blocked") return { performed: first, afterHandoff: false }
+
+        const handed = yield* handOff(step, {
+          _tag: "ActionBlocked",
+          failure: first.failure,
+          state: before
+        })
+
+        // Nobody to ask, or nobody came, or they could not resolve it. An
+        // unattended run reports the Hard Failure it always did: the engine's
+        // behaviour with no operator attached is unchanged by this ticket, which
+        // is what keeps every existing selection test honest.
+        if (!handed.resumed) {
+          return yield* Effect.fail<StepProblem>(handed.escalation ?? first.failure)
+        }
+
+        const resumedAt = yield* surface.observe.pipe(
+          Effect.catch((unavailable) =>
+            Effect.fail(
+              failing(step)({
+                reason: "surface_failed",
+                expected: "to observe the surface control was returned on",
+                observed: unavailable.reason
+              })
+            )
+          )
+        )
+
+        const second = yield* attemptAction(step, resumedAt)
+        if (second._tag !== "Blocked") return { performed: second, afterHandoff: true }
+
+        return yield* Effect.fail<StepProblem>(
+          escalated(
+            step,
+            before.accessibility,
+            `control was returned as resolved, but ${second.failure.observed}`
+          )
+        )
+      })
+
+    /** The Step's Action, with a zero-match failure caught rather than propagated. */
+    const attemptAction = (
+      step: Step,
+      at: SurfaceState
+    ): Effect.Effect<Performed | Blocked, ReplayFailure | EvidenceUnwritable> =>
+      performAction(step, step.action, at).pipe(
+        Effect.catch((problem) =>
+          isZeroMatch(problem)
+            ? Effect.succeed<Performed | Blocked>({ _tag: "Blocked", failure: problem })
+            : Effect.fail(problem)
+        )
+      )
 
     /** One `checkpoint` Evidence event. Emitted for every verdict a Step reaches. */
     const recordVerdict = (
@@ -641,6 +795,19 @@ export const replayCapability = (
           // otherwise be matched against a list that is no longer displayed.
           const at = yield* surface.observe
           const performed = yield* performAction(step, action, at)
+          // A remedy whose `selectFromList` reaches a declared outcome has not
+          // remedied anything: the state it was supposed to clear is the state
+          // the document says is an answer, and only the Step's own Action may
+          // end a run that way. Reported as a remedy that did not fire, so the
+          // Checkpoint is re-asked and the ladder carries on rather than a
+          // recovery rule quietly deciding a run's result.
+          if (performed._tag === "Answered") {
+            return {
+              done: false,
+              what,
+              why: `this remedy reached the declared outcome ${performed.code} rather than acting`
+            } satisfies RemedyReport
+          }
           if (bindReading && performed.read !== undefined) readings.set(step.id, performed.read)
           return { done: true, what } satisfies RemedyReport
         }).pipe(
@@ -737,24 +904,30 @@ export const replayCapability = (
      * Artifact already documents, are both compile errors rather than review
      * comments.
      *
-     * ## Seam
+     * ## Two ways a Step stalls, and one place it stops
      *
-     * Only a failed Checkpoint escalates today, because it is the case where the
-     * Action landed and the resulting *state* is the problem — which is exactly
-     * what a person can change by hand. Ticket 05 routes a Target that matched
-     * nothing into the same rung; note that its resume semantics differ, because
-     * there the Action never ran and re-asking the Checkpoint would prove
-     * nothing. That branch re-attempts the Step.
+     * A Checkpoint that would not hold (`Unrecovered`) and an Action whose
+     * subject was not on the screen (`ActionBlocked`) are different problems with
+     * different resume semantics, and they are handed to a person by this one
+     * function. There is exactly one expression in this engine that pauses a run,
+     * which is what makes "the recovery ladder has one human rung" a fact about
+     * the code rather than a claim in a document (ADR-0006).
+     *
+     * The type discipline survives the generalisation. `Unrecovered` is still
+     * producible only by `attemptRecovery`, so the checkpoint path still cannot
+     * reach a person before every declared recovery rule has had its turn;
+     * `ActionBlocked` is producible only by `attemptAction`, which narrows to the
+     * two zero-match failures and nothing else.
      */
     const handOff = (
       step: Step,
-      unrecovered: Unrecovered
+      stalled: Stalled
     ): Effect.Effect<
       { readonly resumed: boolean; readonly escalation: Escalated | undefined },
       EvidenceUnwritable
     > =>
       Effect.gen(function* () {
-        const outcome = unrecovered.outcome
+        const said = describeStall(step, stalled)
 
         if (!(yield* session.handoffAvailable)) {
           return { resumed: false, escalation: undefined }
@@ -766,26 +939,65 @@ export const replayCapability = (
           runId,
           stepId: step.id,
           stepIntent: step.intent,
-          reason: `the checkpoint "${step.checkpoint.description}" did not hold`,
-          detail: `expected ${outcome.expected}; observed ${outcome.observed}`,
-          url: outcome.state.url,
-          accessibility: outcome.state.accessibility
+          reason: said.reason,
+          detail: said.detail,
+          url: said.url,
+          accessibility: said.accessibility
         })
 
         return episode.resumed
           ? { resumed: true, escalation: undefined }
-          : { resumed: false, escalation: escalated(step, outcome, episode.reason) }
+          : {
+              resumed: false,
+              escalation: escalated(step, said.accessibility, episode.reason)
+            }
       })
 
-    const escalated = (
+    /**
+     * What an Operator is shown, from either kind of stall.
+     *
+     * The wording is the difference a person actually needs. "The checkpoint did
+     * not hold" sends them looking at a screen that is wrong; "there is no
+     * control matching this" sends them looking for something that is missing,
+     * which is a different ten seconds of their life. A no-match also arrives
+     * carrying the whole list the screen did offer, and that list is very often
+     * the answer on its own.
+     */
+    const describeStall = (
       step: Step,
-      outcome: Extract<CheckpointOutcome, { verdict: "failed" }>,
-      reason: string
-    ): Escalated => ({
+      stalled: Stalled
+    ): {
+      readonly reason: string
+      readonly detail: string
+      readonly url: string
+      readonly accessibility: string
+    } => {
+      if (stalled._tag === "Unrecovered") {
+        const outcome = stalled.outcome
+        return {
+          reason: `the checkpoint "${step.checkpoint.description}" did not hold`,
+          detail: `expected ${outcome.expected}; observed ${outcome.observed}`,
+          url: outcome.state.url,
+          accessibility: outcome.state.accessibility
+        }
+      }
+      const failure = stalled.failure
+      return {
+        reason: `this step could not act: ${failure.expected} was not on the screen`,
+        detail:
+          `${failure.observed}. The action never ran, so nothing has been changed by ` +
+          `automation. If this state is the application answering rather than the ` +
+          `capability being wrong, say so when you hand control back.`,
+        url: stalled.state.url,
+        accessibility: stalled.state.accessibility
+      }
+    }
+
+    const escalated = (step: Step, accessibility: string, reason: string): Escalated => ({
       _tag: "Escalated",
       reason: `${step.checkpoint.description}: ${reason}`,
       stepId: step.id,
-      accessibility: outcome.state.accessibility
+      accessibility
     })
 
     /**
@@ -822,10 +1034,7 @@ export const replayCapability = (
       step: Step,
       action: Action,
       at: SurfaceState
-    ): Effect.Effect<
-      { readonly read: string | undefined; readonly url: string },
-      ReplayFailure | EvidenceUnwritable
-    > =>
+    ): Effect.Effect<Performed, ReplayFailure | EvidenceUnwritable> =>
       Effect.gen(function* () {
         const fail = failing(step)
         const url = at.url
@@ -853,7 +1062,7 @@ export const replayCapability = (
             action: "navigate",
             target: destination
           })
-          return { read: undefined, url: opened.url }
+          return { _tag: "Acted", read: undefined, url: opened.url }
         }
 
         // A `selectFromList` names no control. It reads the list the Step just
@@ -870,6 +1079,22 @@ export const replayCapability = (
             return yield* Effect.fail(unresolvable(fail, action.match.against))
           }
           const choice = chooseItem({ inputs, tree: at.tree, url }, action, wanted)
+          // The Artifact has classified this state as one of its own answers, so
+          // there is no control to press and nothing has gone wrong. It leaves on
+          // the success channel and the Step is over — the Checkpoint is not
+          // asked, because a Checkpoint asks whether an Action reached the state
+          // it was for, and this Action correctly did not act at all.
+          //
+          // Deliberately no `action` Evidence event. Nothing was performed: no
+          // Target was resolved, no control was pressed, and Policy was never
+          // asked because there was nothing to ask about. An `action` event here
+          // would put a gesture in the log that never happened. The `outcome`
+          // event the run loop writes carries `because` — the whole selection
+          // rationale, including everything the list did offer — so the record
+          // still explains itself.
+          if (choice._tag === "Declared") {
+            return { _tag: "Answered", code: choice.code, because: choice.because }
+          }
           if (choice._tag === "Unchosen") return yield* Effect.fail(fail(choice.failure))
           surfaceTarget = choice.target
           declaredStrategy = action.match.strategy
@@ -936,7 +1161,7 @@ export const replayCapability = (
             : `${chosenBy}; then ${outcome.resolution.rationale}`
         })
 
-        return { read: outcome.read, url: outcome.url }
+        return { _tag: "Acted", read: outcome.read, url: outcome.url }
       })
 
     /** Builds the declared outputs from what the Steps read. */
@@ -1215,6 +1440,75 @@ interface Escalated {
   /** What the screen showed when it stopped, so an Operator has context. */
   readonly accessibility: string
 }
+
+/**
+ * How a Step's Action ended when nothing went wrong.
+ *
+ * Two ways, and they are as different as a Checkpoint holding and a Checkpoint
+ * reaching an outcome. `Acted` is the ordinary one: a control was pressed, maybe
+ * something was read, and the run is somewhere new. `Answered` is a
+ * `selectFromList` that found nothing in a list the Artifact has *learned* to
+ * interpret — no control, no Policy check, no gesture at all, and a Business
+ * Outcome as the result.
+ *
+ * `Answered` is on the success channel for the reason the module note gives at
+ * length: a domain answer must never share a road with a fault, not even briefly
+ * and not even internally.
+ */
+type Performed =
+  | { readonly _tag: "Acted"; readonly read: string | undefined; readonly url: string }
+  | { readonly _tag: "Answered"; readonly code: string; readonly because: string }
+
+/** A missing control, or a list that offered nothing matching. Never ambiguity. */
+type ZeroMatchFailure = Extract<
+  ReplayFailure,
+  { reason: "target_missing" } | { reason: "no_matching_item" }
+>
+
+/**
+ * An Action whose subject was not on the screen, so it never ran.
+ *
+ * The only thing `handOff`'s `ActionBlocked` arm accepts, and `attemptAction` is
+ * the only expression that produces one — the same discipline `Unrecovered` has
+ * on the Checkpoint side. Narrowing happens in `isZeroMatch` and nowhere else,
+ * so the set of failures that can reach a person is one predicate rather than a
+ * condition repeated at every call site.
+ */
+interface Blocked {
+  readonly _tag: "Blocked"
+  readonly failure: ZeroMatchFailure
+}
+
+/**
+ * Both ways a Step stalls badly enough to want a person.
+ *
+ * One union, so there is one `session.pause` in this engine. See `handOff`.
+ */
+type Stalled =
+  | Unrecovered
+  | {
+      readonly _tag: "ActionBlocked"
+      readonly failure: ZeroMatchFailure
+      /** The screen the Action was attempted against. What the Operator is shown. */
+      readonly state: SurfaceState
+    }
+
+/**
+ * Whether a problem is a zero match, and therefore a question rather than a
+ * fault.
+ *
+ * SPEC's line in one predicate: a missing control is as likely to be domain
+ * truth as breakage, and telling those apart is exactly what is being escalated.
+ * Ambiguity is excluded on purpose, and excluded *here* rather than assumed
+ * absent, because the two target failures sit next to each other in the union
+ * and admitting the wrong one would be a one-word mistake with a coin flip at
+ * the end of it.
+ */
+const isZeroMatch = (
+  problem: ReplayFailure | EvidenceUnwritable
+): problem is ZeroMatchFailure =>
+  !isEvidenceProblem(problem) &&
+  (problem.reason === "target_missing" || problem.reason === "no_matching_item")
 
 /** Everything one Step can stop for. */
 type StepProblem = ReplayFailure | EvidenceUnwritable | Escalated

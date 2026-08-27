@@ -7,8 +7,35 @@
  * reading any code. Start there.
  */
 
-export type { Action, ActionType, ItemList, SelectFromListAction } from "./Action.ts"
-export { Action as ActionSchema, describeItemList } from "./Action.ts"
+export type {
+  Action,
+  ActionType,
+  ItemList,
+  NoMatchDisposition,
+  SelectFromListAction
+} from "./Action.ts"
+export {
+  Action as ActionSchema,
+  describeItemList,
+  noMatchCode,
+  noMatchOutcome
+} from "./Action.ts"
+
+export type {
+  AmendmentOptions,
+  LearnedBusinessOutcome,
+  LearnedClass
+} from "./Amendment.ts"
+export {
+  AmendmentRefused,
+  atLeastAsStrictAs,
+  classificationOf,
+  declareLearnedNoMatch,
+  nextMinorVersion
+} from "./Amendment.ts"
+
+export type { DiffOptions } from "./diff.ts"
+export { diffArtifacts, diffSize } from "./diff.ts"
 
 export type { OutcomeCode, OutcomeDeclaration, OutcomeDeclarations } from "./BusinessOutcomes.ts"
 export {

@@ -144,8 +144,15 @@ it.live("nothing matching and several things matching are different outcomes", (
     // "Primary Savings" is a legal value — it is one of the discovered labels —
     // but it is not a token subset of "Regular Savings" or "Checking Account",
     // so this tenant genuinely offers nothing that answers to it.
+    //
+    // Pinned to 1.0.0, which is the version where that state is still
+    // *unclassified*. Ticket 13's intervention taught 1.1.0 what it means, and
+    // the test below this one shows the same observation coming back as a
+    // Business Outcome there. Running this half against `latest` would have made
+    // it silently stop testing the escalation path the moment the capability
+    // learned something, which is exactly the regression a pin is for.
     const none = yield* replay({
-      artifact,
+      artifact: shippedArtifact(undefined, "1.0.0"),
       inputs: { memberId: VARIANT_TENANT, accountType: "Primary Savings" }
     })
     if (none.result.result !== "failure") throw new Error("expected a failure")
@@ -163,6 +170,12 @@ it.live("nothing matching and several things matching are different outcomes", (
     // Member 33333 holds two savings accounts. Both carry every token of
     // "Savings", and picking one would return a balance for an account nobody
     // asked for — so the run stops and names both (ADR-0007).
+    //
+    // Against `latest`, deliberately: the amendment at 1.1.0 turned the *no*
+    // match into an answer, and this is the assertion that it left the *several*
+    // match alone. SPEC allows only one of those two to be learned, and the
+    // schema has no spelling for the other (`onMultiple` takes an escalation and
+    // nothing else), so this is the behavioural half of that guarantee.
     const several = yield* replay({ artifact, inputs: { memberId: TWO_SAVINGS } })
     if (several.result.result !== "failure") throw new Error("expected a failure")
     if (several.result.failure.reason !== "ambiguous_match") {

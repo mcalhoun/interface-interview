@@ -1,0 +1,43 @@
+--- member.account-balance@1.0.0
++++ member.account-balance@1.1.0
+@@ -1,5 +1,5 @@
+ capability: member.account-balance
+-version: 1.0.0
++version: 1.1.0
+ title: Read a member's account balance
+ summary: |
+   Looks a member up by number in Heritage Core Member Services, opens one of their accounts, and reads back the available and current balances. Which account is a parameter; omitted, it is the member's savings account, because that is what the goal this capability was discovered from asked for.
+@@ -78,6 +78,24 @@
+       compiler will emit, this field records the intervention that produced the outcome: the
+       operator who met this screen, observed it, changed nothing and returned control, and the
+       confirmation that made it declarable rather than an escalation.
++  NO_MATCHING_ITEM:
++    title: >-
++      Nothing on offer matched: Open the account the caller asked for, whichever of them that
++      is.
++    summary: |-
++      The screen rendered link items in "Share and Deposit Accounts", and nothing on it carried every token of parameter accountType. That is not the automation failing to see something: the list was read in full, and what it offered is what there was.
++
++      Before this version, this state stopped the run and asked for a person. It no longer does. Somebody met it, looked at it, changed nothing, and confirmed that the application was answering rather than the capability being wrong — so it is an answer, a caller should branch on it the way they branch on any other domain result, and a run that ends here has succeeded.
++
++      What that person said about it, in their own words: "Looked at the account list and touched nothing. This member holds a checking account only; there is no savings account to open, so there is nothing here for automation or anyone else to fix. The list is complete and correct"
++    discoveredFrom: |-
++      Learned from intervention 01eb0911-08f7-4031-b815-012c2da952dd-intervention-1 (session 01eb0911-08f7-4031-b815-012c2da952dd, run member.account-balance-2026-08-27T08-12-09-314Z-e87fa3f4, step open-account), raised at 2026-08-27T08:12:09.503Z.
++
++      j.okafor took control at 2026-08-27T08:12:15.251Z, recorded no actions on the live session, and returned it at 2026-08-27T08:12:19.607Z.
++
++      Asked "Next time automation meets this state, should it handle it itself?", they answered yes. j.okafor took control, observed the screen, changed nothing, and confirmed that automation should treat this state as an answer next time.
++
++      ADR-0004: an operator who resolves a state without acting has demonstrated that it is terminal and observational, which is what makes it declarable. The classification comes from what they did, not from what anyone wrote in advance, and it only ever tightens from here.
+ steps:
+ - id: open-member-search
+   intent: Land on the Member Services search screen with an empty search form.
+@@ -187,7 +205,7 @@
+         name: accountType
+       strategy: tokenSubset
+     onNoMatch:
+-      escalate: NO_MATCHING_ITEM
++      outcome: NO_MATCHING_ITEM
+     onMultiple:
+       escalate: AMBIGUOUS_MATCH
+     robustness: |

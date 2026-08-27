@@ -38,7 +38,9 @@ import {
   type ResolvedInputs,
   type SelectFromListAction,
   type ValueRef,
-  describeItemList
+  describeItemList,
+  noMatchCode,
+  noMatchOutcome
 } from "@cua/artifact"
 import { type AccessibilityNode, type Target, selectFromTree } from "@cua/surface"
 import type { ReplayFailureBody } from "./ReplayResult.ts"
@@ -54,6 +56,26 @@ export type Choice =
       readonly rationale: string
     }
   | { readonly _tag: "Unchosen"; readonly failure: ReplayFailureBody }
+  /**
+   * Nothing matched, and the Artifact says what that means.
+   *
+   * The same observation as `Unchosen` with a `no_matching_item` failure — the
+   * list rendered, and nothing in it carried the tokens asked for. What differs
+   * is that a person has since met this state, changed nothing, and confirmed
+   * that it is the application answering rather than the automation failing, and
+   * an Amendment wrote that into the document as `onNoMatch: { outcome: ... }`.
+   *
+   * It is a separate constructor rather than a flag on `Unchosen` because the
+   * two travel opposite ways out of the engine: this one is a *result*, on the
+   * success channel, and nothing is allowed to turn it back into a failure by
+   * forgetting to check a boolean.
+   */
+  | {
+      readonly _tag: "Declared"
+      readonly code: string
+      /** Why this is the answer, in the same words the failure would have used. */
+      readonly because: string
+    }
 
 export interface ChoiceContext {
   readonly inputs: ResolvedInputs
@@ -130,12 +152,23 @@ export const chooseItem = (
         rationale: selection.rationale
       }
 
-    case "NoMatch":
+    case "NoMatch": {
+      // The one place a document's classification of this state is read. A
+      // Capability that has learned what an empty match means returns it as an
+      // answer; one that has not stops, and the Recovery Ladder takes over.
+      const declared = noMatchOutcome(action.onNoMatch)
+      if (declared !== undefined) {
+        return {
+          _tag: "Declared",
+          code: declared,
+          because: `${selection.rationale}; the capability declares that state as ${declared}`
+        }
+      }
       return {
         _tag: "Unchosen",
         failure: {
           reason: "no_matching_item",
-          code: action.onNoMatch.escalate,
+          code: noMatchCode(action.onNoMatch),
           list,
           items: selection.items.map((item) => item.label),
           url: context.url,
@@ -143,6 +176,7 @@ export const chooseItem = (
           observed: selection.rationale
         }
       }
+    }
 
     case "AmbiguousMatch":
       return {
