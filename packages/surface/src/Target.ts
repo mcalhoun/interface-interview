@@ -12,6 +12,17 @@
  * The schema is here rather than a bare TypeScript type because Discovery's
  * action vocabulary validates model output against it, so an out-of-vocabulary
  * field is rejected at the boundary instead of being quietly ignored.
+ *
+ * ## Every field says what it means, because a model is handed this
+ *
+ * The annotations below are not decoration: `Schema.toJsonSchemaDocument` turns
+ * them into the field descriptions the model receives with every turn, and
+ * without them it receives a list of optional strings and has to guess. A live
+ * run on gpt-4.1-mini guessed `within: { role: "table", name: "Member Number
+ * Search" }` — reasonable-looking, and unsatisfiable, because a layout table has
+ * no accessible name and its heading is a cell inside it. It then proposed the
+ * same scope twice more and the run ended. So each field states the thing a
+ * reader gets wrong about it, in the words the answer has to be written in.
  */
 
 import { Schema } from "effect"
@@ -24,34 +35,76 @@ import { Schema } from "effect"
  * first row rather than an ancestor of anything.
  */
 export const TargetScope = Schema.Struct({
-  role: Schema.optional(Schema.String),
-  name: Schema.optional(Schema.String)
+  role: Schema.optional(
+    Schema.String.annotate({
+      description:
+        "Rarely useful, and usually wrong: this matches a node whose OWN accessible name is " +
+        "`name`, and a panel on a legacy screen has no accessible name at all — its heading " +
+        "is a cell inside it. Give `name` on its own unless the region is genuinely a named " +
+        "node."
+    })
+  ),
+  name: Schema.optional(
+    Schema.String.annotate({
+      description:
+        "The heading an operator reads at the top of the region, e.g. \"Member Number Search\". " +
+        "The region it heads is searched, even though the heading is a cell in that region's " +
+        "first row rather than an ancestor of anything."
+    })
+  )
+}).annotate({
+  description:
+    "One region of the screen to search inside, named by its heading: " +
+    "{ name: \"Member Number Search\" }."
 })
 export type TargetScope = typeof TargetScope.Type
 
 export const Target = Schema.Struct({
-  /** ARIA role, e.g. `textbox`, `button`, `link`, `cell`. */
-  role: Schema.optional(Schema.String),
-  /** The accessible name. On Heritage Core this comes from a `title` attribute. */
-  name: Schema.optional(Schema.String),
-  /** When true, `name` must match exactly; the containment fallback is refused. */
-  exact: Schema.optional(Schema.Boolean),
-  /**
-   * The visible caption sitting beside the control. Distinct from `name`,
-   * because a legacy app routinely puts the caption in an unassociated cell and
-   * the accessible name somewhere else entirely.
-   */
-  label: Schema.optional(Schema.String),
-  /**
-   * Text the control sits near. Proximity is measured in edges of the
-   * accessibility tree, never in the document, so the fallback strategy does not
-   * smuggle markup coupling back in.
-   */
-  textNear: Schema.optional(Schema.String),
-  /** Restrict the search to one region of the tree. */
+  role: Schema.optional(
+    Schema.String.annotate({
+      description:
+        "The node's role as the accessibility tree spells it, e.g. textbox, button, link, cell."
+    })
+  ),
+  name: Schema.optional(
+    Schema.String.annotate({
+      description:
+        "The node's own accessible name, as the tree shows it in quotes. A control's name and " +
+        "the caption printed beside it are often the same string here, which is fine: naming " +
+        "both agrees rather than conflicts."
+    })
+  ),
+  exact: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "When true, `name` must match exactly and the containment fallback is refused."
+    })
+  ),
+  label: Schema.optional(
+    Schema.String.annotate({
+      description:
+        "The caption in the cell before this one in the same row. This is how a figure in a " +
+        "table with no headers is named: the value cell has no name of its own, so name it by " +
+        "the caption beside it — and then do NOT also give `name`, which the value cell does " +
+        "not have."
+    })
+  ),
+  textNear: Schema.optional(
+    Schema.String.annotate({
+      description:
+        "Text the control stands near, measured in edges of the accessibility tree rather than " +
+        "pixels. A control whose own name is this text counts as standing at it."
+    })
+  ),
   within: Schema.optional(TargetScope),
-  /** Zero-based choice among equally good matches, in document order. */
-  nth: Schema.optional(Schema.Int)
+  nth: Schema.optional(
+    Schema.Int.annotate({
+      description:
+        "Zero-based choice among several equally good matches, in document order: the first is " +
+        "0. Give it only when a resolution failure told you several nodes answered; a Target " +
+        "that names one control needs no ordinal."
+    })
+  )
 })
 export type Target = typeof Target.Type
 

@@ -59,7 +59,14 @@ import { ProvenancedValue } from "./Provenance.ts"
  * time the answer is actually known. Reconstructing intent afterwards from an
  * action and a screenshot is exactly the guesswork this design avoids.
  */
-const Intent = Schema.String
+const Intent = Schema.String.annotate({
+  description:
+    "What this step is for, in one sentence. It is copied into the stored capability word for " +
+    "word and read by people who were not on this run, so describe the step in general terms " +
+    "and never quote a value the goal gave you: write \"the member number the caller asked " +
+    "about\", not the digits. A step whose intent quotes such a value is refused and has to be " +
+    "proposed again."
+})
 
 /** Why this action, now. Lands in the `decide` Evidence event beside the action. */
 const Rationale = Schema.String

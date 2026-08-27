@@ -28,6 +28,18 @@
  *     outcome from ambiguity, because an absent control is as likely to be the
  *     application telling the truth about its domain as it is to be breakage.
  *
+ * A third rule earns its place for the same reason the first two do: a control's
+ * accessible name here comes from a `title` attribute, so the caption beside a
+ * field and the field's own name are usually the same string. `textNear` therefore
+ * treats a control named after its anchor as being *at* it rather than excluded
+ * by it — see `isOwnAnchor` — which is what lets `name` and `textNear` reinforce
+ * each other instead of cancelling out.
+ *
+ * Whatever the outcome, the sentences this file produces have to survive being
+ * read next to the tree they describe. A remedy that denies something the tree
+ * plainly says is worse than silence, because its reader is usually a model that
+ * is about to be shown that same tree again. See `remedyForUnresolved`.
+ *
  * The second half of the file does something different: *selection*, choosing
  * among the items a screen currently offers by matching a parameter against
  * their labels by token subset. That is the same tree and the same scoping rule,
@@ -369,6 +381,143 @@ const regionAdvice = (index: TreeIndex): string => {
 }
 
 /**
+ * Every node that reads as the text a `textNear` points at.
+ *
+ * Shared by the narrowing step and the remedy, deliberately: the remedy's whole
+ * job is to say something true about the anchor, and it can only do that from
+ * the same set the narrowing used. Two sentences computed from two different
+ * sets is how a report ends up contradicting itself.
+ */
+const anchorsFor = (index: TreeIndex, textNear: string): ReadonlyArray<IndexedNode> => {
+  const wanted = normalise(textNear)
+  if (wanted === "") return []
+  return index.nodes.filter((entry) => {
+    const text = normalise(ownText(entry.node))
+    return text === wanted || (text !== "" && text.includes(wanted))
+  })
+}
+
+/**
+ * Whether a candidate *is* the text it was told to stand near.
+ *
+ * This is the one asymmetry in proximity, and it exists because of how this
+ * class of application names its controls. Heritage Core writes
+ * `<td>Member Number</td><td><input title="Member Number">`: the caption beside
+ * a field and the field's own accessible name are the same string, so
+ * `{ name: "Member Number", textNear: "Member Number" }` is a natural thing for
+ * a person — or a model reading the tree — to write. Excluding a candidate from
+ * being its own anchor makes that Target unsatisfiable, and worse, leaves the
+ * nearest *other* control holding the answer: on Member Search that was
+ * `textbox "Branch"`, five edges away, which no reader would have chosen.
+ *
+ * So a control whose accessible name is exactly the anchor text is at distance
+ * zero. Distance is still the model — this is not a separate strategy with its
+ * own verdict — because "nearest to that text" and "is that text" are the same
+ * question asked at two ranges, and keeping one scale means a control that names
+ * itself still loses to nothing and wins against everything, with no ordering
+ * rule written anywhere.
+ *
+ * Two limits keep it from swallowing the neighbouring reading:
+ *
+ *   - **Controls only.** A cell whose text is "Current Balance" is not near
+ *     itself; it *is* the caption, and a caller asking for the cell near it
+ *     means the figure beside it. `CONTROL_ROLES` is already the line this file
+ *     draws between what a person operates and what they read, and `labelOf`
+ *     draws it in the same place.
+ *   - **Exactly, not loosely.** `textbox "Member Number (Legacy)"` merely
+ *     contains the anchor text; that is a coincidence of substrings, not a
+ *     caller naming one control twice, so it is measured against the real
+ *     anchors like anything else.
+ */
+const isOwnAnchor = (node: ObservedNode, textNear: string): boolean =>
+  CONTROL_ROLES.has(node.role) && normalise(ownText(node)) === normalise(textNear)
+
+/**
+ * How far a candidate stands from the anchor text, in edges of the tree.
+ *
+ * `undefined` when there is nothing to measure: the candidate is the only thing
+ * on the screen reading that text and does not name itself with it. Note that a
+ * candidate is never its own anchor for the purposes of distance — otherwise
+ * every node containing the text would collapse to zero and proximity would
+ * stop meaning anything.
+ */
+const nearness = (
+  index: TreeIndex,
+  entry: IndexedNode,
+  anchors: ReadonlyArray<IndexedNode>,
+  textNear: string
+): number | undefined => {
+  if (isOwnAnchor(entry.node, textNear)) return 0
+  const others = anchors.filter((anchor) => anchor.node !== entry.node)
+  return others.length === 0
+    ? undefined
+    : Math.min(...others.map((anchor) => treeDistance(index, entry.node, anchor.node)))
+}
+
+/** As many anchors as are worth naming in one sentence. */
+const ANCHORS_SHOWN = 3
+
+/** As many roles as are worth naming in one sentence. */
+const ROLES_SUGGESTED = 10
+
+/** The distinct roles a set of candidates offers, in document order. */
+const rolesAdvice = (entries: ReadonlyArray<IndexedNode>): string => {
+  const roles: Array<string> = []
+  for (const entry of entries) {
+    if (!roles.includes(entry.node.role)) roles.push(entry.node.role)
+  }
+  if (roles.length === 0) return "there was nothing on the screen to name"
+  const shown = roles.slice(0, ROLES_SUGGESTED)
+  const more = roles.length - shown.length
+  return `the roles on offer are ${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`
+}
+
+/**
+ * What the failing narrowing step was handed, and what had already run.
+ *
+ * Carried into the remedy so it can say *which* set ran out. Without it, every
+ * sentence is a claim about the whole screen, and a claim about the whole screen
+ * is false the moment anything narrowed first: `{ role: "button", name: "Member
+ * Number" }` used to be told "nothing is called Member Number" while a textbox
+ * on the same screen was called exactly that. A reader — a model, usually — that
+ * is told something the tree in front of it contradicts has no move except to
+ * propose the same thing again.
+ */
+interface Narrowing {
+  /** Strategies applied so far, the one that emptied the set last. */
+  readonly applied: ReadonlyArray<TargetStrategy>
+  /** The candidates the failing step was handed. */
+  readonly offered: ReadonlyArray<IndexedNode>
+}
+
+/**
+ * How to get to the node the reader was plainly describing, in the Target's own
+ * words.
+ *
+ * A remedy that says "something else on this screen is called that" and stops
+ * leaves the reader to work out the scope again from the tree. Naming the region
+ * the node actually sits in makes the correction a substitution rather than a
+ * fresh attempt, and the region heading is exactly what `within` takes —
+ * `regionOf` is `scopeOf`'s inverse, so the suggestion resolves.
+ */
+const reachFor = (index: TreeIndex, node: ObservedNode): string => {
+  const region = regionOf(index, node)
+  return (
+    `Reach for it as role ${JSON.stringify(node.role)}` +
+    (region === "" ? "" : `, within: { name: ${JSON.stringify(region)} }`) +
+    ", or drop the parts of this Target that excluded it."
+  )
+}
+
+/** The candidate set a remedy is talking about, named the way it was arrived at. */
+const offeredBy = (narrowing: Narrowing): string => {
+  const earlier = narrowing.applied.slice(0, -1)
+  return earlier.length === 0
+    ? `the ${narrowing.offered.length} node(s) on this screen`
+    : `the ${narrowing.offered.length} candidate(s) left by ${earlier.join(", then ")}`
+}
+
+/**
  * What a reader should do about a Target that named nothing.
  *
  * Written per narrowing step, because "not found" is at least four different
@@ -381,6 +530,16 @@ const regionAdvice = (index: TreeIndex): string => {
  * `formatAccessibilityTree`), and this says what to reach for instead if a
  * reader gets there anyway.
  *
+ * ## Every sentence here has to survive being read next to the tree
+ *
+ * The reader of a remedy is usually a model that is about to be shown the same
+ * screen again. Telling it something the tree contradicts — "nothing is called
+ * X" when X is plainly a node's name, "X is not text on this screen" when X is a
+ * caption on it — costs more than saying nothing: the advice cannot be taken,
+ * so the same proposal comes back, and three of those end a run. So each branch
+ * checks the tree before it makes a claim, and where the thing named *does*
+ * exist, the remedy says where it is instead of denying it.
+ *
  * What it never says is "name the frame differently". A Target has nowhere to
  * put a frame, and advice that cannot be taken is worse than none — the same
  * rule `remedyFor` follows on the ambiguous side.
@@ -388,8 +547,10 @@ const regionAdvice = (index: TreeIndex): string => {
 const remedyForUnresolved = (
   index: TreeIndex,
   target: Target,
-  narrowedBy: TargetStrategy | undefined
+  narrowedBy: TargetStrategy | undefined,
+  narrowing: Narrowing
 ): string => {
+  const everything = index.nodes.filter((entry) => entry.node !== index.root)
   switch (narrowedBy) {
     case "within": {
       const scope = target.within
@@ -402,35 +563,164 @@ const remedyForUnresolved = (
           }), or drop within and name the control on its own.`
         )
       }
+      // A scope naming a role that is not on the screen is a different mistake
+      // from a scope naming a heading that is not on it, and the region list
+      // alone would read as a contradiction: "no region is headed that way,
+      // the regions are A, B" when the reader asked for A with the wrong role.
+      if (scope?.role !== undefined) {
+        // The heading first, whatever the role turns out to be. This is the
+        // common case and the one a bare "none of them is named that" reads as
+        // a contradiction against: the heading IS on the screen, and the region
+        // list this would otherwise print says so in the next breath. The role
+        // asked for is simply not the role of the region that heading heads —
+        // `scopeOf` already tries the heading when the name matches no node of
+        // that role — so the sentence names the role it actually is, and the
+        // spelling that works.
+        if (scope.name !== undefined) {
+          const headed = headedBy(index, everything, scope.name)
+          const region = headed[0]
+          if (region !== undefined) {
+            return (
+              `the region headed ${JSON.stringify(scope.name)} is a ${region.role}, not a ` +
+              `${scope.role}, and nothing with role ${JSON.stringify(scope.role)} is named that ` +
+              `either. Drop the role and scope by the heading alone: ` +
+              `within: { name: ${JSON.stringify(scope.name)} }.`
+            )
+          }
+        }
+        const withRole = everything.filter((entry) => entry.node.role === scope.role)
+        if (withRole.length === 0) {
+          return (
+            `nothing on this screen has role ${JSON.stringify(scope.role)} to scope to. ` +
+            `Scope by the heading of the section instead (${regionAdvice(index)}), ` +
+            "or drop within and name the control on its own."
+          )
+        }
+        if (scope.name !== undefined) {
+          return (
+            `this screen has ${withRole.length} node(s) with role ${JSON.stringify(scope.role)}, ` +
+            `but none of them is named or headed ${JSON.stringify(scope.name)}. Scope by ` +
+            `heading alone (${regionAdvice(index)}), or drop within and name the control on ` +
+            "its own."
+          )
+        }
+      }
       return (
         `no region on this screen is headed that way: ${regionAdvice(index)}. ` +
         "Name one of those, or drop within and name the control on its own."
       )
     }
-    case "role":
+    case "role": {
+      const role = target.role ?? ""
+      const elsewhere = everything.filter((entry) => entry.node.role === role)
+      if (elsewhere.length > 0) {
+        return (
+          `nothing among ${offeredBy(narrowing)} has role ${JSON.stringify(role)}, ` +
+          `though ${elsewhere.length} node(s) elsewhere on this screen do. Widen or drop the ` +
+          "scope — or scope to the region that holds the control rather than one beside it."
+        )
+      }
       return (
-        `nothing on this screen has role ${JSON.stringify(target.role ?? "")}. ` +
+        `nothing on this screen has role ${JSON.stringify(role)}. ` +
         "Either this is not the screen you expected, or the control carries a different role — " +
-        "read the tree and name a role that appears in it."
+        `${rolesAdvice(narrowing.offered)}.`
       )
+    }
     case "name":
     case "nameContains":
-    case "nameTokens":
+    case "nameTokens": {
+      const name = target.name ?? ""
+      const read = (entry: IndexedNode) => identity(entry.node)
+      const anywhere = narrowByText(everything, name, read, target.exact === true, true).entries[0]
+      if (anywhere !== undefined) {
+        // The one thing the node's own name does not tell a reader: whether it
+        // is the thing they wanted. On a caption/value screen the node called
+        // "Available Balance" is the caption, and a reader asking for a cell of
+        // that name is usually after the figure beside it — which has no name
+        // at all, and is reached with `label`. A live run alternated between
+        // this Target and a scope correction until the run ended, because the
+        // remedy only ever pointed at the caption.
+        const alsoLabel = CONTROL_ROLES.has(anywhere.node.role) || target.label !== undefined
+          ? ""
+          : ` If what you want is the value beside that caption rather than the caption itself, ` +
+            `that node has no name of its own: name it by the caption instead and leave name ` +
+            `out — { role: ${JSON.stringify(anywhere.node.role)}, label: ${JSON.stringify(name)} }.`
+        return (
+          `${JSON.stringify(name)} does name ${describeNode(anywhere.node)} on this screen, but ` +
+          `nothing among ${offeredBy(narrowing)} is called that. ` +
+          reachFor(index, anywhere.node) +
+          alsoLabel
+        )
+      }
+      const loosely = target.exact !== true
+        ? undefined
+        : narrowByText(everything, name, read, false, true).entries[0]
+      if (loosely !== undefined) {
+        return (
+          `nothing is called exactly ${JSON.stringify(name)}, though ` +
+          `${describeNode(loosely.node)} contains it. Spell the name the way the tree does, ` +
+          "or drop exact."
+        )
+      }
       return (
-        `nothing is called ${JSON.stringify(target.name ?? "")}. ` +
+        `nothing on this screen is called ${JSON.stringify(name)}. ` +
         "Use the words that appear in the tree, or, if this is a figure in a table, name it by " +
         "the caption beside it with label instead of name."
       )
-    case "label":
+    }
+    case "label": {
+      const label = target.label ?? ""
+      const anywhere = narrowByText(
+        everything,
+        label,
+        (entry) => labelOf(index, entry.node),
+        false
+      ).entries[0]
+      if (anywhere !== undefined) {
+        // `name` and `label` together are how a reader most often over-specifies
+        // a figure: the caption is the only thing on the row with a name, so the
+        // name matches the caption and the label then matches nothing. The
+        // remedy has to name the field to remove, because "drop what excluded
+        // it" is one abstraction too many for a reader that has already tried
+        // three spellings. A live run alternated between exactly these two for
+        // its last six turns.
+        const dropName = target.name === undefined
+          ? ""
+          : ` Leave name out: the cell a caption labels carries no accessible name of its own, ` +
+            "which is the whole reason label exists."
+        return (
+          `${JSON.stringify(label)} does caption ${describeNode(anywhere.node)} on this screen, ` +
+          `but nothing among ${offeredBy(narrowing)} carries that caption. ` +
+          reachFor(index, anywhere.node) +
+          dropName
+        )
+      }
       return (
-        `no row on this screen puts ${JSON.stringify(target.label ?? "")} beside a value. ` +
+        `no row on this screen puts ${JSON.stringify(label)} beside a value. ` +
         "Check the caption reads exactly that in the tree, or name the control by role and name."
       )
-    case "textNear":
+    }
+    case "textNear": {
+      const textNear = target.textNear ?? ""
+      const anchors = anchorsFor(index, textNear)
+      if (anchors.length === 0) {
+        return (
+          `${JSON.stringify(textNear)} is not text on this screen. ` +
+          "Anchor on something the tree actually says, or drop textNear."
+        )
+      }
+      // The anchor exists, so do not say it does not. What ran out is something
+      // to measure: the only node reading that text is the candidate itself,
+      // and it does not carry the text as its own name.
+      const readers = anchors.slice(0, ANCHORS_SHOWN).map((anchor) => describeNode(anchor.node))
+      const more = anchors.length - readers.length
       return (
-        `${JSON.stringify(target.textNear ?? "")} is not text on this screen. ` +
-        "Anchor on something the tree actually says, or drop textNear."
+        `${JSON.stringify(textNear)} is on this screen — it reads as ${readers.join(", ")}` +
+        `${more > 0 ? ` and ${more} more` : ""} — but the only node reading it is the candidate ` +
+        "itself, so proximity to it separates nothing. Drop textNear and let role and name stand " +
+        "on their own, or anchor on the caption of a neighbouring row instead."
       )
+    }
     case "ordinal":
       return (
         "fewer controls answered than the ordinal asked for. Drop nth, or use the count the " +
@@ -536,6 +826,26 @@ const narrowByText = (
     : { entries: abbreviated, how: "tokens" }
 }
 
+/**
+ * The regions a heading opens up: the node that reads that way, or — since a
+ * caption is childless — the nearest enclosing section, which is what an
+ * operator means by "in that panel".
+ */
+const headedBy = (
+  index: TreeIndex,
+  entries: ReadonlyArray<IndexedNode>,
+  heading: string
+): ReadonlyArray<ObservedNode> => {
+  const named = narrowByText(entries, heading, (entry) => identity(entry.node), false)
+  return [
+    ...new Set(
+      named.entries.map((entry) =>
+        entry.node.children.length > 0 ? entry.node : containerOf(index, entry.node)
+      )
+    )
+  ]
+}
+
 /** The nodes a `within` scope opens up, and a sentence saying how it was read. */
 const scopeOf = (
   index: TreeIndex,
@@ -545,24 +855,39 @@ const scopeOf = (
 
   if (scope.role !== undefined) {
     const byRole = all.filter((entry) => entry.node.role === scope.role)
-    const roots = scope.name === undefined
+    const named = scope.name === undefined
       ? byRole
       : narrowByText(byRole, scope.name, (entry) => identity(entry.node), false).entries
+    if (named.length > 0 || scope.name === undefined) {
+      return {
+        roots: named.map((entry) => entry.node),
+        rationale: `scoped to ${named.length} ${scope.role} node(s)`
+      }
+    }
+
+    // The same fallback rung the name-only path *is*, offered here rather than
+    // refused. `within: { role: "table", name: "Member Number Search" }` reads
+    // as "the table headed Member Number Search", and that is a thing on the
+    // screen — but a layout table carries no accessible name, so matching the
+    // heading against the table's own name can only ever fail. A live discovery
+    // run proposed exactly this scope, was told to drop the role, and proposed
+    // it again twice.
+    //
+    // Safe for the same reason the token rung above is: it runs only when the
+    // set is already empty, so the alternative to it is `NotFound` and no scope
+    // that resolved yesterday resolves differently today.
+    const headed = headedBy(index, all, scope.name).filter((node) => node.role === scope.role)
     return {
-      roots: roots.map((entry) => entry.node),
-      rationale: `scoped to ${roots.length} ${scope.role} node(s)`
+      roots: headed,
+      rationale: headed.length === 0
+        ? `no ${scope.role} is named or headed "${scope.name}"`
+        : `no ${scope.role} is named "${scope.name}", so scoped to the ${scope.role} headed that way`
     }
   }
 
   if (scope.name === undefined) return { roots: [index.root], rationale: "unscoped" }
 
-  const named = narrowByText(all, scope.name, (entry) => identity(entry.node), false)
-  const roots = named.entries.map((entry) =>
-    // A caption is childless. The region it heads is the nearest enclosing
-    // section, which is what an operator means by "in that panel".
-    entry.node.children.length > 0 ? entry.node : containerOf(index, entry.node)
-  )
-  const unique = [...new Set(roots)]
+  const unique = headedBy(index, all, scope.name)
   return {
     roots: unique,
     rationale: unique.length === 0
@@ -589,32 +914,38 @@ export const resolveTargetIn = (index: TreeIndex, target: Target): Resolution =>
    * on a screen with no slider is a wrong-screen problem, not a renamed-control
    * problem, and has to say so.
    */
-  const exhausted = (strategy: TargetStrategy): UnresolvedTarget => ({
+  const exhausted = (
+    strategy: TargetStrategy,
+    offered: ReadonlyArray<IndexedNode>
+  ): UnresolvedTarget => ({
     _tag: "NotFound",
     rationale: reasons.join("; "),
     considered,
     narrowedBy: strategy,
-    remedy: remedyForUnresolved(index, target, strategy)
+    remedy: remedyForUnresolved(index, target, strategy, { applied: strategies, offered })
   })
 
   if (target.within !== undefined) {
+    const offered = entries
     const scope = scopeOf(index, target.within)
     entries = entries.filter((entry) =>
       scope.roots.some((root) => root === entry.node || isAncestorOf(index, root, entry.node))
     )
     strategies.push("within")
     reasons.push(scope.rationale)
-    if (entries.length === 0) return exhausted("within")
+    if (entries.length === 0) return exhausted("within", offered)
   }
 
   if (target.role !== undefined) {
+    const offered = entries
     entries = entries.filter((entry) => entry.node.role === target.role)
     strategies.push("role")
     reasons.push(`${entries.length} node(s) with role ${target.role}`)
-    if (entries.length === 0) return exhausted("role")
+    if (entries.length === 0) return exhausted("role", offered)
   }
 
   if (target.name !== undefined) {
+    const offered = entries
     // The one place the token rung is offered. A caption (`label`) and a region
     // heading (`within`) are text an operator reads off the screen rather than a
     // control's own name, and widening those would start matching panels by
@@ -638,45 +969,48 @@ export const resolveTargetIn = (index: TreeIndex, target: Target): Resolution =>
             `are all among "${target.name}"`
           : `no exact name match, so ${entries.length} node(s) containing "${target.name}"`
     )
-    if (entries.length === 0) return exhausted(strategy)
+    if (entries.length === 0) return exhausted(strategy, offered)
   }
 
   if (target.label !== undefined) {
+    const offered = entries
     const narrowed = narrowByText(entries, target.label, (entry) => labelOf(index, entry.node), false)
     entries = narrowed.entries
     strategies.push("label")
     reasons.push(`${entries.length} captioned "${target.label}" by the preceding cell in their row`)
-    if (entries.length === 0) return exhausted("label")
+    if (entries.length === 0) return exhausted("label", offered)
   }
 
   if (target.textNear !== undefined) {
-    const wanted = normalise(target.textNear)
-    const anchors = index.nodes.filter((entry) => {
-      const text = normalise(ownText(entry.node))
-      return text === wanted || (text !== "" && text.includes(wanted))
-    })
+    const textNear = target.textNear
+    const offered = entries
+    const anchors = anchorsFor(index, textNear)
     strategies.push("textNear")
     if (anchors.length === 0) {
-      reasons.push(`nothing on this screen reads "${target.textNear}"`)
-      return exhausted("textNear")
+      reasons.push(`nothing on this screen reads "${textNear}"`)
+      return exhausted("textNear", offered)
     }
-    const scored = entries
-      .filter((entry) => !anchors.some((anchor) => anchor.node === entry.node))
-      .map((entry) => ({
-        entry,
-        distance: Math.min(
-          ...anchors.map((anchor) => treeDistance(index, entry.node, anchor.node))
-        )
-      }))
+    // A candidate that carries the anchor text as its own accessible name is at
+    // distance zero rather than excluded — see `isOwnAnchor`. Excluding it made
+    // `{ name: X, textNear: X }` unsatisfiable, which on this application is the
+    // ordinary case, because a control's name and the caption beside it are the
+    // same string.
+    const scored = offered.flatMap((entry) => {
+      const distance = nearness(index, entry, anchors, textNear)
+      return distance === undefined ? [] : [{ entry, distance }]
+    })
     if (scored.length === 0) {
-      reasons.push(`the only thing reading "${target.textNear}" is the candidate itself`)
-      return exhausted("textNear")
+      reasons.push(`the only thing reading "${textNear}" is the candidate itself`)
+      return exhausted("textNear", offered)
     }
     const closest = Math.min(...scored.map((scored) => scored.distance))
     entries = scored.filter((scored) => scored.distance === closest).map((scored) => scored.entry)
     // Proximity in edges of the accessibility tree. Not pixels, not DOM order.
     reasons.push(
-      `${entries.length} node(s) ${closest} tree edge(s) from "${target.textNear}", the closest on the screen`
+      closest === 0
+        ? `${entries.length} node(s) named "${textNear}" themselves, which is as near ` +
+          "as a control gets to the text that names it"
+        : `${entries.length} node(s) ${closest} tree edge(s) from "${textNear}", the closest on the screen`
     )
   }
 
@@ -701,7 +1035,10 @@ export const resolveTargetIn = (index: TreeIndex, target: Target): Resolution =>
       rationale: reasons.length === 0 ? `nothing matched ${describeTarget(target)}` : reasons.join("; "),
       considered,
       narrowedBy,
-      remedy: remedyForUnresolved(index, target, narrowedBy)
+      remedy: remedyForUnresolved(index, target, narrowedBy, {
+        applied: strategies,
+        offered: innermost
+      })
     }
   }
 
@@ -716,7 +1053,7 @@ export const resolveTargetIn = (index: TreeIndex, target: Target): Resolution =>
       // Not ambiguity and not a missing control: the control set is smaller than
       // the Artifact expected, which is its own kind of drift.
       reasons.push(`asked for #${target.nth} of ${entries.length}`)
-      return exhausted("ordinal")
+      return exhausted("ordinal", entries)
     }
     strategies.push("ordinal")
     reasons.push(`took #${target.nth} of ${entries.length} in document order`)

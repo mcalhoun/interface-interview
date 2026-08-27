@@ -341,6 +341,59 @@ it.live("tells the model to re-tag a value it baked in from the goal", () =>
     expect(log).not.toContain("12345")
   }))
 
+it.live("complains about a mis-tagged selection as a mis-tag, and takes the re-tagged one", () =>
+  Effect.gen(function*() {
+    // Found on a live run of the default model, which spent its entire step
+    // budget here. It tagged the selection value `constant`, so the loop
+    // registered the characters with the scrubber under the placeholder label
+    // `goalTerm` — a `constant` has no parameter name to use — and the intent
+    // check fired first, telling the model to take `goalTerm` out of a sentence
+    // it had never put it in. Truthful and unusable: the only thing the model
+    // could do was propose the same step again, eighteen times.
+    let complaint = ""
+    let mistagged = false
+    const { events, trajectory } = yield* runDiscovery({
+      goal: GOAL,
+      model: respondingModel((prompt, turn) => {
+        const marker = "YOUR LAST ACTION DID NOT HAPPEN: "
+        const at = prompt.indexOf(marker)
+        if (at >= 0 && complaint === "") {
+          complaint = prompt.slice(at + marker.length).split("\n")[0] ?? ""
+        }
+        const next = readsTheScreen(prompt, turn)
+        if (next.name !== "selectFromList" || mistagged) return next
+        mistagged = true
+        return {
+          name: "selectFromList",
+          params: {
+            ...(next.params as Record<string, unknown>),
+            match: { kind: "constant", literal: "savings" }
+          }
+        }
+      })
+    })
+
+    // The complaint the model can act on: re-tag the value. Not the one it
+    // cannot, about prose quoting a name it never wrote.
+    expect(complaint).toContain("as a constant, but it comes from the goal")
+    expect(complaint).not.toContain("the intent quotes")
+
+    // And the re-tagged proposal is taken, though the scrubber still knows those
+    // characters under the label the mis-tag gave them. The prose exemption is
+    // by characters for exactly this reason: a label is whatever a value was
+    // first registered as, and no amount of re-tagging renames it.
+    expect(trajectory.conclusion.conclusion).toBe("reached")
+    expect(trajectory.selections.map((selection) => selection.parameter)).toEqual(["accountType"])
+    expect(
+      trajectory.outputs.find((output) => output.name === "availableBalance")?.value
+    ).toBe("$4,182.55")
+
+    const refusals = events.filter(
+      (event) => event.kind === "decide" && event.rationale.startsWith("refused")
+    )
+    expect(refusals).toHaveLength(1)
+  }))
+
 it.live("refuses a summary that quotes a value the run was given, and says which", () =>
   Effect.gen(function*() {
     // Found on a live run. A model finishing a run naturally writes down what it

@@ -47,7 +47,7 @@
  * failing that test to compile. Discovery adds it openly here.
  */
 
-import type { EvidenceUnwritable } from "@cua/evidence"
+import type { EvidenceUnwritable, Scrubber } from "@cua/evidence"
 import { Evidence } from "@cua/evidence"
 import type { ActionRequest } from "@cua/policy"
 import { Policy, personalCaptions, personalLabelFor } from "@cua/policy"
@@ -155,6 +155,57 @@ const valueOf = (proposal: Proposal): ProvenancedValue | undefined => {
     default:
       return undefined
   }
+}
+
+/**
+ * The values a run's prose is allowed to contain.
+ *
+ * A selection's own value is the one exemption, and the compiler's third gate
+ * makes the same one: `savings` is what the parameter is *for*, the document
+ * declares it as that parameter's default, and a step saying "select the savings
+ * account" is describing the capability rather than baking in a caller's data.
+ * Both the selection already recorded and the one being proposed this turn
+ * count, because the step that introduces a parameter is the step whose intent
+ * has to name it.
+ *
+ * These are plaintext literals the model itself supplied, so reading them
+ * unwraps nothing.
+ */
+const exemptLiterals = (
+  selections: ReadonlyArray<DiscoveredSelection>,
+  proposal?: Proposal
+): ReadonlyArray<string> => {
+  const literals = selections.map((selection) => selection.default)
+  if (proposal?.verb === "selectFromList" && proposal.match.kind === "goalDerived") {
+    literals.push(proposal.match.literal)
+  }
+  return literals.filter((literal) => literal !== "")
+}
+
+/**
+ * Which of this run's values a piece of prose quotes, by the names the scrubber
+ * knows them under.
+ *
+ * The exempt literals are struck out of the text *before* it is scrubbed rather
+ * than filtered out of the result afterwards. Filtering afterwards compares
+ * labels, and a label is not stable: the scrubber keeps whatever name a value
+ * was first registered under, so a selection value that arrived once as a
+ * mis-tagged constant is labelled `goalTerm` for the rest of the run and no
+ * amount of re-tagging renames it. Comparing characters has no such gap.
+ */
+const quotedIn = (
+  scrub: Scrubber,
+  prose: string,
+  exempt: ReadonlyArray<string>
+): ReadonlyArray<string> => {
+  const remaining = exempt.reduce((text, literal) => text.replaceAll(literal, " "), prose)
+  return [
+    ...new Set(
+      [...scrub(remaining).matchAll(/\[redacted:([^\]]+)\]/g)].flatMap((found) =>
+        found[1] === undefined ? [] : [found[1]]
+      )
+    )
+  ]
 }
 
 /** A step id that is stable, readable, and cannot collide. */
@@ -569,6 +620,32 @@ export const discover = (
         action: describeAction(proposal)
       })
 
+      // --- provenance -----------------------------------------------------
+      //
+      // Before the prose checks below, and that order is load-bearing. A
+      // mis-tagged value is registered with the scrubber under the placeholder
+      // label `goalTerm` (there is no parameter name on a `constant` to use),
+      // so its characters appear in the intent as `[redacted:goalTerm]` and the
+      // intent check refuses the proposal by a name the model never wrote and
+      // cannot act on. A live run on gpt-4.1-mini tagged the selection value
+      // `constant`, was told eighteen times to take `goalTerm` out of a sentence
+      // it had never put it in, and spent its entire step budget there. Checking
+      // the tag first means the complaint it gets is the one it can fix: re-tag
+      // the value and name the parameter.
+      if (value !== undefined) {
+        const mistagged = checkProvenance(value, options.goal, new Set(readings.keys()))
+        if (mistagged !== undefined) {
+          yield* evidence.record({
+            kind: "decide",
+            stepId,
+            rationale: `refused: ${mistagged.complaint}`,
+            action: `${proposal.verb} (rejected)`
+          })
+          correction = mistagged.complaint
+          continue
+        }
+      }
+
       // --- prose that carries this run's values ---------------------------
       //
       // A Step's `intent` is copied into the stored Artifact verbatim, so it is
@@ -588,21 +665,34 @@ export const discover = (
         // — and without this the very proposal that discovers `accountType` is
         // the one refused for mentioning it. A live run spent its whole step
         // budget on that.
-        const exempt = new Set(selections.map((selection) => selection.parameter))
-        if (proposal.verb === "selectFromList" && proposal.match.kind === "goalDerived") {
-          exempt.add(proposal.match.name)
-        }
-        const quotedInIntent = [
-          ...options.secrets.scrubber(proposal.intent).matchAll(/\[redacted:([^\]]+)\]/g)
-        ]
-          .map((found) => found[1])
-          .filter((name): name is string => name !== undefined && !exempt.has(name))
+        //
+        // The exemption is by *characters*, not by parameter name. The scrubber
+        // labels a value by whatever it was first registered as, and a selection
+        // value that arrived once as a mis-tagged constant keeps the label
+        // `goalTerm` even after the model re-tags it correctly — so an exemption
+        // that only knew the new name would refuse the corrected proposal too.
+        // Taking the exempt text out before scrubbing needs no unwrapping: these
+        // literals are the model's own plaintext, this turn's or a recorded
+        // selection's.
+        const quotedInIntent = quotedIn(
+          options.secrets.scrubber,
+          proposal.intent,
+          exemptLiterals(selections, proposal)
+        )
         if (quotedInIntent.length > 0) {
           const named = [...new Set(quotedInIntent)].join(", ")
+          // The action is echoed back deliberately. A live run proposed exactly
+          // the right target here, was refused for the sentence beside it, and
+          // came back next turn with a reworded intent on a *different* and
+          // worse target — twice, until the run ended. Nothing else about the
+          // proposal is at fault and the model should not have to reconstruct
+          // it, so it is handed back verbatim to copy.
           correction =
             `the intent quotes the value this run was given for ${named}. The intent is ` +
-            `copied into the stored capability word for word, so say what the step does ` +
-            `without ${named} in the sentence.`
+            `copied into the stored capability word for word, so write the sentence with the ` +
+            `parameter name ${named} in place of its value, or describe the value rather than ` +
+            `quoting it. Nothing else is wrong: propose the same action again — ` +
+            `${describeAction(proposal)} — changing nothing but the intent.`
           yield* evidence.record({
             kind: "decide",
             stepId,
@@ -735,18 +825,17 @@ export const discover = (
         // capability rather than baking in a caller's data. Every other
         // parameter is refused, and naming it is what lets the model fix it in
         // one turn instead of guessing.
+        // Exempt by characters rather than by parameter name, for the reason
+        // the intent check above gives: the label the scrubber uses for a
+        // selection value is whatever it was first registered as, which is not
+        // always the name the run ended up recording it under.
         const scrub = options.secrets.scrubber
-        const selectionParameters = new Set(selections.map((selection) => selection.parameter))
-        const quoted = new Set<string>()
-        for (const prose of [
-          proposal.summary,
-          ...proposal.outputs.map((output) => output.description)
-        ]) {
-          for (const found of scrub(prose).matchAll(/\[redacted:([^\]]+)\]/g)) {
-            const name = found[1]
-            if (name !== undefined && !selectionParameters.has(name)) quoted.add(name)
-          }
-        }
+        const exempt = exemptLiterals(selections)
+        const quoted = new Set(
+          [proposal.summary, ...proposal.outputs.map((output) => output.description)].flatMap(
+            (prose) => quotedIn(scrub, prose, exempt)
+          )
+        )
         if (quoted.size > 0) {
           const named = [...quoted].join(", ")
           correction =
@@ -798,21 +887,6 @@ export const discover = (
           detail: proposal.summary
         })
         return finish({ conclusion: "reached", summary: proposal.summary }, attempted)
-      }
-
-      // --- provenance -----------------------------------------------------
-      if (value !== undefined) {
-        const mistagged = checkProvenance(value, options.goal, new Set(readings.keys()))
-        if (mistagged !== undefined) {
-          yield* evidence.record({
-            kind: "decide",
-            stepId,
-            rationale: `refused: ${mistagged.complaint}`,
-            action: `${proposal.verb} (rejected)`
-          })
-          correction = mistagged.complaint
-          continue
-        }
       }
 
       // --- act ------------------------------------------------------------

@@ -357,3 +357,157 @@ it.live("the near-duplicate on Member Search resolves unambiguously by exact nam
     })
   )
 )
+
+// ---------------------------------------------------------------------------
+// A control named after the text beside it
+// ---------------------------------------------------------------------------
+
+/**
+ * The defect these three cover is one shape, seen from two sides.
+ *
+ * Heritage Core gives a field its accessible name with a `title` attribute and
+ * puts the same words in the caption cell beside it, so `Member Number` is both
+ * the control's name and text on the screen. A `textNear` that struck the
+ * candidate out of the running for reading its own name made
+ * `{ name: X, textNear: X }` — a natural reinforcement — unsatisfiable, and left
+ * a bare `textNear: X` answering with whatever control happened to be nearest,
+ * which on Member Search was `textbox "Branch"`, five edges away.
+ */
+it.live("a control whose own name is the anchor text stands at the anchor", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      const reinforced = yield* surface.resolveTarget({
+        role: "textbox",
+        name: "Member Number",
+        textNear: "Member Number"
+      })
+      expect(reinforced.match.description).toBe('textbox "Member Number"')
+      expect(reinforced.match.region).toBe("Member Number Search")
+      expect(reinforced.alternatives).toBe(0)
+
+      // The anchor on its own reaches the same control. Not `textbox "Branch"`,
+      // which is what a resolver that anchors on the very control being
+      // described has to fall back to, and which no reader would have chosen.
+      const anchored = yield* surface.resolveTarget({ role: "textbox", textNear: "Member Number" })
+      expect(anchored.match.description).toBe('textbox "Member Number"')
+      expect(anchored.match.path).toBe(reinforced.match.path)
+    })
+  )
+)
+
+it.live("a cell that is the caption is not standing near itself", () =>
+  withSurface("/account?memberNumber=12345&accountNumber=0000012345-S01", (surface) =>
+    Effect.gen(function* () {
+      // The other side of the same rule, and the reason it is drawn at
+      // `CONTROL_ROLES` rather than at "anything whose text matches". A person
+      // operates a textbox and reads a cell: a cell that says "Current Balance"
+      // *is* the caption, so a caller asking for the cell near it means the
+      // figure beside it, and proximity still has to be measured.
+      const figure = yield* surface.resolveTarget({ role: "cell", textNear: "Current Balance" })
+
+      expect(figure.match.text).toBe("$4,382.55")
+      expect(figure.rationale).toMatch(/tree edge\(s\) from "Current Balance"/)
+    })
+  )
+)
+
+it.live("a scope naming a role reaches the region that heading heads", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      // `within: { role: "table", name: "Member Number Search" }` reads as "the
+      // table headed Member Number Search", and that is a real thing on the
+      // screen — but a layout table carries no accessible name, so matching the
+      // heading against the table's own name could only ever fail. A live
+      // discovery run proposed exactly this scope, was told to drop the role,
+      // and proposed it again twice before the run ended.
+      const scoped = yield* surface.resolveTarget({
+        role: "textbox",
+        name: "Member Number",
+        within: { role: "table", name: "Member Number Search" }
+      })
+
+      expect(scoped.match.description).toBe('textbox "Member Number"')
+      expect(scoped.match.region).toBe("Member Number Search")
+      expect(scoped.alternatives).toBe(0)
+      expect(scoped.rationale).toContain("scoped to the table headed that way")
+
+      // The fallback runs only on an empty set, so a role scope that does match
+      // a node by its own name is untouched by it.
+      const byOwnName = yield* surface.resolveTarget({
+        role: "cell",
+        name: "Member Number",
+        within: { role: "cell", name: "Member Number" }
+      })
+      expect(byOwnName.rationale).toContain("scoped to 1 cell node(s)")
+    })
+  )
+)
+
+it.live("a remedy never denies something the tree plainly says", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      const state = yield* surface.observe
+      const missing = (target: Target) =>
+        surface.resolveTarget(target).pipe(
+          Effect.flip,
+          Effect.map((failure) => failure as TargetNotFound)
+        )
+
+      // The reader of a remedy is usually a model about to be shown this same
+      // tree again. Told something it can see is untrue, it has no move except
+      // to propose the same target once more, and three of those end a run.
+
+      // (a) A name that is on the screen, on a role that does not carry it.
+      const wrongRole = yield* missing({ role: "button", name: "Member Number" })
+      expect(state.accessibility).toContain('cell "Member Number"')
+      expect(wrongRole.remedy).not.toMatch(/nothing (on this screen )?is called/)
+      expect(wrongRole.remedy).toContain('does name cell "Member Number"')
+      // And the correction is a substitution rather than a fresh attempt: the
+      // region it names is what `within` takes, and `regionOf` is `scopeOf`'s
+      // inverse, so the Target it suggests resolves.
+      expect(wrongRole.remedy).toContain('within: { name: "Member Number Search" }')
+
+      // (b) An anchor that is on the screen, but only as the candidate's own
+      // name — so proximity to it separates nothing. The old sentence claimed
+      // the anchor was not text on the screen at all.
+      const selfOnly = yield* missing({ role: "button", name: "Look Up", textNear: "ook Up" })
+      expect(selfOnly.narrowedBy).toBe("textNear")
+      expect(selfOnly.remedy).not.toContain("is not text on this screen")
+      expect(selfOnly.remedy).toContain('button "Look Up"')
+      expect(selfOnly.remedy).toContain("Drop textNear")
+
+      // (c) A scope naming a heading that is on the screen, with a role the
+      // node heading it does not carry. Saying "no region is headed that way"
+      // next to a list containing that very heading is the contradiction in
+      // miniature; a panel here has no accessible name at all, and the answer
+      // is the spelling that works.
+      const wrongScopeRole = yield* missing({
+        role: "textbox",
+        within: { role: "list", name: "Member Number Search" }
+      })
+      expect(wrongScopeRole.remedy).not.toContain("no region on this screen is headed that way")
+      expect(wrongScopeRole.remedy).toContain('the region headed "Member Number Search" is a table')
+      expect(wrongScopeRole.remedy).toContain('within: { name: "Member Number Search" }')
+
+      // And a scope whose role really is absent, with a heading that is absent
+      // too, still gets told about the role.
+      const noSuchRole = yield* missing({
+        role: "textbox",
+        within: { role: "list", name: "Wire Transfer" }
+      })
+      expect(noSuchRole.remedy).toContain('nothing on this screen has role "list"')
+
+      // (d) A role that exists, outside the scope that was asked for.
+      const outsideScope = yield* missing({ role: "button", within: { name: "Member Search" } })
+      expect(outsideScope.narrowedBy).toBe("role")
+      expect(outsideScope.remedy).toContain("elsewhere on this screen")
+      expect(outsideScope.remedy).not.toMatch(/^nothing on this screen has role/)
+
+      // (e) And the branch that is true keeps saying so. A remedy that hedges
+      // everything is no more useful than one that lies.
+      const absent = yield* missing({ role: "textbox", textNear: "Wire Transfer" })
+      expect(state.accessibility).not.toContain("Wire Transfer")
+      expect(absent.remedy).toContain("is not text on this screen")
+    })
+  )
+)
