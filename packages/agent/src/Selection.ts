@@ -49,6 +49,12 @@ export interface ProposedSelection {
   readonly match: ProvenancedValue
   readonly observedLabels: ReadonlyArray<string>
   readonly discoveredFrom: string
+  /** The region the list was scoped to, as the model named it. */
+  readonly within?:
+    | { readonly role?: string | undefined; readonly name?: string | undefined }
+    | undefined
+  /** The role the items were asked for by, for a complaint that can be acted on. */
+  readonly itemRole?: string | undefined
 }
 
 /**
@@ -62,12 +68,52 @@ export const checkSelection = (
   selection: ProposedSelection,
   goal: string
 ): UnusableSelection | undefined => {
-  if (selection.observedLabels.length === 0) {
+  // The scope, first, because everything below it is judged against the labels
+  // an unscoped list produced.
+  //
+  // A list with no region is every item on the page. Two things go wrong at once
+  // and a live run showed both: the declared legal values of the parameter pick
+  // up whatever else the screen links to — `Return to Member Search` became an
+  // account type — and the step before the selection has no named screen to be
+  // checked against, so the compiler has no checkpoint to write for it and
+  // refuses the whole document. Naming the region fixes both, and the region is
+  // the caption a person reads above the list.
+  if (selection.within?.name === undefined || selection.within.name.trim() === "") {
     return {
       complaint:
-        "list every label the screen is offering in `observedLabels`. They become " +
-        "the legal values of the parameter, and a reviewer has to be able to see " +
-        "what the choice was made among."
+        "name the region the list sits in, in `list.within.name`, using the caption " +
+        "heading it on screen. An unscoped list is every item on the page, so the legal " +
+        "values of the parameter end up including whatever else the screen links to, and " +
+        "the step that reached this screen has nothing to be checked against."
+    }
+  }
+
+  // The labels are the ones read off the live tree, not the model's claim about
+  // them, so an empty list means the *description of the list* found nothing.
+  // Saying "list the labels you can see" here, as this used to, blames the model
+  // for a field it filled in and sends it round the same proposal until the step
+  // bound stops it — observed, twenty times in a row, on a live run. The
+  // complaint has to name the two things it can change.
+  if (selection.observedLabels.length === 0) {
+    const role = selection.itemRole ?? "item"
+    const region = selection.within?.name ?? "(unnamed)"
+    const scopedRole = selection.within?.role
+    return {
+      complaint:
+        `nothing on this screen answers to that list: no ${role} items sit inside the ` +
+        `region you named` +
+        (scopedRole === undefined
+          ? ` (${JSON.stringify(region)})`
+          : ` (role ${JSON.stringify(scopedRole)}, name ${JSON.stringify(region)})`) +
+        `. ` +
+        (scopedRole === undefined
+          ? `Name the region by the caption that heads the list on screen, exactly as it ` +
+            `reads there, and give the role the items actually carry.`
+          : `Leave the region's role out and name it by its caption alone: the caption is a ` +
+            `cell beside the list rather than a role the region carries, so giving a role ` +
+            `for it narrows the scope to nothing.`) +
+        ` The labels found become the legal values of the parameter, so an empty list is a ` +
+        `list nobody can choose from.`
     }
   }
 

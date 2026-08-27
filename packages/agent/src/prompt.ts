@@ -49,7 +49,8 @@ Each turn, call exactly one action. Decide from what is on the screen now, not f
 Naming controls:
 - Prefer role plus accessible name. Add "within" to scope to a panel when a name appears more than once; on a legacy screen the same words often appear at several nesting levels.
 - Use "label" for a value cell whose caption sits beside it in the row. This is how figures are read out of a table that has no headers.
-- If a target does not resolve, you are told what was on the screen. Read it and name the control differently rather than repeating yourself.
+- The contents of every frame on the screen are already inlined into the tree you are shown. There is no frame to step into, and a frame is not something a target can name or scope to: name the control itself, or scope to the heading of the section it sits in.
+- If a target does not resolve, you are told what was on the screen and what to reach for instead. Read it and name the control differently rather than repeating yourself.
 
 Values you type carry their origin, and getting this wrong silently ruins the capability:
 - goalDerived: the value came from the goal. Name the parameter it should become, in a caller's vocabulary, e.g. "memberId" rather than "Member Number". Every word of the value must appear in the goal.
@@ -89,9 +90,18 @@ export interface ObservationOptions {
  */
 export const observation = (options: ObservationOptions): string => {
   const { state } = options
-  const frames = state.frames
-    .map((frame) => (frame.isMain ? "main document" : frame.name === "" ? "an unnamed frame" : frame.name))
-    .join(", ")
+  // Named, because which documents a screen is made of is a real fact about it
+  // and the evidence should say so. Qualified, because the tree below shows
+  // their contents and not their boundaries: without the qualification a reader
+  // sees a list of names and reasonably tries to scope to one, which is exactly
+  // the mistake the tree itself no longer invites.
+  const named = state.frames.map((frame) =>
+    frame.isMain ? "main document" : frame.name === "" ? "an unnamed frame" : frame.name
+  )
+  const frames = named.length <= 1
+    ? named.join(", ")
+    : `${named.join(", ")} — every frame's contents are inlined in the tree below, ` +
+      "and a frame is not something a target can name"
 
   const parts: Array<string> = [
     `GOAL: ${options.goal}`,

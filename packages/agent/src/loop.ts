@@ -174,7 +174,15 @@ const describeAction = (proposal: Proposal): string => {
     case "extract":
       return `extract ${describeTarget(proposal.target)}`
     case "selectFromList":
-      return `selectFromList ${proposal.list.itemRole} items`
+      // The scope is in the line because a selection that finds nothing is a
+      // scope that named nothing, and a reader of the log has to be able to see
+      // which words the model used.
+      return (
+        `selectFromList ${proposal.list.itemRole} items` +
+        (proposal.list.within === undefined
+          ? ""
+          : ` within ${JSON.stringify(proposal.list.within)}`)
+      )
     case "succeed":
       return `succeed: ${proposal.summary}`
     case "escalate":
@@ -233,13 +241,21 @@ const reasonTagOf = (error: unknown): string => {
 /**
  * A target failure, as something to tell the model.
  *
- * The candidate list matters more than the message: a model told "ambiguous"
- * guesses again, and a model shown the three things that answered can pick one.
+ * The remedy matters more than the message. A model told "ambiguous" guesses
+ * again; a model shown the three things that answered can pick one. A model told
+ * only "nothing answers to that" does something worse — it is shown the very
+ * same screen on the next turn, has no new information to reason from, and
+ * proposes the identical Target. Three of those in a row is a stuck run, and
+ * that is not hypothetical: it is how the first live discovery run against
+ * Account Detail died.
  */
 const explainTargetFailure = (failure: TargetFailure): string => {
   switch (failure._tag) {
     case "TargetNotFound":
-      return `nothing on the screen answers to ${failure.target}. ${failure.rationale}`
+      return (
+        `nothing on the screen answers to ${failure.target}. ${failure.rationale}. ` +
+        `${failure.remedy}`
+      )
     case "TargetAmbiguous":
       return (
         `${failure.target} names more than one control, so it is not clear which you mean. ` +
@@ -274,6 +290,14 @@ export const discover = (
     const history: Array<StepSummary> = []
     /** Step id -> what that step read. Backs `uiDerived` and the outputs. */
     const readings = new Map<string, string>()
+    /**
+     * Which step read each control, keyed by the Target as it is described.
+     *
+     * Beside `readings`, which is keyed by the step's own name. Both are needed:
+     * a model that re-reads picks a new name for the second reading as often as
+     * it reuses the old one, and only one of those two maps sees each case.
+     */
+    const readAt = new Map<string, string>()
     /** Parameter name -> the uses of it, in order. */
     const parameters = new Map<string, { literal: string; usedBy: Array<string> }>()
     const selections: Array<DiscoveredSelection> = []
@@ -545,6 +569,89 @@ export const discover = (
         action: describeAction(proposal)
       })
 
+      // --- prose that carries this run's values ---------------------------
+      //
+      // A Step's `intent` is copied into the stored Artifact verbatim, so it is
+      // as much a place for a member number to end up as the summary is. A live
+      // run wrote "View the savings account details for member 12345" and the
+      // compiler refused the whole document for it, at the end, after every
+      // step had run. Refusing here costs one turn.
+      //
+      // Detected through the scrubber: the prose is scrubbed and the
+      // placeholders it comes back with name the parameters it quoted. A
+      // selection parameter's own value is exempt, for the reason the compiler's
+      // third gate exempts it — `savings` is what the parameter is *for*.
+      if ("intent" in proposal) {
+        // The selection being proposed right now counts as exempt too, and not
+        // only the ones already recorded. The step that introduces the parameter
+        // is the step whose intent has to name it — "select the savings account"
+        // — and without this the very proposal that discovers `accountType` is
+        // the one refused for mentioning it. A live run spent its whole step
+        // budget on that.
+        const exempt = new Set(selections.map((selection) => selection.parameter))
+        if (proposal.verb === "selectFromList" && proposal.match.kind === "goalDerived") {
+          exempt.add(proposal.match.name)
+        }
+        const quotedInIntent = [
+          ...options.secrets.scrubber(proposal.intent).matchAll(/\[redacted:([^\]]+)\]/g)
+        ]
+          .map((found) => found[1])
+          .filter((name): name is string => name !== undefined && !exempt.has(name))
+        if (quotedInIntent.length > 0) {
+          const named = [...new Set(quotedInIntent)].join(", ")
+          correction =
+            `the intent quotes the value this run was given for ${named}. The intent is ` +
+            `copied into the stored capability word for word, so say what the step does ` +
+            `without ${named} in the sentence.`
+          yield* evidence.record({
+            kind: "decide",
+            stepId,
+            rationale: `refused: ${correction}`,
+            action: `${proposal.verb} (rejected)`
+          })
+          continue
+        }
+      }
+
+      // --- a reading that has already been taken --------------------------
+      //
+      // An `extract` step is named by the model's own `bindAs`, and a second
+      // one under the same name is two things at once: a duplicate step id,
+      // which the compiler refuses outright, and a re-read of a value the run
+      // is already holding. A live run did both — it read the balance, read it
+      // again, and then read it a third time under a new name "to confirm the
+      // value is present" — and only the compiler noticed, after the whole run.
+      //
+      // Telling the model it already has the value is also what bounds a run
+      // that only reads. Reading changes nothing, so the repetition rules are
+      // deliberately blind to it (see `StuckObservation.readOnly`); this is the
+      // rule that takes their place, and it is the specific one.
+      if (proposal.verb === "extract") {
+        // By the control, not only by the name. A rule that looked at `bindAs`
+        // alone is one a model gets round by picking a new name, and a live run
+        // did exactly that: it read the same cell four times as
+        // `availableBalance`, `savingsAvailableBalance`,
+        // `savingsAvailableBalanceFinal` and `finalSavingsAvailableBalance`,
+        // and the compiled document carried four identical steps.
+        const already = readAt.get(describeTarget(proposal.target)) ?? (
+          readings.has(stepId) ? stepId : undefined
+        )
+        if (already !== undefined) {
+          correction =
+            `you have already read that control on this run and the value is recorded ` +
+            `against step ${JSON.stringify(already)}. Do not read it again under any name: ` +
+            `either act on the screen, or say succeed with ${JSON.stringify(already)} as ` +
+            `the step an output came from.`
+          yield* evidence.record({
+            kind: "decide",
+            stepId,
+            rationale: `refused: ${correction}`,
+            action: "extract (rejected)"
+          })
+          continue
+        }
+      }
+
       // --- the two terminal verbs ----------------------------------------
       //
       // Neither touches a Surface, so neither goes through Policy: there is
@@ -562,32 +669,126 @@ export const discover = (
       }
 
       if (proposal.verb === "succeed") {
+        /**
+         * A refusal to finish, recorded and then fed back.
+         *
+         * Recorded because every other refusal in this loop is, and a correction
+         * that exists only in the next prompt is invisible to whoever reads the
+         * run afterwards — which is precisely when it matters, because a run that
+         * ends stuck ends stuck for a reason nobody can see.
+         */
+        const refuse = (complaint: string) =>
+          evidence.record({
+            kind: "decide",
+            stepId,
+            rationale: `refused: ${complaint}`,
+            action: "succeed (rejected)"
+          })
+
+        const read = [...readings.keys()]
         const missing = proposal.outputs.filter((output) => !readings.has(output.fromStep))
         if (missing.length > 0) {
-          correction =
-            `you said the goal is met, but ${
-              missing.map((output) => JSON.stringify(output.fromStep)).join(", ")
-            } has not read anything. Extract the value the goal asks for before finishing. ` +
-            `Steps that have read something: ${[...readings.keys()].join(", ") || "(none)"}.`
+          // Which half of the complaint leads is the whole of its usefulness.
+          // If something has already been read, the mistake is the *name*, and
+          // telling the model to go and extract something sends it back to a
+          // screen it has already read — a repeat state, and three of those end
+          // the run. Only when nothing has been read is extracting the answer.
+          const named = missing.map((output) => JSON.stringify(output.fromStep)).join(", ")
+          correction = read.length === 0
+            ? `you said the goal is met, but ${named} has not read anything, and no step has. ` +
+              "Extract the value the goal asks for before finishing."
+            : `you said the goal is met, but no step is called ${named}. ` +
+              `The steps that have read something are: ${read.join(", ")}. ` +
+              "Say succeed again with fromStep naming one of those — the value is already read, " +
+              "so do not extract it a second time."
+          yield* refuse(correction)
           continue
         }
         if (proposal.outputs.length === 0) {
           correction =
             "you said the goal is met but named no outputs. Name the reading that answers " +
-            "the goal, and the extract step it came from."
+            "the goal, and the extract step it came from" +
+            (read.length === 0 ? "." : `: ${read.join(", ")}.`)
+          yield* refuse(correction)
+          continue
+        }
+
+        // The prose a model writes about a finished run is where a value from
+        // that run gets into a document, and a live run did exactly this: the
+        // summary read "the savings balance for member 12345", which is a
+        // capability with one caller's identifier written into its description.
+        //
+        // The compiler's third gate already refuses such a document, but it does
+        // so at the end, after the whole run. Refusing here costs one turn and
+        // tells the model what to change, which is the same argument the
+        // provenance checks make: a check that runs earlier is not a check that
+        // runs instead.
+        //
+        // Detected through the scrubber rather than by unwrapping anything: the
+        // prose is scrubbed and the placeholders it comes back with name the
+        // parameters it was quoting. No call site has to hold the characters.
+        //
+        // A selection parameter's own value is exempt, and the compiler's third
+        // gate makes the same exemption for the same reason: `savings` is what a
+        // selection is *for*, the document declares it as a parameter with that
+        // default, and a summary saying "a savings account" is describing the
+        // capability rather than baking in a caller's data. Every other
+        // parameter is refused, and naming it is what lets the model fix it in
+        // one turn instead of guessing.
+        const scrub = options.secrets.scrubber
+        const selectionParameters = new Set(selections.map((selection) => selection.parameter))
+        const quoted = new Set<string>()
+        for (const prose of [
+          proposal.summary,
+          ...proposal.outputs.map((output) => output.description)
+        ]) {
+          for (const found of scrub(prose).matchAll(/\[redacted:([^\]]+)\]/g)) {
+            const name = found[1]
+            if (name !== undefined && !selectionParameters.has(name)) quoted.add(name)
+          }
+        }
+        if (quoted.size > 0) {
+          const named = [...quoted].join(", ")
+          correction =
+            `the summary or an output description quotes the value this run was given for ` +
+            `${named}. A capability outlives the run that discovered it and is read by ` +
+            `people who were not there, so say what it does and what it returns without ` +
+            `${named} in the sentence at all.`
+          yield* refuse(correction)
+          continue
+        }
+
+        // The other half of the same rule, for values that came off the screen
+        // rather than out of the goal. A balance is not a secret and no scrubber
+        // touches it, but it is still one run's answer, and the compiler already
+        // refuses to bake one into a checkpoint: an `extract` is checked against
+        // a shape (`^\$[0-9,]+\.[0-9]{2}$`) built to carry none of the digits.
+        // A summary reading "the balance is $4,182.55" puts the same figure back
+        // into the same document in prose. Observed on a live run.
+        const echoed = [...readings.entries()].filter(([, reading]) =>
+          [proposal.summary, ...proposal.outputs.map((output) => output.description)].some(
+            (prose) => reading.trim() !== "" && prose.includes(reading.trim())
+          )
+        )
+        if (echoed.length > 0) {
+          const named = echoed.map(([step]) => step).join(", ")
+          correction =
+            `the summary or an output description repeats what this run read at ${named}. ` +
+            `That is one run's answer, not the capability's: say what the output means and ` +
+            `let the value come from the run that asks for it.`
+          yield* refuse(correction)
           continue
         }
         // `readings` itself stays raw: it is the working value, and a later
         // `uiDerived` fill will have to type the real characters. It is scrubbed
         // here, at the one point where a reading becomes part of the Trajectory.
-        const scrubReading = options.secrets.scrubber
         outputs = proposal.outputs.map((output): DiscoveredOutput => {
           const read = readings.get(output.fromStep)
           return {
             name: output.name,
             fromStep: output.fromStep,
             description: output.description,
-            value: read === undefined ? undefined : scrubReading(read)
+            value: read === undefined ? undefined : scrub(read)
           }
         })
         yield* evidence.record({
@@ -654,7 +855,10 @@ export const discover = (
         rationale: performed.outcome.rationale
       })
 
-      if (performed.outcome.read !== undefined) readings.set(stepId, performed.outcome.read)
+      if (performed.outcome.read !== undefined) {
+        readings.set(stepId, performed.outcome.read)
+        if (proposal.verb === "extract") readAt.set(describeTarget(proposal.target), stepId)
+      }
 
       if (value !== undefined && value.kind === "goalDerived") {
         const existing = parameters.get(value.name)
@@ -700,9 +904,18 @@ export const discover = (
         },
         authorisedBy: { policy: performed.policy, risk: performed.risk }
       })
+      // The step id leads the line, and it is not decoration.
+      //
+      // `succeed` has to name the step each output came from, and an `extract`
+      // step is named by whatever the model called its `bindAs`. Without the id
+      // here, that word appears nowhere in the transcript after the turn that
+      // proposed it: the model is required to name a handle it can no longer
+      // see, guesses, and is told its finished run is unfinished. A live run did
+      // exactly that, then re-read the balance it had already read, and the
+      // repeated screen ended it as a cycle.
       history.push({
         ordinal: steps.length,
-        line: `${proposal.intent} — ${describeAction(proposal)}${
+        line: `[${stepId}] ${proposal.intent} — ${describeAction(proposal)}${
           performed.outcome.read === undefined ? "" : ` -> read ${JSON.stringify(performed.outcome.read)}`
         }`
       })
@@ -713,7 +926,13 @@ export const discover = (
         url: after.url,
         accessibility: after.accessibility,
         step: attempted,
-        elapsedMillis: Date.now() - startedAt
+        elapsedMillis: Date.now() - startedAt,
+        // An `extract` reads and does not act, so the screen being identical
+        // afterwards is what should happen. See `StuckObservation.readOnly`:
+        // without this, a capability that reads two figures off one screen —
+        // which is what `member.account-balance` does — cannot be discovered,
+        // because the second read is counted as a lap.
+        readOnly: proposal.verb === "extract"
       })
       if (trigger !== undefined) {
         yield* evidence.record({ kind: "outcome", stepId, code: "STUCK", detail: trigger.detail })
@@ -942,7 +1161,9 @@ const perform = (
           {
             match: proposal.match,
             observedLabels: labels,
-            discoveredFrom: proposal.discoveredFrom
+            discoveredFrom: proposal.discoveredFrom,
+            within: proposal.list.within,
+            itemRole: proposal.list.itemRole
           },
           options.goal
         )

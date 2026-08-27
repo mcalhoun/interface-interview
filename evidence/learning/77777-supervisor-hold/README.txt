@@ -43,7 +43,10 @@ intervention-run.events.jsonl
 
 intervention-run.final.png
     The screen at the end of that run: the balances, with the line "Restriction
-    SUP-HOLD-02 overridden by supervisor SUP7" beneath them.
+    SUP-HOLD-02 overridden by supervisor ..." beneath them, naming the id the
+    supervisor typed. The events file renders that id as
+    [redacted:supervisorId], because an operator credential is registered with
+    the scrubber before it is typed, so this file does not repeat it either.
 
 1.1.0-to-1.2.0.diff
     What that episode taught the capability. Two hunks, and the striking thing

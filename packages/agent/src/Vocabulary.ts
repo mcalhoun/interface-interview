@@ -83,7 +83,11 @@ const Navigate = Tool.make("navigate", {
 const Click = Tool.make("click", {
   description:
     "Press a control: a button, a link, a tab. Name it the way an operator would " +
-    "point at it, by role and accessible name.",
+    "point at it, by role and accessible name. " +
+    "Do NOT use this to press one item out of a list the screen is offering — an " +
+    "account among a member's accounts, a row among rows. Use selectFromList for " +
+    "that: a click names this institution's label, and the capability then only " +
+    "works at institutions that use the same wording.",
   parameters: Schema.Struct({
     intent: Intent,
     rationale: Rationale,
@@ -138,12 +142,35 @@ const SelectFromList = Tool.make("selectFromList", {
     "Savings\", match on \"savings\". Recording \"Primary Savings\" would break " +
     "at an institution that calls the same account \"Regular Savings\". " +
     "List every label you can see in `observedLabels`, because those become the " +
-    "legal values of the parameter.",
+    "legal values of the parameter. " +
+    "Scope the list with `list.within.name`, using the caption heading it on " +
+    "screen: an unscoped list is every item on the page, so navigation links end " +
+    "up declared as legal values. Give `list.within.name` only — do NOT set " +
+    "`list.within.role`, which narrows the scope to nothing. " +
+    "`discoveredFrom` is the whole inference in one sentence, for example: the " +
+    "goal's word for the account type is a token subset of the label the screen " +
+    "offered. It is what a reviewer reads to decide whether to agree with the " +
+    "choice, so a fragment is no use.",
   parameters: Schema.Struct({
     intent: Intent,
     rationale: Rationale,
     list: Schema.Struct({
-      /** The region the list sits in, named by the caption heading it. */
+      /**
+       * The region the list sits in, named by the caption heading it.
+       *
+       * Optional in the schema and required in practice: `checkSelection` refuses
+       * a proposal without it. It stays optional here because a `Target`'s scope
+       * is optional everywhere else in this vocabulary, and because a refusal the
+       * model is told about in words it can act on is better than a decode error
+       * it only sees as a malformed call.
+       *
+       * The `role` half is almost always wrong to supply and the description says
+       * so. A region is found by climbing from the caption that heads it, so the
+       * caption is a cell beside the list rather than a role the region carries;
+       * naming a role for it narrows the scope to nothing. A live run spent its
+       * whole step budget re-proposing `{ role: ..., name: "Share and Deposit
+       * Accounts" }` and being told the list was empty.
+       */
       within: Schema.optional(
         Schema.Struct({
           role: Schema.optional(Schema.String),

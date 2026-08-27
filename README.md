@@ -24,46 +24,45 @@ is the vocabulary. `docs/adr/` holds ten decision records.
 
 ## Read this before anything else
 
-**The `OPENAI_API_KEY` available in the environment this was built in is
-revoked.** It is well formed and dead: `api.openai.com/v1/models` returns HTTP
-401 for it, and so does the Responses API.
-
-The consequence is worth stating plainly, because the brief says a real
-model-driven discovery run is the one thing that cannot be stubbed:
-
-- **There is no genuine model-driven discovery run in this repository.** What is
-  committed at `evidence/discovery/scripted-model-no-llm-drove-this/` is the real
-  discovery loop driving a real Chromium against the real fixture under the real
-  shipped policy, with a hand-written stand-in where the model's judgement goes.
-  The directory carries a file called `NO-MODEL-DROVE-THIS.txt` so it cannot be
-  mistaken for a model run. The compiled artifact at
-  `artifacts/member.account-balance.discovered/1.0.0.yaml` was compiled from that
-  trajectory, and its own `summary` says so.
-- The assisted-recovery consultations in `evidence/assist/` and
-  `evidence/tenant/community-cu/` are scripted the same way, and labelled the
-  same way.
-- **`--assist` does reach OpenAI for real.** `bun run replay
-  member.account-balance --memberId 88888 --version 1.0.0 --assist` makes a
-  genuine HTTP call, gets `InvalidKey` back, records `assist.declined` naming it,
-  and degrades to exactly the failure the run would have had without the rung.
-  Act 7 of `bun run demo` shows that log line. The wiring is proven. The
-  judgement is not.
-- Two of the arcs are driven by a scripted **operator** rather than a scripted
-  model, because there is nobody at the keyboard in an unattended environment.
-  The operator posts to the real operator interface over HTTP and acts in the
-  automation's own browser window, which is what a handoff is. The equivalent
-  human command is printed beside each one.
-
-**With a working key, closing the discovery gap is one command and no code
-change:**
+**A language model drove a real discovery run, and the capability this
+repository ships as `discovered` was compiled from it.** The evidence is at
+`evidence/discovery/gpt-4.1-drove-this/`: a real Chromium, the real Heritage
+Core fixture, the shipped policy, the real evidence writer, and `gpt-4.1`
+choosing every action through the real provider. One command produced the run,
+the compiled document and a deterministic replay of that document:
 
 ```
-bun run discover "Look up the savings account balance of member 12345"
+bun run test/support/drive-the-discovery-run.ts     # needs OPENAI_API_KEY
 ```
 
-The provider is a `Layer` swap behind `effect/unstable/ai`, and `--assist`
-already builds the real provider through the same call site a test's scripted
-model goes through.
+Four things around that are worth knowing before reading anything else.
+
+- **The default model does not do this.** `DEFAULT_MODEL` is `gpt-4.1-mini` and
+  `gpt-4.1` is what the committed run used. On this goal the smaller model
+  proposes an over-constrained Target on the first screen and re-proposes it
+  until the loop stops it. The default is left alone, because
+  `packages/agent/src/provider.ts` argues for it and one observation is not
+  grounds to overturn an argument, but the evidence has to say which model
+  actually produced it.
+- **Live runs found eight defects that no scripted run could.** Among them: the
+  accessibility tree advertised a frame scope a Target has no way to name; the
+  cycle detector counted a second reading off one screen as a lap, which made the
+  flagship capability undiscoverable; and the model wrote the caller's member
+  number into the capability summary, an output description and a step intent,
+  where only the compiler's last gate caught it. All eight are fixed, each fix
+  carries the run that found it in its comment, and `REPORT.md` lists them.
+- **Three things are still scripted, and each says so where it is.** The
+  classification in `evidence/assist/` and the target proposal in
+  `evidence/tenant/community-cu/` are scripted at `LanguageModel.make`, so those
+  two directories show the *accepted* path deterministically rather than
+  whatever a model answered on the day. The operator in two of the arcs is
+  scripted because there is nobody at this keyboard; they post to the real
+  operator interface over HTTP and act in the automation's own browser window,
+  and the equivalent human command is printed beside each one.
+- **`bun run demo` needs no key and makes no live call except one.** Act 7 calls
+  the provider for real when a key is present and records what came back; with
+  no key it records `assist.declined` and degrades to exactly the failure the run
+  would have had without the rung. Every other act is deterministic.
 
 ---
 
@@ -132,7 +131,8 @@ run and where the evidence landed for each:
    run finishes.
 6. **Learning**: the two amendments side by side, then the before and after of
    each, driven live.
-7. **The assisted rung**, with the revoked key and then with a scripted one.
+7. **The assisted rung**: a live consultation against the real provider, then
+   the accepted path with a scripted one.
 8. **A second institution** running the same vendor product.
 9. **Safety**: a scan over everything the demo just wrote.
 
@@ -248,8 +248,14 @@ demonstrate the handoff without cutting anything.
 ```bash
 bun run discover "Look up the savings account balance of member 12345"
 bun run discover "..." --headed --emit member.account-balance.discovered --artifactVersion 1.1.0
-bun run compile <trajectory.json> --capability <name>
+bun run discover "..." --json > run.json && bun run compile run.json --capability <name>
+
+# the committed run, its compiled artifact and a replay of it, in one command
+bun run test/support/drive-the-discovery-run.ts
 ```
+
+`--model gpt-4.1` is what the committed run used. The default, `gpt-4.1-mini`,
+does not finish this goal.
 
 ### The mock application and the surface
 
@@ -265,7 +271,7 @@ bun run surface resolve / --role textbox --name "Member Num"
 
 ```bash
 bun run typecheck    # clean
-bun run test         # 352 tests across 27 files, ~18s, real browsers throughout
+bun run test         # 405 tests across 31 files, ~19s, real browsers throughout
 ```
 
 The suite drives a real Chromium against the real mock application. No browser is
@@ -299,10 +305,30 @@ are committed as deliverables with `git add -f`:
 
 | Directory | What is in it |
 | --- | --- |
-| `evidence/discovery/scripted-model-no-llm-drove-this/` | a discovery run: the loop, a real browser, a scripted model. Read `NO-MODEL-DROVE-THIS.txt` first |
+| `evidence/discovery/gpt-4.1-drove-this/` | a discovery run a language model drove, and the capability compiled from it. Read `README.txt` first |
 | `evidence/learning/` | the two amendments, and a README framing them against each other. **This is the centrepiece** |
 | `evidence/tenant/community-cu/` | onboarding a second institution, four runs, one confirmed delta |
 | `evidence/assist/` | the assisted rung, with and without |
+
+Every one of them is the output of a command in this repository, so nothing in
+`evidence/` has to be taken on trust. Each driver runs the same arc a person
+runs by hand, with the same browser, policy, session, operator interface and
+evidence writer, and each directory's own `README.txt` names the command that
+wrote it:
+
+```bash
+bun run test/support/drive-the-discovery-run.ts            # needs OPENAI_API_KEY
+bun run test/support/drive-the-checking-only-outcome.ts    # 88888, and what it taught
+bun run test/support/drive-the-supervisor-hold.ts          # 77777, and what it taught
+bun run test/support/drive-the-assisted-rung.ts            # the rung, with and without
+bun run test/support/drive-the-tenant-override.ts          # the second institution
+```
+
+They are not tests, because Vitest collects `*.test.ts` only, but they are typechecked
+and built on the same harnesses the tests use. Three of them are re-runnable
+against the artifacts already on disk: an Artifact store is immutable, so a
+second run reports the refusal rather than replacing a version somebody
+approved, and says which document it went on to replay.
 
 If you read one thing in `evidence/`, read `evidence/learning/README.txt` and
 then the two diffs beside it. One operator met a state and changed nothing, so
@@ -318,7 +344,19 @@ the answer.
 Stated here as well as in `REPORT.md`, because a gap only found in a report is a
 gap somebody meant to hide.
 
-- **No genuine model-driven discovery run.** See the top of this file.
+- **The default model does not complete the discovery goal.** `gpt-4.1-mini` is
+  still `DEFAULT_MODEL`; the committed run used `gpt-4.1`. See the top of this
+  file.
+- **A live discovery run is not reproducible step for step.** The same goal at
+  the same temperature produced four different trajectories over four runs, and
+  two of them were refused by the compiler rather than stored. That is the
+  compiler doing its job, and it is also why the acts of `bun run demo` that
+  need a fixed answer use a scripted model.
+- **The assisted consultations in `evidence/assist/` and
+  `evidence/tenant/community-cu/` are scripted.** Those two directories exist to
+  show the accepted path, which a live model may or may not produce on any given
+  run. `bun run replay ... --assist` builds the real provider through the
+  identical call site.
 - **Screenshots are not redacted.** They render member numbers and balances as
   captured. Text evidence is scrubbed; pixels are not. `evidence/*/README.txt`
   says so in every directory, and the exclusion is one line in

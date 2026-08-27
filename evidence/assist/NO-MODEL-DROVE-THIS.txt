@@ -1,27 +1,31 @@
-NO MODEL DROVE THIS
-===================
+NO MODEL DROVE THE CLASSIFICATION IN THESE TWO RUNS
+===================================================
 
 Read this before reading the two run directories beside it.
 
-The `OPENAI_API_KEY` in the environment these were produced in is REVOKED.
-OpenAI's own endpoint returns HTTP 401 for it, so no live model call was made
-here, and the classification in `checking-only-with-assist/events.jsonl` was
-written by a hand-authored stand-in rather than by a model.
+Produced by: bun run test/support/drive-the-assisted-rung.ts
+
+The classification in checking-only-with-assist/events.jsonl was written by a
+hand-authored stand-in at LanguageModel.make, which is the same seam
+@effect/ai-openai fills. That is a choice about what these two directories are
+for rather than a missing key: they exist to show the accepted path, and a live
+model returning a confidence below the 0.75 floor would record a declined
+consultation instead. A genuine model-driven run is committed elsewhere, at
+evidence/discovery/savings-balance-gpt-4-1/.
 
 Everything else in these two directories is real:
 
   * a real headless Chromium, driven through the real Playwright adapter;
   * the real Heritage Core fixture, on an ephemeral port;
-  * the shipped `policies/default.yaml`, including the `assist:` block that
+  * the shipped policies/default.yaml, including the assist: block that
     permits a consultation at all;
-  * the real `member.account-balance@1.0.0` artifact, unedited;
-  * the real evidence writer, including the scrubber — `grep 88888` over either
-    `events.jsonl` returns nothing.
+  * the real member.account-balance@1.0.0 artifact, unedited;
+  * the real evidence writer, including the scrubber — grep 88888 over either
+    events.jsonl returns nothing.
 
-The stand-in fills `LanguageModel.make`, which is the same seam
-`@effect/ai-openai` fills, so the toolkit, the JSON Schema the model is sent, and
-the Schema decoding of what comes back are all the production code path. What is
-simulated is the judgement, and only the judgement.
+The stand-in fills LanguageModel.make, so the toolkit, the JSON Schema the model
+is sent, and the Schema decoding of what comes back are all the production code
+path. What is simulated is the judgement, and only the judgement.
 
 What the two directories are for
 --------------------------------
@@ -41,44 +45,36 @@ one difference is whether the assisted rung was enabled.
       says `without-assist` on every line.)
 
   checking-only-with-assist/
-      The rung enabled. One `assist.request`, one `policy.check` with
-      `action: assist` allowing it under the default policy, one
-      `assist.proposal` at confidence 0.93 with `accepted: true`, and then an
-      `outcome`:
+      The rung enabled. One assist.request, one policy.check with
+      action: assist allowing it under the default policy, one
+      assist.proposal at confidence 0.93 with accepted: true, and then an
+      outcome:
 
           business outcome NO_MATCHING_ITEM ... (assisted: proposed at
           confidence 0.93, not a deterministic result)
 
-      No `intervention.raise`. Nobody was paged. And no version was written to
-      `artifacts/` — promoting a proposal into a capability still takes a person.
+      No intervention.raise. Nobody was paged. And no version was written to
+      artifacts/ — promoting a proposal into a capability still takes a person.
 
-Neither directory contains a `decide` event. A replay run never emits one,
+Neither directory contains a decide event. A replay run never emits one,
 whatever flags it was given.
 
-How to reproduce
-----------------
+The same thing with a live model
+--------------------------------
 
-With no key, and in a real browser:
-
-    bun run --bun vitest run test/assisted-recovery.test.ts
-
-That suite drives the same fixture in the same browser with the same scripted
-seam, and asserts everything described above.
-
-With a working key, for real, and with no code change:
+With a key in OPENAI_API_KEY, and no code change:
 
     bun run replay member.account-balance --memberId 88888 --version 1.0.0
     bun run replay member.account-balance --memberId 88888 --version 1.0.0 --assist
 
-The provider wiring is proven to reach OpenAI: run the second command as things
-stand and the evidence records
+The second command builds the real provider Layer through the identical call
+site. What it records depends on what the model answers, which is why the
+committed pair above is scripted: a proposal below the confidence floor is a
+declined consultation, and the run then degrades to exactly the unassisted
+result. A rung whose job is to avoid an escalation can never cause one.
 
-    assist.declined: ... the model could not be reached: OpenAiClient.createResponse:
-    InvalidKey: Verify your API key is correct.
+Without a key the second command records
 
-which is a structured error off a real HTTP round trip, not a wiring problem.
-Note what that run does *not* do: it degrades to exactly the unassisted result.
-A rung whose job is to avoid an escalation can never cause one.
+    assist.declined: ... the model could not be reached
 
-Whoever has a key should run the second command and replace
-`checking-only-with-assist/` with its output.
+and degrades the same way.

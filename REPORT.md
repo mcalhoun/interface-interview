@@ -5,26 +5,94 @@ typed, versioned Capability Artifact. From then on the capability is replayed
 with no model in the decision loop at all. `bun run demo` is the whole arc in one
 command; `README.md` runs any part of it on its own.
 
-**One thing first, because it changes how the rest should be read.** The
-`OPENAI_API_KEY` in the environment this was built in is revoked, verified as an
-HTTP 401 from `api.openai.com`. So **there is no genuine model-driven discovery
-run in this repository**, and the brief says that is the one thing that cannot be
-stubbed. `evidence/discovery/scripted-model-no-llm-drove-this/` is the real
-discovery loop driving a real Chromium against the real fixture under the real
-shipped policy, with a hand-written stand-in where the model's judgement goes, in
-a directory carrying a file named `NO-MODEL-DROVE-THIS.txt`. The compiled
-artifact derives from that run. The consultations in `evidence/assist/` and
-`evidence/tenant/community-cu/` are scripted the same way, and
+**One thing first, because it changes how the rest should be read.** A language
+model drove a real discovery run against the real fixture, and
+`artifacts/member.account-balance.discovered/1.0.0.yaml` was compiled from that
+run in the process that did it and then replayed unedited. The evidence is
+`evidence/discovery/gpt-4.1-drove-this/`, and one command produces all three:
+`bun run test/support/drive-the-discovery-run.ts`.
+
+Three qualifications, none of which the rest of this document depends on.
+
+The model was `gpt-4.1`, not `DEFAULT_MODEL`. `gpt-4.1-mini` is still the
+default and still does not finish this goal: it proposes an over-constrained
+Target on the first screen and re-proposes it until the loop stops it. The
+default was left alone, because `provider.ts` argues for it and one observation
+is not grounds to overturn an argument, but the run that is committed has to say
+which model produced it.
+
+A live run is not reproducible step for step. Four runs of the same goal at the
+same temperature produced four different trajectories, and the compiler refused
+two of them: one for a step nothing afterwards confirmed, one for a member
+number the model had written into the capability summary. Refusing is the
+compiler working, and it is also why the acts of `bun run demo` that need a
+fixed answer keep a scripted model.
+
+The assisted consultations in `evidence/assist/` and
+`evidence/tenant/community-cu/` are still scripted at `LanguageModel.make`, and
 `member.account-balance@1.2.0` and the tenant override were driven by scripted
 *operators* rather than by a person at a keyboard, because there is nobody at
-this one.
+this one. Each says so in its own directory.
 
-`--assist` does reach OpenAI for real: a genuine round trip, `InvalidKey` back,
-an `assist.declined` event naming it, and degradation to exactly the failure the
-run would have had without the rung. Act 7 of the demo prints that log line. The
-wiring is proven; the judgement is not. With a working key the gap closes in one
-command and no code change:
-`bun run discover "Look up the savings account balance of member 12345"`.
+`--assist` reaches the provider for real: with a key it consults and records what
+came back, with none it records `assist.declined` and degrades to exactly the
+failure the run would have had without the rung. Act 7 of the demo prints that
+line either way.
+
+### What only a live run could find
+
+Eight defects, all fixed, and worth listing because a write-up that names what a
+live run revealed is stronger than one that only claims it succeeded. Six of them
+are in the discovery loop, which is exactly where a scripted model proves least:
+a stand-in makes the proposals the person who wrote it expected.
+
+1. **The accessibility tree advertised a frame scope a Target cannot name.** The
+   tree annotated nodes with the frame they sit in; a `Target` has nowhere to put
+   one, so the annotation offered the model a distinction it could not act on.
+2. **The transcript omitted the step id a `succeed` has to cite.** An `extract`
+   step is named by the model's own `bindAs`, and that word appeared nowhere in
+   the history after the turn that proposed it. The model was required to name a
+   handle it could no longer see, guessed, and was told its finished run was
+   unfinished.
+3. **The cycle detector counted a second reading off one screen as a lap.**
+   Reading changes nothing, so the state repeats, and at three sightings the run
+   ended as a cycle. Under that rule the flagship capability of this repository,
+   which reads two balances off one Account Detail screen, could not be
+   discovered at all. A read is now transparent to both repetition rules.
+4. **A selection with no region declared the page's navigation link as a legal
+   account type**, and left the step that reached the screen with nothing to be
+   checked against, so the compiler refused the whole document for an uncheckable
+   step. A region is now required.
+5. **A region given a role scoped to nothing, and the complaint blamed the wrong
+   field.** The caption that heads a list is a cell beside it rather than a role
+   the region carries, so `{ role: "table", name: ... }` matched nothing; the
+   refusal then said "list every label you can see", which the model had done. It
+   re-proposed the same thing for its whole step budget. The complaint now names
+   the scope it was given and what to drop.
+6. **The model wrote the caller's member number into the capability's prose.**
+   The summary, an output description and a step intent, all of which are copied
+   into the stored document word for word. The compiler's third gate refused
+   each, correctly, at the end of the whole run. All three are now refused at the
+   moment of proposal, through the run's own scrubber, so the model is told which
+   parameter to take out and the run continues. The same check covers the balance
+   it had just read: a summary quoting one run's answer is the same mistake.
+7. **The model re-read one control four times under four names.**
+   `availableBalance`, `savingsAvailableBalance`, `savingsAvailableBalanceFinal`,
+   `finalSavingsAvailableBalance`, and the compiled document carried four
+   identical steps. A rule keyed on the step's name alone is one a model gets
+   round by renaming, so the rule is keyed on the control.
+8. **A field's contract lived in a comment the model never sees.** `discoveredFrom`
+   is the sentence a reviewer reads to decide whether to agree with a selection,
+   and its meaning was a JSDoc comment on the schema rather than part of the tool
+   description sent to the model. Given only the field name, the model wrote
+   "screen". It is in the description now, and the committed run records the
+   inference in full.
+
+Numbers 4 through 8 are all the same shape: the loop knew something the model was
+never told, and told it only by refusing. Every one of them is now a correction
+the model receives in words it can act on, and the committed run's own
+`README.txt` lists the corrections that run needed, read back out of its log
+rather than described from memory.
 
 ## Architecture
 
@@ -336,7 +404,8 @@ Everything here was a decision rather than an oversight.
 
 | Not built | Seam left behind | What comes next |
 | --- | --- | --- |
-| **A genuine model-driven discovery run** | the provider is a `Layer` swap, and `--assist` proves the round trip | one command with a working key, then delete the scripted evidence directory |
+| **A discovery run that repeats step for step** | the trajectory and the compiler are pure functions of what happened | record a real transcript and replay it as a fixture |
+| **A live model behind the two committed consultations** | the advisor is built through the same `modelAdvisor({ model })` the CLI uses | run `--assist` with a key and keep whatever the model answered |
 | **Screenshot redaction** | text evidence is scrubbed at one point; pixels are excluded by extension in one place | mask known parameter values under optical recognition |
 | **A person at the keyboard for two arcs** | the operator interface is real HTTP and the harness posts to it | run the two `--handoff` commands in the README by hand |
 | Desktop or OS-level adapter | `SurfaceAdapter`, with no DOM assumptions to unwind | UIAutomation or AXAPI behind the same eight methods |

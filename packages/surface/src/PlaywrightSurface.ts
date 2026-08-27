@@ -146,6 +146,7 @@ export const layer = (
                 target: describeTarget(target),
                 rationale: resolution.rationale,
                 considered: resolution.considered,
+                remedy: resolution.remedy,
                 ...(resolution.narrowedBy === undefined
                   ? {}
                   : { narrowedBy: resolution.narrowedBy })
@@ -203,7 +204,10 @@ export const layer = (
           return yield* new TargetNotFound({
             target: describeTarget(target),
             rationale: "the accessibility tree offers no handle for that node",
-            considered: located.report.considered
+            considered: located.report.considered,
+            remedy:
+              "that node describes the screen rather than being something to operate; " +
+              "name the control itself"
           })
         }
         yield* attempt(action, () => run(nodeLocator(page, ref)))

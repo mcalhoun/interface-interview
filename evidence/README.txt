@@ -5,19 +5,26 @@ Every run of this system writes one directory of Evidence: an `events.jsonl`
 validated against a schema on write, a screenshot, and a `README.txt` stating
 what was redacted and what was not. `/evidence` is gitignored because day-to-day
 runs would otherwise fill the tree. Four sets are committed anyway, with
-`git add -f`, because they are deliverables:
+`git add -f`, because they are deliverables. Every one of them is the output of
+a command in this repository, named beneath it, so a reader can regenerate any
+of them rather than take the files on trust:
 
-  discovery/scripted-model-no-llm-drove-this/
-      A discovery run: the real loop, a real Chromium, the real Heritage Core
-      fixture, the shipped policy, the real evidence writer. Read
-      NO-MODEL-DROVE-THIS.txt first. The model's judgement is scripted, because
-      the OPENAI_API_KEY in this environment is revoked (HTTP 401 against
-      api.openai.com/v1/models). `artifacts/member.account-balance.discovered/`
-      was compiled from the trajectory here.
+  discovery/gpt-4.1-drove-this/
+      A discovery run a language model drove: gpt-4.1 through the real provider,
+      the real loop, a real Chromium, the real Heritage Core fixture, the shipped
+      policy, the real evidence writer. Nothing in it is scripted.
+      `artifacts/member.account-balance.discovered/1.0.0.yaml` was compiled from
+      this run, in the process that did it, and then replayed unedited. Read
+      README.txt in the directory first.
+
+      Produced by: bun run test/support/drive-the-discovery-run.ts
 
   learning/
       The centrepiece. Two interventions, one mechanism, opposite conclusions.
       Start with learning/README.txt, then read the two diffs side by side.
+
+      Produced by: bun run test/support/drive-the-checking-only-outcome.ts
+                   bun run test/support/drive-the-supervisor-hold.ts
 
   tenant/community-cu/
       Onboarding a second institution running the same vendor product. Four
@@ -25,10 +32,15 @@ runs would otherwise fill the tree. Four sets are committed anyway, with
       confirming it, and the same capability succeeding at both institutions.
       The consultation's judgement is scripted; see NO-MODEL-DROVE-THIS.txt.
 
+      Produced by: bun run test/support/drive-the-tenant-override.ts
+
   assist/
       The assisted rung, with and without. Same run, same screen, and the
       difference between a state a capability stops on and one it can answer.
-      Scripted the same way, labelled the same way.
+      The classification is scripted so the pair shows the accepted path;
+      NO-MODEL-DROVE-THIS.txt says so and gives the live command.
+
+      Produced by: bun run test/support/drive-the-assisted-rung.ts
 
 `bun run demo` writes everything it produces under `demo/`, which it clears
 first. It never writes to the four directories above.

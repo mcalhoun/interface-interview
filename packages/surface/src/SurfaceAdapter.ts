@@ -42,6 +42,12 @@ export interface FrameDescriptor {
  * `accessibility` is the same tree as `tree`, rendered as the YAML a model or a
  * person reads. Neither carries markup, and neither carries the browser's
  * internal node handles, so nothing here can be pasted back in as a selector.
+ *
+ * It carries no frame annotation either, which is a narrower version of the same
+ * rule: it is the render that will be answered in Targets, and every handle it
+ * shows must be one a Target can express. `frames` above still says which
+ * documents make up the screen, because that is a fact about the Surface rather
+ * than a way to reach into it. See `formatAccessibilityTree`.
  */
 export interface SurfaceState {
   readonly url: string
@@ -142,12 +148,21 @@ export class SurfaceUnavailable extends Schema.TaggedError<SurfaceUnavailable>()
  * recovery ladder is allowed to consider before giving up. `narrowedBy` says
  * which part of the Target ran out of candidates, which is what such a ladder
  * would branch on.
+ *
+ * `remedy` is the counterpart of `TargetAmbiguous.remedy` and is required for
+ * the same reason: whoever reads this failure is about to name a control again,
+ * and telling them only that the last name matched nothing invites the same name
+ * back. Against a model that is worse than useless — it is shown the identical
+ * screen on the next turn, has nothing new to reason from, and proposes the
+ * identical Target until the run is declared stuck.
  */
 export class TargetNotFound extends Schema.TaggedError<TargetNotFound>()("TargetNotFound", {
   target: Schema.String,
   rationale: Schema.String,
   /** How many accessibility nodes the screen offered. */
   considered: Schema.Int,
+  /** What to reach for instead, in the Target's own vocabulary. */
+  remedy: Schema.String,
   /** The narrowing step that emptied the candidate set, when one did. */
   narrowedBy: Schema.optional(Schema.String)
 }) {}

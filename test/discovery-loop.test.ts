@@ -341,6 +341,137 @@ it.live("tells the model to re-tag a value it baked in from the goal", () =>
     expect(log).not.toContain("12345")
   }))
 
+it.live("refuses a summary that quotes a value the run was given, and says which", () =>
+  Effect.gen(function*() {
+    // Found on a live run. A model finishing a run naturally writes down what it
+    // just did — "the balance for member 12345" — and that sentence becomes the
+    // capability's own summary, read by people who were not there. The
+    // compiler's third gate already refuses such a document; refusing here costs
+    // one turn and tells the model what to change.
+    let told = ""
+    const { trajectory } = yield* runDiscovery({
+      goal: GOAL,
+      model: respondingModel((prompt, turn) => {
+        if (prompt.includes("quotes the value this run was given")) {
+          told = prompt
+          // Second attempt, with the number out of the sentence.
+          return readsTheScreen(prompt, turn)
+        }
+        const next = readsTheScreen(prompt, turn)
+        return next.name === "succeed"
+          ? {
+              name: "succeed",
+              params: {
+                ...(next.params as Record<string, unknown>),
+                summary: "Reads the savings balance of member 12345"
+              }
+            }
+          : next
+      })
+    })
+
+    // Named, so the model can fix it in one turn rather than guessing.
+    expect(told).toContain("memberId")
+    // And the run finished, because a refusal is a correction and not an end.
+    expect(trajectory.conclusion.conclusion).toBe("reached")
+    expect(trajectory.conclusion.conclusion === "reached" && trajectory.conclusion.summary)
+      .not.toContain("12345")
+  }))
+
+it.live("refuses a second reading under a name already used, and never takes it", () =>
+  Effect.gen(function*() {
+    // Also found on a live run, which read the balance, read it again, and then
+    // read it a third time "to confirm the value is present". Two of those share
+    // a step id, which the compiler refuses outright — but only after the whole
+    // run. Reading changes nothing, so the repetition rules in `Stuck.ts` are
+    // deliberately blind to it; this is the rule that takes their place.
+    const reread: Array<ScriptedCall> = [
+      {
+        name: "extract",
+        params: {
+          intent: "read the available balance",
+          rationale: "the figure sits beside the caption",
+          target: { role: "cell", label: "Available Balance" },
+          bindAs: "read-available-balance"
+        }
+      },
+      {
+        name: "extract",
+        params: {
+          intent: "read it again to be sure",
+          rationale: "confirming the value is present",
+          target: { role: "cell", label: "Available Balance" },
+          bindAs: "read-available-balance"
+        }
+      },
+      {
+        name: "escalate",
+        params: { rationale: "told off", code: "GAVE_UP", detail: "did not re-read" }
+      }
+    ]
+
+    const { trajectory, events } = yield* runDiscovery({
+      goal: GOAL,
+      entry: "/account?memberNumber=12345&accountNumber=0000012345-S01",
+      model: scriptedModel(reread)
+    })
+
+    // One reading, not two, and the second never reached the adapter.
+    expect(trajectory.steps.map((step) => step.id)).toEqual(["read-available-balance"])
+    const refusal = events.find(
+      (event) => event.kind === "decide" && event.rationale.startsWith("refused")
+    )
+    expect(refusal && "rationale" in refusal ? refusal.rationale : "")
+      .toContain("already read that control")
+  }))
+
+it.live("refuses the same reading under a different name too", () =>
+  Effect.gen(function*() {
+    // The rule is about the control, not the name. A live run got round a
+    // name-only rule by reading one cell four times as availableBalance,
+    // savingsAvailableBalance, savingsAvailableBalanceFinal and
+    // finalSavingsAvailableBalance, and the compiled document carried four
+    // identical steps.
+    const renamed: Array<ScriptedCall> = [
+      {
+        name: "extract",
+        params: {
+          intent: "read the available balance",
+          rationale: "the figure sits beside the caption",
+          target: { role: "cell", label: "Available Balance" },
+          bindAs: "availableBalance"
+        }
+      },
+      {
+        name: "extract",
+        params: {
+          intent: "read it again under another name",
+          rationale: "confirming the value is present",
+          target: { role: "cell", label: "Available Balance" },
+          bindAs: "availableBalanceFinal"
+        }
+      },
+      {
+        name: "escalate",
+        params: { rationale: "told off", code: "GAVE_UP", detail: "did not re-read" }
+      }
+    ]
+
+    const { trajectory, events } = yield* runDiscovery({
+      goal: GOAL,
+      entry: "/account?memberNumber=12345&accountNumber=0000012345-S01",
+      model: scriptedModel(renamed)
+    })
+
+    expect(trajectory.steps.map((step) => step.id)).toEqual(["availableBalance"])
+    const refusal = events.find(
+      (event) => event.kind === "decide" && event.rationale.startsWith("refused")
+    )
+    // And it names the step that already holds the value, so the model can cite it.
+    expect(refusal && "rationale" in refusal ? refusal.rationale : "")
+      .toContain("availableBalance")
+  }))
+
 it.live("tells the model when it invents an action, and never performs it", () =>
   Effect.gen(function*() {
     // An invented verb never reaches the loop's own decoding: `generateText`

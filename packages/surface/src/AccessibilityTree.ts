@@ -13,6 +13,11 @@
  * Playwright's own accessibility handles, valid only for the snapshot that
  * produced them; they are stripped before a tree is handed to a caller, so a
  * ref can never be recorded in a Capability Artifact and go stale.
+ *
+ * Inlining is why nothing downstream of here ever mentions a frame. It is also
+ * why rendering comes in two forms: see `formatAccessibilityTree`, which shows a
+ * reader only what a Target can name, and `formatAccessibilityTreeWithFrames`,
+ * which shows a person the frame boundaries as well.
  */
 
 /** One node of an observed accessibility tree, as a caller sees it. */
@@ -25,7 +30,14 @@ export interface AccessibilityNode {
   readonly value?: string | undefined
   /** Extra facts the snapshot carries, e.g. `url` on a link, `cursor`. */
   readonly properties: Readonly<Record<string, string>>
-  /** Set on an `iframe` node: the frame's name, so frames stay nameable. */
+  /**
+   * Set on an `iframe` node: the name the browser knows that frame by.
+   *
+   * A fact about where a node lives, not a handle for reaching one. A Target has
+   * nowhere to put a frame and never needs one, because the snapshot inlines
+   * frame contents — see `formatAccessibilityTree`, which deliberately does not
+   * render this.
+   */
   readonly frame?: string | undefined
   readonly children: ReadonlyArray<AccessibilityNode>
 }
@@ -158,9 +170,10 @@ interface Head {
    *
    * Playwright never writes one — `annotateFrames` puts it on afterwards from
    * the browser's frame list. It is read back here so that
-   * `formatAccessibilityTree` stays a fixed point over a tree that has frames in
-   * it. Without this, re-parsing a rendered tree turned the frame name into an
-   * ordinary property and the next render moved it onto a line of its own.
+   * `formatAccessibilityTreeWithFrames` stays a fixed point over a tree that has
+   * frames in it. Without this, re-parsing a rendered tree turned the frame name
+   * into an ordinary property and the next render moved it onto a line of its
+   * own.
    */
   readonly frame: string | undefined
   readonly properties: Record<string, string>
@@ -388,7 +401,7 @@ export const withoutRefs = (node: ObservedNode): AccessibilityNode => ({
  *
  * The renderer asks the reader rather than carrying a second, hand-maintained
  * copy of the grammar, because the two drifting apart is exactly the defect this
- * function exists to prevent. `formatAccessibilityTree` has to be a fixed point:
+ * function exists to prevent. Rendering has to be a fixed point:
  * Discovery's stuck detection hashes rendered snapshots, and a tree that renders
  * to something parsing back as a *different* tree makes that hash mean nothing.
  *
@@ -418,8 +431,48 @@ const renderValue = (value: string): string => {
   return readsBackBare(flat) ? flat : JSON.stringify(flat)
 }
 
-/** Renders a tree back to the YAML shape a model or an operator reads. */
-export const formatAccessibilityTree = (root: AccessibilityNode): string => {
+/**
+ * Renders a tree back to the YAML shape a caller reads.
+ *
+ * ## Two renders, and why there have to be two
+ *
+ * There is exactly one difference between them: whether an `iframe` node is
+ * written with its `[frame=...]` tag. That looks cosmetic and is not.
+ *
+ * The tag renders as `iframe [frame=acctdetail]`, and everything else on the
+ * line before it — `textbox "Member Number"`, `cell "Available Balance"` — is a
+ * thing a Target can name. A reader who has only ever been shown nameable
+ * things reasonably concludes this one is too, and writes
+ * `within: { role: "iframe", name: "acctdetail" }`. It matches nothing: the
+ * iframe node has no accessible name, `acctdetail` is the browser's frame name
+ * and the tag is this renderer's annotation, not the tree's. A real discovery
+ * run made exactly that inference, three times running, and died of it.
+ *
+ * So the render handed to whoever will answer in Targets — a model, an
+ * operator — carries no frame tag. It costs them nothing: `mode: "ai"` inlines
+ * frame contents, so the balance inside Heritage Core's Account Detail frame is
+ * already in the tree they are reading, reachable by naming the cell.
+ *
+ * The frame-annotated render still exists, because frame identity is a real
+ * fact worth seeing when diagnosing a screen by hand, and because
+ * `parseAccessibilityTree` round-trips it — that fixed point is what makes
+ * Discovery's stuck detection able to hash a rendered snapshot. Both renders are
+ * fixed points and `test/surface-adapter.test.ts` pins both.
+ */
+export const formatAccessibilityTree = (root: AccessibilityNode): string =>
+  renderTree(root, false)
+
+/**
+ * The same tree with `[frame=...]` on every frame boundary.
+ *
+ * For a person reading a screen, never for anything that will answer with a
+ * Target — see the note above. This is the render `parseAccessibilityTree` is
+ * the inverse of, so it is the one the round-trip property is claimed for.
+ */
+export const formatAccessibilityTreeWithFrames = (root: AccessibilityNode): string =>
+  renderTree(root, true)
+
+const renderTree = (root: AccessibilityNode, withFrames: boolean): string => {
   const lines: Array<string> = []
 
   const render = (node: AccessibilityNode, depth: number): void => {
@@ -427,7 +480,7 @@ export const formatAccessibilityTree = (root: AccessibilityNode): string => {
     const head = [
       node.role,
       node.name === undefined ? undefined : JSON.stringify(node.name),
-      node.frame === undefined ? undefined : `[frame=${node.frame}]`
+      !withFrames || node.frame === undefined ? undefined : `[frame=${node.frame}]`
     ]
       .filter((part) => part !== undefined)
       .join(" ")

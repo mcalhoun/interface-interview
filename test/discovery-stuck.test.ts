@@ -170,6 +170,51 @@ it("a state that changes in between clears the no-effect count", () => {
 })
 
 // ---------------------------------------------------------------------------
+// Reads
+// ---------------------------------------------------------------------------
+
+it("a read that leaves the screen alone is not a lap", () => {
+  // Found by a live model-driven run. `member.account-balance` reads two figures
+  // off one Account Detail screen, and reading changes nothing, so the second
+  // read was the same state a third time and the run ended as a cycle. Under
+  // that rule the flagship capability of this repository is undiscoverable.
+  const BALANCES = '- cell "Available Balance"\n- cell "$4,182.55"'
+  const detector = stuckDetector({ ...DEFAULT_BOUNDS, repeatsAllowed: 2, ineffectiveAllowed: 3 })
+
+  expect(detector.observe({ url: "/a", accessibility: BALANCES, ...at(1) })).toBeUndefined()
+  for (let read = 2; read <= 6; read += 1) {
+    expect(
+      detector.observe({ url: "/a", accessibility: BALANCES, readOnly: true, ...at(read) })
+    ).toBeUndefined()
+  }
+})
+
+it("a read is transparent, so the acting steps around it still count", () => {
+  // The exemption is for the read, not for the run. Two clicks that changed
+  // nothing with a read between them are still two ineffective actions.
+  const detector = stuckDetector({ ...DEFAULT_BOUNDS, ineffectiveAllowed: 2, repeatsAllowed: 99 })
+  detector.observe({ url: "/", accessibility: SEARCH, ...at(1) })
+  detector.observe({ url: "/", accessibility: SEARCH, readOnly: true, ...at(2) })
+  expect(detector.observe({ url: "/", accessibility: SEARCH, ...at(3) })).toBeUndefined()
+  const trigger = detector.observe({ url: "/", accessibility: SEARCH, ...at(4) })
+  expect(trigger?.trigger).toBe("no_effect")
+  // Two, not three: the read between them was not counted as one of them.
+  if (trigger?.trigger !== "no_effect") return
+  expect(trigger.consecutive).toBe(2)
+})
+
+it("a run that only reads is stopped by the step bound, not by the cycle rule", () => {
+  // What still bounds it. Twenty reads is bounded and costs nothing, and the
+  // honest complaint about a run that does nothing but read is that it ran out
+  // of steps rather than that it went round.
+  const detector = stuckDetector({ ...DEFAULT_BOUNDS, maxSteps: 3, repeatsAllowed: 2 })
+  detector.observe({ url: "/a", accessibility: "- a", readOnly: true, ...at(1) })
+  detector.observe({ url: "/a", accessibility: "- a", readOnly: true, ...at(2) })
+  const trigger = detector.observe({ url: "/a", accessibility: "- a", readOnly: true, ...at(3) })
+  expect(trigger?.trigger).toBe("max_steps")
+})
+
+// ---------------------------------------------------------------------------
 // Bounds
 // ---------------------------------------------------------------------------
 

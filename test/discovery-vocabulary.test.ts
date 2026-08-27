@@ -198,11 +198,15 @@ it("a ui-derived value has to name a step that read something", () => {
 
 const LABELS = ["Primary Savings", "Checking"]
 
+/** The region the account list sits in. Required on every proposal; see below. */
+const WITHIN = { name: "Share and Deposit Accounts" }
+
 it("a selection records the goal's own word", () => {
   const good = checkSelection(
     {
       match: { kind: "goalDerived", name: "accountType", literal: "savings" },
       observedLabels: LABELS,
+      within: WITHIN,
       discoveredFrom: "goal term 'savings' matched label 'Primary Savings'"
     },
     GOAL
@@ -219,6 +223,7 @@ it("a selection that records the matched label instead is refused", () => {
     {
       match: { kind: "goalDerived", name: "accountType", literal: "Primary Savings" },
       observedLabels: LABELS,
+      within: WITHIN,
       discoveredFrom: "matched the label"
     },
     GOAL
@@ -237,6 +242,7 @@ it("a selection matched on a constant is refused", () => {
     {
       match: { kind: "constant", literal: "Checking" },
       observedLabels: LABELS,
+      within: WITHIN,
       discoveredFrom: "it is always checking"
     },
     GOAL
@@ -249,6 +255,7 @@ it("a selection has to match exactly one of the labels on offer", () => {
     {
       match: { kind: "goalDerived", name: "accountType", literal: "balance" },
       observedLabels: LABELS,
+      within: WITHIN,
       discoveredFrom: "guessing"
     },
     GOAL
@@ -261,6 +268,7 @@ it("a selection has to match exactly one of the labels on offer", () => {
     {
       match: { kind: "goalDerived", name: "accountType", literal: "savings" },
       observedLabels: ["Primary Savings", "Regular Savings"],
+      within: WITHIN,
       discoveredFrom: "goal term 'savings'"
     },
     GOAL
@@ -268,23 +276,56 @@ it("a selection has to match exactly one of the labels on offer", () => {
   expect(ambiguous?.complaint).toContain("more than one")
 })
 
-it("a selection has to say what it saw and how it inferred", () => {
+it("a selection has to name the region the list sits in", () => {
+  // Found by a live model-driven run, which proposed a list with no scope. Two
+  // things went wrong at once: the declared legal values picked up the page's
+  // navigation link ("Return to Member Search" became an account type), and the
+  // step that reached the screen had no named region to be checked against, so
+  // the compiler refused the whole document for an uncheckable step.
+  const unscoped = checkSelection(
+    {
+      match: { kind: "goalDerived", name: "accountType", literal: "savings" },
+      observedLabels: [...LABELS, "Return to Member Search"],
+      discoveredFrom: "goal term 'savings'"
+    },
+    GOAL
+  )
+  expect(unscoped?.complaint).toContain("list.within.name")
+
+  // A region named but blank is the same thing wearing a field.
+  expect(
+    checkSelection(
+      {
+        match: { kind: "goalDerived", name: "accountType", literal: "savings" },
+        observedLabels: LABELS,
+        within: { name: "  " },
+        discoveredFrom: "goal term 'savings'"
+      },
+      GOAL
+    )?.complaint
+  ).toContain("list.within.name")
+})
+
+it("a selection has to find something, and has to say how it inferred", () => {
   expect(
     checkSelection(
       {
         match: { kind: "goalDerived", name: "accountType", literal: "savings" },
         observedLabels: [],
+        within: WITHIN,
+        itemRole: "link",
         discoveredFrom: "goal term 'savings'"
       },
       GOAL
     )?.complaint
-  ).toContain("observedLabels")
+  ).toContain("no link items sit inside the region")
 
   expect(
     checkSelection(
       {
         match: { kind: "goalDerived", name: "accountType", literal: "savings" },
         observedLabels: LABELS,
+        within: WITHIN,
         discoveredFrom: "   "
       },
       GOAL
@@ -296,6 +337,7 @@ it("the matched label is reported but is not the recorded default", () => {
   const selection = {
     match: { kind: "goalDerived", name: "accountType", literal: "savings" } as const,
     observedLabels: LABELS,
+    within: WITHIN,
     discoveredFrom: "goal term 'savings'"
   }
   // Both words are available to a reader; only one of them is the default.

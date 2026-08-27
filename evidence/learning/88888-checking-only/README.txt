@@ -94,6 +94,25 @@ an amendment is a new file rather than an edit. Pass `--amendTo 1.3.0` to watch
 it produce another one, or `--noAmend` to drive the handoff without cutting a
 version.
 
+The files in this directory were not produced by step 2, and that is worth being
+straight about. There was nobody at the keyboard in the environment this was
+built in, so they came from `test/support/drive-the-checking-only-outcome.ts`,
+which is step 2 with a scripted operator and everything else real: one Heritage
+Core, one Chromium, one Session, the shipped policy, the operator interface over
+HTTP, the real evidence writer with the real scrubber. The "person" takes
+control, does nothing, and hands it back answering the one question. Rerun it
+with:
+
+    bun run test/support/drive-the-checking-only-outcome.ts
+
+`1.0.0-to-1.1.0.diff` is rendered from the two versions on disk rather than from
+that run's own proposal, and the driver says so when it writes it. The shipped
+1.1.0 was cut by an earlier episode and an Artifact store is immutable, so a
+re-run cannot replace it and should not print a diff no stored document matches.
+What the driver does check is that the same episode still classifies the same
+way: it runs the amendment mechanism over its own intervention and prints the
+class it learned.
+
 
 What this is not
 ----------------

@@ -148,6 +148,16 @@ export interface UnresolvedTarget {
    * all to narrow.
    */
   readonly narrowedBy: TargetStrategy | undefined
+  /**
+   * What to do instead, in the words of the Target itself.
+   *
+   * The zero-match counterpart of `AmbiguousTarget.remedy`, and the same
+   * argument: a failure a reader cannot act on is only half a report. It matters
+   * more here than there, because the reader is often a model that will be shown
+   * the identical screen next turn — an unhelpful refusal buys a repeat of the
+   * same proposal, and three of those end a run.
+   */
+  readonly remedy: string
 }
 
 export interface AmbiguousTarget {
@@ -249,7 +259,11 @@ const containerOf = (index: TreeIndex, node: ObservedNode): ObservedNode => {
  */
 export const regionOf = (index: TreeIndex, node: ObservedNode): string => {
   const section = containerOf(index, node)
-  if (section === index.root) return ""
+  return section === index.root ? "" : headingOf(section)
+}
+
+/** What a section is called, as an operator reads it off the screen. */
+const headingOf = (section: ObservedNode): string => {
   const own = identity(section)
   if (own !== "") return own
   for (const candidate of walk(section)) {
@@ -258,6 +272,25 @@ export const regionOf = (index: TreeIndex, node: ObservedNode): string => {
     if (text !== "") return text
   }
   return ""
+}
+
+/**
+ * Every heading a `within` scope could have named on this screen, in document
+ * order.
+ *
+ * The zero-match counterpart of the candidate list an ambiguity report carries.
+ * A reader told only that their scope matched nothing guesses again; a reader
+ * shown what the screen actually offers can pick one. Deduplicated, because
+ * Heritage Core nests layout tables and the same heading heads several of them.
+ */
+const regionsOffered = (index: TreeIndex): ReadonlyArray<string> => {
+  const headings: Array<string> = []
+  for (const entry of index.nodes) {
+    if (entry.node === index.root || !SECTION_ROLES.has(entry.node.role)) continue
+    const heading = headingOf(entry.node)
+    if (heading !== "" && !headings.includes(heading)) headings.push(heading)
+  }
+  return headings
 }
 
 const toMatch = (index: TreeIndex, entry: IndexedNode, ordinal: number): TargetMatch => ({
@@ -294,6 +327,118 @@ const remedyFor = (matches: ReadonlyArray<TargetMatch>): string => {
   return `name the region with within: { name: ${named
     .map((region) => JSON.stringify(region))
     .join(" | ")} }, or ${byPosition}`
+}
+
+/**
+ * Roles that stand for a whole document rather than a control inside one.
+ *
+ * A `within` naming one of these is the mistake this whole branch exists for.
+ */
+const FRAME_ROLES: ReadonlySet<string> = new Set(["iframe", "frame"])
+
+/**
+ * Whether a scope was reaching for a frame.
+ *
+ * Two spellings, because a reader can arrive at the same wrong idea from either
+ * end: `{ role: "iframe" }` names the boundary node by role, and
+ * `{ name: "acctdetail" }` names it by the string the browser calls that frame.
+ * Neither can work — the iframe node has no accessible name and the frame name
+ * lives outside the tree — and both deserve the same answer.
+ */
+const scopeNamesAFrame = (index: TreeIndex, scope: TargetScope): boolean => {
+  if (scope.role !== undefined && FRAME_ROLES.has(scope.role)) return true
+  if (scope.name === undefined) return false
+  const wanted = normalise(scope.name)
+  return index.nodes.some(
+    (entry) => entry.node.frame !== undefined && normalise(entry.node.frame) === wanted
+  )
+}
+
+/** As many region headings as are worth reading in one sentence. */
+const REGIONS_SUGGESTED = 8
+
+const regionAdvice = (index: TreeIndex): string => {
+  const offered = regionsOffered(index)
+  if (offered.length === 0) return "this screen has no named region to scope to"
+  const shown = offered.slice(0, REGIONS_SUGGESTED).map((region) => JSON.stringify(region))
+  const more = offered.length - shown.length
+  return (
+    `the regions this screen offers are ${shown.join(", ")}` +
+    (more > 0 ? ` and ${more} more` : "")
+  )
+}
+
+/**
+ * What a reader should do about a Target that named nothing.
+ *
+ * Written per narrowing step, because "not found" is at least four different
+ * situations and the useful sentence differs in each. The `within` branch is the
+ * one with history: a real discovery run proposed
+ * `within: { role: "iframe", name: "acctdetail" }` against Account Detail,
+ * having read `iframe [frame=acctdetail]` in the tree it was shown, and then
+ * proposed it twice more because nothing it was told back suggested anything
+ * else. The renderer no longer offers that handle (see
+ * `formatAccessibilityTree`), and this says what to reach for instead if a
+ * reader gets there anyway.
+ *
+ * What it never says is "name the frame differently". A Target has nowhere to
+ * put a frame, and advice that cannot be taken is worse than none — the same
+ * rule `remedyFor` follows on the ambiguous side.
+ */
+const remedyForUnresolved = (
+  index: TreeIndex,
+  target: Target,
+  narrowedBy: TargetStrategy | undefined
+): string => {
+  switch (narrowedBy) {
+    case "within": {
+      const scope = target.within
+      if (scope !== undefined && scopeNamesAFrame(index, scope)) {
+        return (
+          "that is a frame, and a frame is not a region a Target can name — nor does it need " +
+          "to be, because the contents of every frame on this screen are already part of the " +
+          `tree you were shown. Scope by the heading of the section the control sits in (${
+            regionAdvice(index)
+          }), or drop within and name the control on its own.`
+        )
+      }
+      return (
+        `no region on this screen is headed that way: ${regionAdvice(index)}. ` +
+        "Name one of those, or drop within and name the control on its own."
+      )
+    }
+    case "role":
+      return (
+        `nothing on this screen has role ${JSON.stringify(target.role ?? "")}. ` +
+        "Either this is not the screen you expected, or the control carries a different role — " +
+        "read the tree and name a role that appears in it."
+      )
+    case "name":
+    case "nameContains":
+    case "nameTokens":
+      return (
+        `nothing is called ${JSON.stringify(target.name ?? "")}. ` +
+        "Use the words that appear in the tree, or, if this is a figure in a table, name it by " +
+        "the caption beside it with label instead of name."
+      )
+    case "label":
+      return (
+        `no row on this screen puts ${JSON.stringify(target.label ?? "")} beside a value. ` +
+        "Check the caption reads exactly that in the tree, or name the control by role and name."
+      )
+    case "textNear":
+      return (
+        `${JSON.stringify(target.textNear ?? "")} is not text on this screen. ` +
+        "Anchor on something the tree actually says, or drop textNear."
+      )
+    case "ordinal":
+      return (
+        "fewer controls answered than the ordinal asked for. Drop nth, or use the count the " +
+        "rationale reports."
+      )
+    case undefined:
+      return "the screen offered nothing at all to narrow. Check that it has finished loading."
+  }
 }
 
 /**
@@ -448,7 +593,8 @@ export const resolveTargetIn = (index: TreeIndex, target: Target): Resolution =>
     _tag: "NotFound",
     rationale: reasons.join("; "),
     considered,
-    narrowedBy: strategy
+    narrowedBy: strategy,
+    remedy: remedyForUnresolved(index, target, strategy)
   })
 
   if (target.within !== undefined) {
@@ -549,11 +695,13 @@ export const resolveTargetIn = (index: TreeIndex, target: Target): Resolution =>
   // a non-empty one. Reached only by a Target that narrowed by nothing at all
   // against a screen with no nodes.
   if (entries.length === 0) {
+    const narrowedBy = strategies[strategies.length - 1]
     return {
       _tag: "NotFound",
       rationale: reasons.length === 0 ? `nothing matched ${describeTarget(target)}` : reasons.join("; "),
       considered,
-      narrowedBy: strategies[strategies.length - 1]
+      narrowedBy,
+      remedy: remedyForUnresolved(index, target, narrowedBy)
     }
   }
 

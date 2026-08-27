@@ -19,6 +19,7 @@ import {
   type AccessibilityNode,
   type Target,
   formatAccessibilityTree,
+  formatAccessibilityTreeWithFrames,
   parseAccessibilityTree,
   SurfaceAdapter,
   TargetAmbiguous,
@@ -282,6 +283,11 @@ it.live("the rendered accessibility tree round-trips, so a snapshot hash is stab
       // if rendering the tree is a fixed point, so pin it here rather than
       // discover it later as a loop that never terminates.
       //
+      // Both renders, because there are two and each has a reader who depends on
+      // it: `state.accessibility` is what a model is shown and what the hash is
+      // taken over, and the frame-annotated render is what `parseAccessibilityTree`
+      // is the inverse of and what `bun run surface observe` prints.
+      //
       // Every screen the system drives, not just the entry page: the frames
       // fixture is the one that carries `[frame=...]` tags, and Account Detail
       // is the one whose iframe contents are inlined. A page-shaped claim is
@@ -297,6 +303,12 @@ it.live("the rendered accessibility tree round-trips, so a snapshot hash is stab
         const state = yield* surface.navigate(core.origin + path)
         const reparsed = formatAccessibilityTree(parseAccessibilityTree(state.accessibility))
         expect(reparsed, `${path} does not render to a fixed point`).toBe(state.accessibility)
+
+        const annotated = formatAccessibilityTreeWithFrames(state.tree)
+        expect(
+          formatAccessibilityTreeWithFrames(parseAccessibilityTree(annotated)),
+          `${path} does not render to a fixed point with its frames annotated`
+        ).toBe(annotated)
       }
     }).pipe(Effect.provide(layer))
   }).pipe(Effect.scoped)
@@ -353,11 +365,17 @@ it("rendering a tree and reading it back is a fixed point, whatever the text is"
     ]
   }
 
-  const rendered = formatAccessibilityTree(tree)
+  // The frame-annotated render, because that is the one whose round trip has to
+  // carry a frame name back as a frame name. `parseAccessibilityTree` reads
+  // `[frame=...]`, and this is the only render that writes it.
+  const rendered = formatAccessibilityTreeWithFrames(tree)
   const reparsed = parseAccessibilityTree(rendered)
 
   // The property Discovery's stuck detection depends on: rendering is stable.
-  expect(formatAccessibilityTree(reparsed)).toBe(rendered)
+  expect(formatAccessibilityTreeWithFrames(reparsed)).toBe(rendered)
+  expect(formatAccessibilityTree(parseAccessibilityTree(formatAccessibilityTree(tree)))).toBe(
+    formatAccessibilityTree(tree)
+  )
 
   // And the text really survives, rather than the two sides agreeing on a loss.
   // A name is written verbatim; a value is whitespace-normalised on the way out,

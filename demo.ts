@@ -20,10 +20,18 @@
  * real operator interface over HTTP, and the real amendment and override
  * mechanisms.
  *
- * Not real: the model's judgement. `OPENAI_API_KEY` in this environment is
- * revoked, so acts 2, 5 and 7b stand a script in at `LanguageModel.make`, the
- * same provider hook `@effect/ai-openai` fills, and say so where they do it.
- * Act 7a makes a genuine HTTP call to OpenAI and shows what comes back.
+ * Scripted: the model's judgement in acts 2, 5 and 7b, at `LanguageModel.make`,
+ * the same provider hook `@effect/ai-openai` fills. That is a choice about this
+ * command rather than a missing key. A demo has to give the same answer every
+ * time it is run and has to run for somebody with no key at all, and a live
+ * model gives neither. The genuine model-driven run is committed instead, at
+ * `evidence/discovery/gpt-4.1-drove-this/`, and is reproduced by
+ * `bun run test/support/drive-the-discovery-run.ts`.
+ *
+ * Act 7a is the exception and calls the provider for real. It is one call, it is
+ * cheap, and it degrades cleanly: with no key the consultation reports that the
+ * model could not be reached, the run falls through to the failure it would have
+ * had anyway, and the act prints the same shape of log either way.
  *
  * Two acts drive a person, because there is nobody at this keyboard. They use
  * the same harness the tests use, which posts to the real operator interface and
@@ -156,11 +164,12 @@ const exitLine = (run: CliRun): string =>
 // ---------------------------------------------------------------------------
 
 const NO_MODEL = [
-  "NOTE  No language model produced the judgement in this act. OPENAI_API_KEY in",
-  "      this environment is revoked (act 7 shows the 401 off a real HTTP call),",
-  "      so the model half is scripted at LanguageModel.make, the same provider",
-  "      hook @effect/ai-openai fills. Everything below it is the production path.",
-  "      With a working key this act is one command and no code change."
+  "NOTE  No language model produced the judgement in this act. It is scripted at",
+  "      LanguageModel.make, the same provider hook @effect/ai-openai fills, so a",
+  "      demo gives the same answer every time and runs for somebody with no key.",
+  "      Everything below the judgement is the production path. A run a real model",
+  "      drove is committed at evidence/discovery/gpt-4.1-drove-this/ and is",
+  "      reproduced by: bun run test/support/drive-the-discovery-run.ts"
 ] as const
 
 const NO_PERSON = [
@@ -208,11 +217,12 @@ const main = async (): Promise<void> => {
     "Everything this run writes is under evidence/demo/. Nothing else is touched."
   ])
   note([
-    "READ THIS FIRST. The OPENAI_API_KEY available here is revoked, verified as an",
-    "HTTP 401 in act 7. So there is no genuine model-driven discovery run in this",
-    "repository, and the brief says that is the one thing that cannot be stubbed.",
-    "Acts 2, 5 and 7b substitute a script for the model's judgement and label it",
-    "where they do. Act 7a reaches OpenAI for real and shows what came back."
+    "READ THIS FIRST. A language model drove a real discovery run, and the artifact",
+    "this repository ships as `discovered` was compiled from it. That run is at",
+    "evidence/discovery/gpt-4.1-drove-this/ and is not what act 2 below does: a demo",
+    "has to give the same answer every time and has to run with no key, so acts 2, 5",
+    "and 7b substitute a script for the model's judgement and label it where they do.",
+    "Act 7a calls the provider for real, and prints what came back either way."
   ])
 
   // -------------------------------------------------------------------------
@@ -302,9 +312,12 @@ const main = async (): Promise<void> => {
   say(`    ${describe(fromDiscovery.result)}`)
   landed(join(DEMO_ROOT, "02-discovery-replayed"))
   note([
-    `The same document is committed as artifacts/${DISCOVERED}/1.0.0.yaml,`,
-    "compiled from the discovery run in evidence/discovery/. It is callable by name:",
-    `  $ bun run replay ${DISCOVERED} --memberId 12345`
+    "The same arc, with a real model rather than this scripted one, is committed at",
+    `evidence/discovery/gpt-4.1-drove-this/. artifacts/${DISCOVERED}/1.0.0.yaml`,
+    "was compiled from THAT run, in the process that did it, and is callable by name:",
+    `  $ bun run replay ${DISCOVERED} --memberId 12345`,
+    "",
+    "  $ bun run test/support/drive-the-discovery-run.ts     # needs OPENAI_API_KEY"
   ])
 
   // -------------------------------------------------------------------------
@@ -434,11 +447,23 @@ const main = async (): Promise<void> => {
           say("    replay against this session fails with control_lost rather than racing")
           say()
           say("  r.mensah acts, in the automation's own browser window")
+          // Said before it is typed, and the ordering is the point rather than
+          // tidiness. A run's scrubber is built from the capability's declared
+          // inputs, and a supervisor id and an override code are neither: nobody
+          // declared them, because nobody knew a person would be involved.
+          // Telling the session first means the needles exist before the
+          // application can echo either value back into a field, a URL or an
+          // accessibility tree. Without this the demo's own evidence renders the
+          // supervisor id in the clear, which is how it was found.
+          yield* desk.post("/note", {
+            detail: "entered supervisor override for SUP-HOLD-02",
+            enteredField: ["Supervisor ID", "Authorization Code"],
+            enteredValue: ["SUP7", "4417"]
+          })
           yield* desk.surface.fill({ role: "textbox", name: "Supervisor ID" }, "SUP7")
           yield* desk.surface.fill({ role: "textbox", name: "Authorization Code" }, "4417")
           yield* desk.surface.click({ role: "button", name: "Authorize" })
           say("    filled Supervisor ID, filled Authorization Code, pressed Authorize")
-          yield* desk.post("/note", { detail: "entered supervisor override for SUP-HOLD-02" })
           say()
           say("  r.mensah hands control back, and answers the one question")
           say("    \"Next time automation meets this state, should it handle it itself?\"")
@@ -561,7 +586,7 @@ const main = async (): Promise<void> => {
     "There is nowhere in it to put a control, so a hallucination cannot press one."
   ])
 
-  say("  (a) with the key this environment actually has")
+  say("  (a) against the real provider, with whatever key this environment has")
   say()
   const declined = await cli([
     "replay",
@@ -572,17 +597,27 @@ const main = async (): Promise<void> => {
     "1.0.0",
     "--assist"
   ])
-  const declinedEvidence = collect(declined.evidenceDirectory, "07a-assist-declined")
+  const declinedEvidence = collect(declined.evidenceDirectory, "07a-assist-live")
   say(exitLine(declined))
   say()
   say("  what the evidence records for that consultation:")
   const declinedEvents = join(declinedEvidence, "events.jsonl")
   for (const line of (existsSync(declinedEvents) ? readFileSync(declinedEvents, "utf8") : "").split("\n")) {
     if (line.trim() === "") continue
-    const event = JSON.parse(line) as { kind: string; reason?: string; action?: string }
+    const event = JSON.parse(line) as {
+      kind: string
+      reason?: string
+      action?: string
+      accepted?: boolean
+    }
     if (event.kind === "assist.request") say(`    assist.request   the rung was reached`)
     if (event.kind === "policy.check" && event.action === "assist") {
       say(`    policy.check     assist, allowed by the shipped policy`)
+    }
+    if (event.kind === "assist.proposal") {
+      say(`    assist.proposal  the model answered, and the rung ${
+        event.accepted === true ? "took it" : "did not take it"
+      }`)
     }
     if (event.kind === "assist.declined") {
       say(`    assist.declined  ${(event.reason ?? "").slice(0, 240)}`)
@@ -590,14 +625,15 @@ const main = async (): Promise<void> => {
   }
   say()
   note([
-    "That is a genuine HTTP round trip to api.openai.com and a genuine 401. The",
-    "wiring is proven; the judgement is not. Note what the rung did next: it reported",
-    "that it could not settle the stall and the run fell through to exactly the",
-    "failure it would have had anyway. A rung whose job is to avoid an escalation",
-    "must never be able to cause one."
+    "That is a genuine HTTP round trip, and the only live call this demo makes. With",
+    "a key the consultation happens and the log records what came back; with none it",
+    "records assist.declined naming the reason. Either way, note what the rung did",
+    "next: it reported whether it could settle the stall, and a stall it could not",
+    "settle fell through to exactly the failure the run would have had anyway. A rung",
+    "whose job is to avoid an escalation must never be able to cause one."
   ])
 
-  say("  (b) the same run, with the judgement scripted, to show the accepted path")
+  say("  (b) the same run again, with the judgement scripted so it is the same every time")
   say()
   note(NO_MODEL)
   const artifactsBefore = fingerprint(ARTIFACTS_DIRECTORY)
@@ -733,6 +769,16 @@ const main = async (): Promise<void> => {
     ["HERITAGE"]
   )
   say()
+  // The credentials a person typed into the live window during act 5. No
+  // capability declared them, because nobody knew a person would be involved;
+  // the operator interface asks for them so the scrubber can be told, and the
+  // note carrying them is posted before the fields are filled.
+  report(
+    "what the operator typed into the live session, in the run they held:",
+    join(DEMO_ROOT, "05-handoff"),
+    ["SUP7", "4417"]
+  )
+  say()
   note([
     "That second scan is the interesting one. Heritage Core's banner reads HERITAGE",
     "CORE in capitals, so the password collides with a word on every screen, and in",
@@ -770,20 +816,20 @@ const main = async (): Promise<void> => {
   }
   say()
   note([
-    "Committed beside it, produced the same way and kept as deliverables:",
+    "Committed beside it, each produced by a command in this repository:",
     "",
-    "  evidence/discovery/scripted-model-no-llm-drove-this/   the discovery run",
-    "  evidence/learning/                                     the two amendments",
-    "  evidence/tenant/community-cu/                          the second institution",
-    "  evidence/assist/                                       the assisted rung",
+    "  evidence/discovery/gpt-4.1-drove-this/   a model-driven run, and the artifact",
+    "                                           compiled from it",
+    "  evidence/learning/                       the two amendments",
+    "  evidence/tenant/community-cu/            the second institution",
+    "  evidence/assist/                         the assisted rung",
     "",
     "REPORT.md argues every decision above. README.md is how to run any of it.",
     "",
-    "The one thing missing: a discovery run a language model actually drove. The key",
-    "here is revoked and act 7a shows the 401. With a working key it is one command",
-    "and no code change:",
+    "The discovery run above was scripted so this command is deterministic. The one",
+    "a model drove is one command, and it costs a few cents:",
     "",
-    `  $ bun run discover "${GOAL}"`
+    "  $ bun run test/support/drive-the-discovery-run.ts"
   ])
 }
 

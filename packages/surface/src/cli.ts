@@ -38,6 +38,7 @@ import {
   TargetNotFound,
   describeMatch,
   describeTarget,
+  formatAccessibilityTreeWithFrames,
   playwrightSurface,
   selectFromTree
 } from "./index.ts"
@@ -118,10 +119,18 @@ const printState = Effect.fn("cli.printState")(function* () {
   return state
 })
 
+/**
+ * The one place the frame-annotated render is printed.
+ *
+ * A person reading a screen by hand wants to know where one document ends and
+ * the next begins, and this is a diagnostic tool. `state.accessibility` is the
+ * other render — the one shown to anything that will answer with a Target — and
+ * it deliberately says nothing about frames, because a Target cannot name one.
+ */
 const observeCommand = Effect.fn("cli.observe")(function* () {
   const state = yield* printState()
   yield* Console.log("")
-  yield* Console.log(state.accessibility)
+  yield* Console.log(formatAccessibilityTreeWithFrames(state.tree))
 })
 
 const resolveCommand = Effect.fn("cli.resolve")(function* (target: Target) {
@@ -152,7 +161,8 @@ const resolveCommand = Effect.fn("cli.resolve")(function* (target: Target) {
                   "",
                   `NOT FOUND: nothing answers to this Target.`,
                   `emptied by: ${failure.narrowedBy ?? "the screen offered nothing to narrow"}`,
-                  `because:    ${failure.rationale} (${failure.considered} nodes considered)`
+                  `because:    ${failure.rationale} (${failure.considered} nodes considered)`,
+                  `to fix:     ${failure.remedy}`
                 ].join("\n")
               : `\nSURFACE UNAVAILABLE: ${failure.reason}`
         )

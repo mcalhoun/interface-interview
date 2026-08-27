@@ -481,7 +481,7 @@ const enumInput = (selection: DiscoveredSelection): InputDeclaration => ({
   // institution and looks perfectly correct doing it. See `Selection.ts`.
   default: selection.default,
   discoveredFrom:
-    `${selection.discoveredFrom}. The list offered ${
+    `${sentence(selection.discoveredFrom)} The list offered ${
       selection.values.map((value) => JSON.stringify(value)).join(", ")
     }${
       selection.matched === undefined
@@ -492,6 +492,18 @@ const enumInput = (selection: DiscoveredSelection): InputDeclaration => ({
     }. The inference was made once, by the model, at discovery time. Replay never repeats it: ` +
     `it matches the default's tokens against whatever the live list offers.`
 })
+
+/**
+ * A model's sentence, ended once.
+ *
+ * The prose below continues from whatever the model wrote, and a model that
+ * already put a full stop on its sentence should not get a second one. Small,
+ * and worth doing: the field is a paragraph a reviewer reads.
+ */
+const sentence = (text: string): string => {
+  const trimmed = text.trim()
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`
+}
 
 const stringInput = (name: string, usedBy: ReadonlyArray<string>): InputDeclaration => ({
   type: "string",

@@ -1,5 +1,5 @@
-EVIDENCE FOR RUN member.account-balance-2026-08-27T08-12-09-314Z-e87fa3f4
-============================================================================
+EVIDENCE FOR RUN checking-only
+=================================
 
 This is a demo artifact over SYNTHETIC data from the mock Heritage Core
 application. No real member data exists anywhere in this system.

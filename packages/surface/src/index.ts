@@ -10,6 +10,7 @@ export type { AccessibilityNode } from "./AccessibilityTree.ts"
 export {
   describeNode,
   formatAccessibilityTree,
+  formatAccessibilityTreeWithFrames,
   nodeText,
   normalise,
   ownText,
