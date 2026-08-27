@@ -24,6 +24,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path"
 import { Result, Schema } from "effect"
 import type { CapabilityArtifact } from "./CapabilityArtifact.ts"
+import { type TenantOverride, formatOverride, parseOverride } from "./Override.ts"
 import { ArtifactInvalid, formatArtifact, parseArtifact } from "./parse.ts"
 
 /** The repository's artifact directory, relative to the workspace root. */
@@ -169,6 +170,103 @@ export const listCapabilities = (directory: string): ReadonlyArray<string> => {
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .filter((name) => listVersions(directory, name).length > 0)
+      .sort()
+  } catch {
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tenant Overrides
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a Tenant's deltas live: `overrides/<tenant>/<capability>.yaml`.
+ *
+ * A separate tree from `artifacts/`, deliberately. SPEC user story 55 asks for
+ * the vendor-level capability to stay single-sourced, and the cheapest way to
+ * make that checkable is for a reviewer to be able to see that no file under
+ * `artifacts/` moved when a tenant was onboarded. Nesting the overrides inside a
+ * capability's directory would have been tidier and would have cost exactly that.
+ */
+export const OVERRIDES_DIRECTORY = "overrides"
+
+const overridePath = (directory: string, tenant: string, capability: string): string =>
+  join(directory, tenant, `${capability}.yaml`)
+
+/**
+ * One Tenant's delta for one Capability, or `undefined` if it has none.
+ *
+ * Absence is the ordinary case and is not an error: a Tenant whose screens the
+ * matching rules already absorb has no file here, which is the result SPEC's
+ * multi-tenant argument is about.
+ */
+export const loadOverride = (
+  directory: string,
+  tenant: string,
+  capability: string
+): Result.Result<TenantOverride | undefined, ArtifactInvalid> => {
+  const path = overridePath(directory, tenant, capability)
+  if (!existsSync(path)) return Result.succeed(undefined)
+  let yaml: string
+  try {
+    yaml = readFileSync(path, "utf8")
+  } catch (cause) {
+    return Result.fail(new ArtifactInvalid({ source: path, problems: [String(cause)] }))
+  }
+  const parsed = parseOverride(path, yaml)
+  if (Result.isFailure(parsed)) return parsed
+  return parsed.success.capability === capability && parsed.success.tenant === tenant
+    ? Result.succeed(parsed.success)
+    : Result.fail(
+        new ArtifactInvalid({
+          source: path,
+          problems: [
+            `file says ${parsed.success.tenant}/${parsed.success.capability}, path says ` +
+              `${tenant}/${capability}`
+          ]
+        })
+      )
+}
+
+/**
+ * Writes a Tenant's Override, replacing the file it grew from.
+ *
+ * Unlike an Artifact version this one *is* rewritten, and the difference is
+ * worth being explicit about. A Capability version is immutable because the
+ * document a reviewer approved and the document that ran have to be the same
+ * file. An Override is a set of confirmed correspondences, each of which is
+ * itself append-only (`declareTargetOverride` refuses to change one), so the
+ * file only ever grows and every line in it still carries the provenance and the
+ * confirmation it was written with.
+ *
+ * What is written is read back through `parseOverride` before it appears, the
+ * same rule `writeArtifact` follows: a document that would fail to load cannot
+ * reach the store.
+ */
+export const writeOverride = (
+  directory: string,
+  override: TenantOverride
+): Result.Result<string, ArtifactInvalid | ArtifactNotWritable> => {
+  const path = overridePath(directory, override.tenant, override.capability)
+  const yaml = formatOverride(override)
+  const readBack = parseOverride(path, yaml)
+  if (Result.isFailure(readBack)) return Result.fail(readBack.failure)
+  try {
+    mkdirSync(join(directory, override.tenant), { recursive: true })
+    writeFileSync(path, yaml, "utf8")
+  } catch (cause) {
+    return Result.fail(new ArtifactNotWritable({ path, reason: String(cause) }))
+  }
+  return Result.succeed(path)
+}
+
+/** Every Tenant with at least one stored Override. The CLI lists these. */
+export const listTenants = (directory: string): ReadonlyArray<string> => {
+  try {
+    return readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
       .sort()
   } catch {
     return []

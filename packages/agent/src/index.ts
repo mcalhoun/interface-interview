@@ -102,6 +102,8 @@ export {
   ASSIST_INSTRUCTIONS,
   ASSIST_VERBS,
   assistPrompt,
+  assistTargetToolkit,
+  assistTargetTools,
   assistToolkit,
   assistTools,
   consultationPrompt,

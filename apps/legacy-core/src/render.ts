@@ -28,6 +28,7 @@ import {
   authorizationAccepted,
   authorizationAttempted
 } from "./members.ts"
+import { type Tenant, HERITAGE_CORE, accountNameFor } from "./tenants.ts"
 
 export const DOCTYPE =
   '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">'
@@ -48,8 +49,14 @@ const query = (params: Record<string, string>): string =>
 export const caption = (text: string): string =>
   `<font face="Arial" size="2" color="#000000">${escape(text)}</font>`
 
-/** The banner and status strip wrapped around every full page. */
-export const shell = (title: string, body: string): string => `${DOCTYPE}
+/**
+ * The banner and status strip wrapped around every full page.
+ *
+ * `tenant` defaults to Heritage Core, so every existing call site renders the
+ * byte-identical page it always did. The second institution is additive rather
+ * than a rewrite of the fixture every other ticket is tested against.
+ */
+export const shell = (title: string, body: string, tenant: Tenant = HERITAGE_CORE): string => `${DOCTYPE}
 <html>
 <head>
 <title>${escape(title)}</title>
@@ -57,8 +64,8 @@ export const shell = (title: string, body: string): string => `${DOCTYPE}
 </head>
 <body bgcolor="#d4d0c8" topmargin="0" leftmargin="0" marginwidth="0" marginheight="0">
 <table width="780" border="0" cellpadding="0" cellspacing="0">
-<tr><td bgcolor="#000080" height="26">&nbsp;<font face="Arial" size="3" color="#ffffff"><b>HERITAGE CORE</b></font>&nbsp;&nbsp;<font face="Arial" size="2" color="#c0c0c0">Member Services</font></td></tr>
-<tr><td bgcolor="#808080" height="18">&nbsp;<font face="Arial" size="1" color="#ffffff">MSS 4.02.11&nbsp;&nbsp;|&nbsp;&nbsp;TELLER OPR001&nbsp;&nbsp;|&nbsp;&nbsp;BRANCH 001&nbsp;&nbsp;|&nbsp;&nbsp;F1 HELP&nbsp;&nbsp;F3 EXIT</font></td></tr>
+<tr><td bgcolor="#000080" height="26">&nbsp;<font face="Arial" size="3" color="#ffffff"><b>${escape(tenant.institution)}</b></font>&nbsp;&nbsp;<font face="Arial" size="2" color="#c0c0c0">Member Services</font></td></tr>
+<tr><td bgcolor="#808080" height="18">&nbsp;<font face="Arial" size="1" color="#ffffff">${tenant.statusStrip}</font></td></tr>
 <tr><td height="10">&nbsp;</td></tr>
 <tr><td>
 <table width="100%" border="0" cellpadding="6" cellspacing="0"><tr><td>
@@ -66,7 +73,7 @@ ${body}
 </td></tr></table>
 </td></tr>
 <tr><td height="14">&nbsp;</td></tr>
-<tr><td bgcolor="#808080" height="18">&nbsp;<font face="Arial" size="1" color="#ffffff">HERITAGE FINANCIAL SYSTEMS INC&nbsp;&nbsp;ALL TRANSACTIONS LOGGED</font></td></tr>
+<tr><td bgcolor="#808080" height="18">&nbsp;<font face="Arial" size="1" color="#ffffff">${tenant.footer}</font></td></tr>
 </table>
 </body>
 </html>
@@ -81,9 +88,9 @@ ${body}
  * only `textbox "Member Number"` is genuinely ambiguous here, which is what
  * gives `within` and `nth` disambiguation something real to resolve.
  */
-export const memberSearchPage = (): string =>
+export const memberSearchPage = (tenant: Tenant = HERITAGE_CORE): string =>
   shell(
-    "Heritage Core - Member Search",
+    `${tenant.titlePrefix} - Member Search`,
     `<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>
 <font face="Arial" size="2"><b>Member Search</b></font>
 </td></tr></table>
@@ -92,9 +99,11 @@ export const memberSearchPage = (): string =>
 <table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
 <tr bgcolor="#c0c0c0"><td colspan="3"><font face="Arial" size="2"><b>Member Number Search</b></font></td></tr>
 <tr bgcolor="#ffffff">
-<td width="180">${caption("Member Number")}</td>
-<td><input type="text" name="memberNumber" size="14" maxlength="10" title="Member Number"></td>
-<td width="140"><input type="submit" value="Search"></td>
+<td width="180">${caption(tenant.memberNumberLabel)}</td>
+<td><input type="text" name="memberNumber" size="14" maxlength="10" title="${escape(
+      tenant.memberNumberLabel
+    )}"></td>
+<td width="140"><input type="submit" value="${escape(tenant.searchButtonLabel)}"></td>
 </tr>
 <tr bgcolor="#ffffff">
 <td>${caption("Branch")}</td>
@@ -115,13 +124,14 @@ export const memberSearchPage = (): string =>
 </table>
 </form>
 <br>
-<font face="Arial" size="1" color="#404040">Legacy member numbers were retired at conversion. Use Member Number Search for all current members.</font>`
+<font face="Arial" size="1" color="#404040">Legacy member numbers were retired at conversion. Use Member Number Search for all current members.</font>`,
+    tenant
   )
 
 /** Member Detail. Accounts are links; balances are not shown until Account Detail. */
-export const memberDetailPage = (member: Member): string =>
+export const memberDetailPage = (member: Member, tenant: Tenant = HERITAGE_CORE): string =>
   shell(
-    `Heritage Core - Member ${member.memberNumber}`,
+    `${tenant.titlePrefix} - Member ${member.memberNumber}`,
     `<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>
 <font face="Arial" size="2"><b>Member Detail</b></font>
 </td></tr></table>
@@ -151,19 +161,22 @@ export const memberDetailPage = (member: Member): string =>
 <td width="110">${caption("Opened")}</td>
 <td>${caption("Status")}</td>
 </tr>
-${member.accounts.map((account) => accountRow(member, account)).join("\n")}
+${member.accounts.map((account) => accountRow(member, account, tenant)).join("\n")}
 </table>
 <br>
-<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`
+<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`,
+    tenant
   )
 
-const accountRow = (member: Member, account: Account): string => {
+const accountRow = (member: Member, account: Account, tenant: Tenant): string => {
   const href = `/account?${query({
     memberNumber: member.memberNumber,
     accountNumber: account.accountNumber
   })}`
   return `<tr bgcolor="#ffffff">
-<td><font face="Arial" size="2"><a href="${href}">${escape(account.description)}</a></font></td>
+<td><font face="Arial" size="2"><a href="${href}">${escape(
+    accountNameFor(tenant, account.description)
+  )}</a></font></td>
 <td>${caption(account.accountNumber)}</td>
 <td>${caption(account.type)}</td>
 <td>${caption(account.openedOn)}</td>
@@ -176,24 +189,45 @@ const accountRow = (member: Member, account: Account): string => {
  * came for lives in a separate document inside the iframe, so nothing about this
  * screen is readable without traversing a frame boundary.
  */
-export const accountDetailPage = (member: Member, account: Account): string => {
+export const accountDetailPage = (
+  member: Member,
+  account: Account,
+  tenant: Tenant = HERITAGE_CORE,
+  attempt: AuthorizationAttempt = { supervisorId: "", authorizationCode: "" }
+): string => {
   const src = `/account/panel?${query({
     memberNumber: member.memberNumber,
     accountNumber: account.accountNumber
   })}`
+
+  /**
+   * The framed panel is an installation option, and the second tenant declined
+   * it. The figures are then in the main document rather than a child one, at
+   * the same place on the screen, under the same captions.
+   *
+   * Nothing in a Capability's Targets says anything about frames — a Target has
+   * no field in which a frame could be named — so the two render identically as
+   * far as targeting is concerned. That is the claim this branch exists to make
+   * falsifiable: one capability, both layouts, no override.
+   */
+  const panel = tenant.accountDetailInFrame
+    ? `<iframe src="${src}" name="acctdetail" width="100%" height="270" frameborder="1" scrolling="auto" marginwidth="0" marginheight="0"></iframe>`
+    : accountDetailBody(member, account, attempt, tenant, "/account")
+
   return shell(
-    `Heritage Core - Account ${account.accountNumber}`,
+    `${tenant.titlePrefix} - Account ${account.accountNumber}`,
     `<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>
 <font face="Arial" size="2"><b>Account Detail</b></font>
 </td></tr></table>
 <br>
 <table width="100%" border="0" cellpadding="0" cellspacing="0">
 <tr><td>
-<iframe src="${src}" name="acctdetail" width="100%" height="270" frameborder="1" scrolling="auto" marginwidth="0" marginheight="0"></iframe>
+${panel}
 </td></tr>
 </table>
 <br>
-<font face="Arial" size="2"><a href="/member?${query({ memberNumber: member.memberNumber })}">Return to Member Detail</a></font>`
+<font face="Arial" size="2"><a href="/member?${query({ memberNumber: member.memberNumber })}">Return to Member Detail</a></font>`,
+    tenant
   )
 }
 
@@ -216,12 +250,10 @@ export const accountDetailPage = (member: Member, account: Account): string => {
 export const accountDetailPanel = (
   member: Member,
   account: Account,
-  attempt: AuthorizationAttempt = { supervisorId: "", authorizationCode: "" }
+  attempt: AuthorizationAttempt = { supervisorId: "", authorizationCode: "" },
+  tenant: Tenant = HERITAGE_CORE
 ): string => {
-  const withheld = account.restriction !== undefined && !authorizationAccepted(attempt)
-  const body = withheld
-    ? restrictionPanel(member, account, account.restriction!, attempt)
-    : balancePanel(member, account, attempt)
+  const body = accountDetailBody(member, account, attempt, tenant, "/account/panel")
   return `${DOCTYPE}
 <html>
 <head>
@@ -235,11 +267,34 @@ ${body}
 `
 }
 
+/**
+ * The figures, or the refusal — the part that is the same whether it arrives in
+ * a frame or in the page itself.
+ *
+ * `formAction` is where the supervisor override posts back to, and it differs
+ * between the two layouts for the obvious reason: a framed panel reloads itself,
+ * and an inline one reloads the page it is part of. Everything a Capability
+ * looks at is identical either way.
+ */
+const accountDetailBody = (
+  member: Member,
+  account: Account,
+  attempt: AuthorizationAttempt,
+  tenant: Tenant,
+  formAction: string
+): string => {
+  const withheld = account.restriction !== undefined && !authorizationAccepted(attempt)
+  return withheld
+    ? restrictionPanel(member, account, account.restriction!, attempt, tenant, formAction)
+    : balancePanel(member, account, attempt, tenant)
+}
+
 /** The ordinary panel: every figure an operator came for. */
 const balancePanel = (
   member: Member,
   account: Account,
-  attempt: AuthorizationAttempt
+  attempt: AuthorizationAttempt,
+  tenant: Tenant
 ): string => {
   const released =
     account.restriction === undefined
@@ -249,7 +304,9 @@ const balancePanel = (
           account.restriction.code
         )} overridden by supervisor ${escape(attempt.supervisorId.trim())}.</font>`
   return `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
-<tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>${escape(account.description)}</b></font></td></tr>
+<tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>${escape(
+    accountNameFor(tenant, account.description)
+  )}</b></font></td></tr>
 <tr bgcolor="#ffffff"><td width="200">${caption("Account Number")}</td><td>${caption(account.accountNumber)}</td></tr>
 <tr bgcolor="#ffffff"><td>${caption("Account Type")}</td><td>${caption(account.type)}</td></tr>
 <tr bgcolor="#ffffff"><td>${caption("Member Number")}</td><td>${caption(member.memberNumber)}</td></tr>
@@ -271,20 +328,24 @@ const restrictionPanel = (
   member: Member,
   account: Account,
   restriction: Account["restriction"] & {},
-  attempt: AuthorizationAttempt
+  attempt: AuthorizationAttempt,
+  tenant: Tenant,
+  formAction: string
 ): string => {
   const rejected = authorizationAttempted(attempt)
     ? `<tr bgcolor="#ffffff"><td colspan="2"><font face="Arial" size="2" color="#800000"><b>Authorization not accepted. The override code is four digits.</b></font></td></tr>`
     : ""
   return `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
-<tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>${escape(account.description)}</b></font></td></tr>
+<tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>${escape(
+    accountNameFor(tenant, account.description)
+  )}</b></font></td></tr>
 <tr bgcolor="#ffffff"><td width="200">${caption("Account Number")}</td><td>${caption(account.accountNumber)}</td></tr>
 <tr bgcolor="#ffffff"><td>${caption("Account Type")}</td><td>${caption(account.type)}</td></tr>
 <tr bgcolor="#ffffff"><td>${caption("Member Number")}</td><td>${caption(member.memberNumber)}</td></tr>
 <tr bgcolor="#ffffff"><td>${caption("Status")}</td><td>${caption(account.status)}</td></tr>
 </table>
 <br>
-<form method="get" action="/account/panel">
+<form method="get" action="${formAction}">
 <input type="hidden" name="memberNumber" value="${escape(member.memberNumber)}">
 <input type="hidden" name="accountNumber" value="${escape(account.accountNumber)}">
 <table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
@@ -323,9 +384,12 @@ ${rejected}
  * what they meant to. The stable part — the screen heading and the sentence
  * opener — carries no runtime value, so an Artifact can assert on it.
  */
-export const memberNotFoundPage = (memberNumber: string): string =>
+export const memberNotFoundPage = (
+  memberNumber: string,
+  tenant: Tenant = HERITAGE_CORE
+): string =>
   shell(
-    "Heritage Core - Member Not Found",
+    `${tenant.titlePrefix} - Member Not Found`,
     `<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>
 <font face="Arial" size="2"><b>Member Not Found</b></font>
 </td></tr></table>
@@ -340,13 +404,17 @@ export const memberNotFoundPage = (memberNumber: string): string =>
     )}</td></tr>
 </table>
 <br>
-<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`
+<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`,
+    tenant
   )
 
 /** Cross-reference lookup result. Legacy numbers were retired at conversion. */
-export const crossReferencePage = (legacyMemberNumber: string): string =>
+export const crossReferencePage = (
+  legacyMemberNumber: string,
+  tenant: Tenant = HERITAGE_CORE
+): string =>
   shell(
-    "Heritage Core - Cross-Reference Lookup",
+    `${tenant.titlePrefix} - Cross-Reference Lookup`,
     `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
 <tr bgcolor="#c0c0c0"><td><font face="Arial" size="2"><b>Cross-Reference Lookup</b></font></td></tr>
 <tr bgcolor="#ffffff"><td>${caption(
@@ -356,7 +424,8 @@ export const crossReferencePage = (legacyMemberNumber: string): string =>
     )}</td></tr>
 </table>
 <br>
-<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`
+<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`,
+    tenant
   )
 
 /**
@@ -370,9 +439,12 @@ export const crossReferencePage = (legacyMemberNumber: string): string =>
  *
  * `System Busy` is the phrase an automation detects. It appears nowhere else.
  */
-export const systemBusyPage = (memberNumber: string): string =>
+export const systemBusyPage = (
+  memberNumber: string,
+  tenant: Tenant = HERITAGE_CORE
+): string =>
   shell(
-    "Heritage Core - Please Wait",
+    `${tenant.titlePrefix} - Please Wait`,
     `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
 <tr bgcolor="#c0c0c0"><td><font face="Arial" size="2"><b>System Busy</b></font></td></tr>
 <tr bgcolor="#ffffff"><td>${caption(
@@ -383,7 +455,8 @@ export const systemBusyPage = (memberNumber: string): string =>
     })}">Continue</a></font></td></tr>
 </table>
 <br>
-<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`
+<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`,
+    tenant
   )
 
 /**
@@ -399,9 +472,9 @@ export const systemBusyPage = (memberNumber: string): string =>
  * were on. That is deliberate and it is the hard half of ticket 06: getting
  * signed back in is easy, and getting back to where the run was is not.
  */
-export const signOnPage = (): string =>
+export const signOnPage = (tenant: Tenant = HERITAGE_CORE): string =>
   shell(
-    "Heritage Core - Sign On",
+    `${tenant.titlePrefix} - Sign On`,
     `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
 <tr bgcolor="#c0c0c0"><td colspan="2"><font face="Arial" size="2"><b>Session Expired</b></font></td></tr>
 <tr bgcolor="#ffffff"><td colspan="2">${caption(
@@ -425,7 +498,8 @@ export const signOnPage = (): string =>
 </table>
 </form>
 <br>
-<font face="Arial" size="1" color="#404040">Sessions time out after a period of inactivity. Signing on returns you to Member Search.</font>`
+<font face="Arial" size="1" color="#404040">Sessions time out after a period of inactivity. Signing on returns you to Member Search.</font>`,
+    tenant
   )
 
 /**
@@ -439,13 +513,17 @@ export const signOnPage = (): string =>
  * a legitimate domain answer look like a fault. Absent members get
  * `memberNotFoundPage` instead.
  */
-export const systemMessagePage = (message: string): string =>
+export const systemMessagePage = (
+  message: string,
+  tenant: Tenant = HERITAGE_CORE
+): string =>
   shell(
-    "Heritage Core - System Message",
+    `${tenant.titlePrefix} - System Message`,
     `<table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
 <tr bgcolor="#c0c0c0"><td><font face="Arial" size="2"><b>System Message</b></font></td></tr>
 <tr bgcolor="#ffffff"><td>${caption(message)}</td></tr>
 </table>
 <br>
-<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`
+<font face="Arial" size="2"><a href="/">Return to Member Search</a></font>`,
+    tenant
   )

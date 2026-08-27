@@ -1,0 +1,11 @@
+No language model produced the proposal in 02-onboarding.events.jsonl.
+
+OPENAI_API_KEY in this environment is revoked (HTTP 401 against
+api.openai.com/v1/models), so the consultation's judgement is scripted at
+LanguageModel.make — the same provider hook @effect/ai-openai fills. Everything
+around it is the production path: the same modelAdvisor, the same toolkit, the
+same JSON Schema, the same Schema decoding of the tool call, the same Policy
+gate, the same confidence floor and the same Evidence writer.
+
+A working key needs no code change. `bun run replay ... --assist` builds the
+real provider Layer through the identical call site.

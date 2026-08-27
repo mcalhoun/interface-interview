@@ -52,7 +52,19 @@ import {
 import { type Target, type TargetScope, describeTarget } from "./Target.ts"
 
 /** Which of the Target's strategies actually did the narrowing. */
-export type TargetStrategy = "role" | "name" | "nameContains" | "label" | "textNear" | "within" | "ordinal"
+export type TargetStrategy =
+  | "role"
+  | "name"
+  | "nameContains"
+  /**
+   * The name matched by tokens: everything the control is called is among the
+   * words the Target asked for. See `narrowByText`.
+   */
+  | "nameTokens"
+  | "label"
+  | "textNear"
+  | "within"
+  | "ordinal"
 
 /**
  * One candidate, described well enough for a person to *act* on it.
@@ -317,17 +329,66 @@ export const labelOf = (index: TreeIndex, node: ObservedNode): string | undefine
 }
 
 /** Exact match first; containment only when nothing matched exactly. */
+/** Which rung of the ladder below actually narrowed the set. */
+type TextMatch = "exact" | "contains" | "tokens"
+
+/**
+ * A ladder, tried in order, stopping at the first rung that finds anything.
+ *
+ * 1. **exact** — the text is what the Target said, once punctuation and case are
+ *    normalised. Always preferred, and the only rung an `exact: true` Target
+ *    will accept.
+ * 2. **contains** — the Target's text appears inside the control's. This is what
+ *    lets `Member Number` reach `Member Number (Legacy)`, which is why the
+ *    Artifact scopes that Target to a panel.
+ * 3. **tokens** — every word the control is called is among the words the Target
+ *    asked for. Opt-in, and used for the accessible name only.
+ *
+ * ## The third rung, and why it points the way it does
+ *
+ * ADR-0007 chose token subset for *selection* because a Tenant's label for a
+ * product is longer than the word a caller uses for it: `savings` ⊂ `Regular
+ * Savings`. A Tenant's caption for a *field* varies the other way. The vendor's
+ * label table ships `Member Number`; an institution whose caption column is
+ * narrower configures `Member #`, and shortening it is the only thing they did.
+ *
+ * So the containment rung above already covers the lengthening direction, and
+ * this one covers the shortening direction: the control's own words have to be a
+ * subset of the words the Target asked for. `Member #` is `member`, which is
+ * among `member number`, so it matches. `Branch` is not. Neither is `Find` among
+ * `search` — which is the whole point of the fourth row of SPEC's tenant table,
+ * and the reason there is a discovered Override in this repository at all.
+ *
+ * ## Why it is the last rung and never the first
+ *
+ * It is strictly weaker than the two above it, so it must never take a candidate
+ * away from them: a screen where something matches exactly is a screen where the
+ * exact match is the answer. It runs only when the set is *already empty*, which
+ * means the alternative to it is `NotFound`. That also makes it safe to add to a
+ * system whose whole claim is determinism — the same tree and the same Target
+ * still give the same answer, and no Target that resolved yesterday resolves to
+ * something else today.
+ *
+ * A rung that empties the set reports itself as `contains`, because the honest
+ * thing to tell a reader is that the *name* ran out of candidates, not that a
+ * fallback nobody asked for did.
+ */
 const narrowByText = (
   entries: ReadonlyArray<IndexedNode>,
   wanted: string,
   read: (entry: IndexedNode) => string | undefined,
-  exactOnly: boolean
-): { readonly entries: ReadonlyArray<IndexedNode>; readonly exact: boolean } => {
+  exactOnly: boolean,
+  byTokens = false
+): { readonly entries: ReadonlyArray<IndexedNode>; readonly how: TextMatch } => {
   const target = normalise(wanted)
   const exact = entries.filter((entry) => normalise(read(entry) ?? "") === target)
-  if (exact.length > 0 || exactOnly) return { entries: exact, exact: true }
+  if (exact.length > 0 || exactOnly) return { entries: exact, how: "exact" }
   const contains = entries.filter((entry) => normalise(read(entry) ?? "").includes(target))
-  return { entries: contains, exact: false }
+  if (contains.length > 0 || !byTokens) return { entries: contains, how: "contains" }
+  const abbreviated = entries.filter((entry) => isTokenSubsetOf(read(entry) ?? "", wanted))
+  return abbreviated.length === 0
+    ? { entries: contains, how: "contains" }
+    : { entries: abbreviated, how: "tokens" }
 }
 
 /** The nodes a `within` scope opens up, and a sentence saying how it was read. */
@@ -408,19 +469,28 @@ export const resolveTargetIn = (index: TreeIndex, target: Target): Resolution =>
   }
 
   if (target.name !== undefined) {
+    // The one place the token rung is offered. A caption (`label`) and a region
+    // heading (`within`) are text an operator reads off the screen rather than a
+    // control's own name, and widening those would start matching panels by
+    // their words rather than by what they are called.
     const narrowed = narrowByText(
       entries,
       target.name,
       (entry) => identity(entry.node),
-      target.exact === true
+      target.exact === true,
+      true
     )
     entries = narrowed.entries
-    const strategy: TargetStrategy = narrowed.exact ? "name" : "nameContains"
+    const strategy: TargetStrategy =
+      narrowed.how === "exact" ? "name" : narrowed.how === "tokens" ? "nameTokens" : "nameContains"
     strategies.push(strategy)
     reasons.push(
-      narrowed.exact
+      narrowed.how === "exact"
         ? `${entries.length} named exactly "${target.name}"`
-        : `no exact name match, so ${entries.length} node(s) containing "${target.name}"`
+        : narrowed.how === "tokens"
+          ? `no exact or containing name match, so ${entries.length} node(s) whose own words ` +
+            `are all among "${target.name}"`
+          : `no exact name match, so ${entries.length} node(s) containing "${target.name}"`
     )
     if (entries.length === 0) return exhausted(strategy)
   }
@@ -730,3 +800,42 @@ export const selectFrom = (index: TreeIndex, request: SelectionRequest): Selecti
  */
 export const selectFromTree = (tree: AccessibilityNode, request: SelectionRequest): Selection =>
   selectFrom(indexTree(tree), request)
+
+/** One control the screen offers, named the way an operator would point at it. */
+export interface OfferedControl {
+  readonly name: string
+  readonly role: string
+  /** The panel it sits under, or `""` when it sits in no named region. */
+  readonly region: string
+}
+
+/**
+ * Every control of one role the screen is currently offering.
+ *
+ * Built out of the same machinery a selection uses, and for a related purpose: a
+ * closed list of things that are really there, so that a question about the
+ * screen can be asked with the answers enumerated rather than left open. It is
+ * what assisted recovery is handed when a Target found nothing, and it is why a
+ * proposed correspondent is one of the screen's own controls rather than free
+ * text.
+ *
+ * Deduplicated by name, because Chromium exposes a layout table's contents at
+ * every enclosing level and a list with `Find` in it three times tells a reader
+ * nothing the list with it once does not. Unnamed nodes are dropped for the same
+ * reason: `""` is not something anybody can confirm.
+ */
+export const controlsOfferedIn = (
+  tree: AccessibilityNode,
+  itemRole: string
+): ReadonlyArray<OfferedControl> => {
+  const { items } = listItemsIn(indexTree(tree), { itemRole })
+  const seen = new Set<string>()
+  const controls: Array<OfferedControl> = []
+  for (const item of items) {
+    const name = item.label.trim()
+    if (name === "" || seen.has(name)) continue
+    seen.add(name)
+    controls.push({ name, role: itemRole, region: item.region })
+  }
+  return controls
+}

@@ -166,8 +166,46 @@ const parseHead = (head: string): Head => {
   return { role, name, ref, properties }
 }
 
+/**
+ * Unwraps a YAML single-quoted scalar sitting at the start of a line.
+ *
+ * Playwright's snapshot writer quotes a whole node head when it contains a
+ * character YAML would otherwise read as syntax. The one this fixture produces
+ * is `#`, which starts a comment: a tenant whose member-number caption reads
+ * `Member #` gets `- 'textbox "Member #"'` where every other node is bare.
+ *
+ * The quoting is the emitter being correct. A parser that did not undo it would
+ * read the role as `'textbox`, match no role filter, and report a control that
+ * is plainly on the screen as missing — a whole tenant's worth of "unresolvable"
+ * caused by one punctuation mark. Anything after the closing quote (the `:
+ * value` half of a map entry, when the head alone needed quoting) is kept.
+ */
+const unwrapSingleQuoted = (body: string): string => {
+  if (!body.startsWith("'")) return body
+  let value = ""
+  let index = 1
+  while (index < body.length) {
+    if (body[index] === "'") {
+      // `''` is how YAML spells a literal apostrophe inside a quoted scalar.
+      if (body[index + 1] === "'") {
+        value += "'"
+        index += 2
+        continue
+      }
+      return value + body.slice(index + 1)
+    }
+    value += body[index]!
+    index += 1
+  }
+  return value
+}
+
 const unquote = (value: string): string =>
-  value.startsWith('"') ? readQuoted(value, 0).value : value
+  value.startsWith('"')
+    ? readQuoted(value, 0).value
+    : value.startsWith("'")
+      ? unwrapSingleQuoted(value)
+      : value
 
 /**
  * Parses one aria snapshot into a tree rooted at a synthetic `document` node.
@@ -199,7 +237,7 @@ export const parseAccessibilityTree = (yaml: string): ObservedNode => {
       if (line.indent !== indent || !line.body.startsWith("- ")) break
       cursor += 1
 
-      const body = line.body.slice(2)
+      const body = unwrapSingleQuoted(line.body.slice(2))
       if (body.startsWith("/")) {
         const separator = body.indexOf(":")
         const key = body.slice(1, separator === -1 ? body.length : separator).trim()

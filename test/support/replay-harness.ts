@@ -33,7 +33,13 @@ import {
 } from "@cua/policy"
 import { automationOwnedSession } from "@cua/session"
 import { playwrightSurface } from "@cua/surface"
-import { type Advisor, type ReplayResult, evidenceForRun, replayCapability } from "@cua/replay"
+import {
+  type Advisor,
+  type AppliedOverride,
+  type ReplayResult,
+  evidenceForRun,
+  replayCapability
+} from "@cua/replay"
 import { Effect, Layer, Result } from "effect"
 
 /** The capability this ticket's tracer bullet runs. */
@@ -111,6 +117,14 @@ export const replay = (options: {
    * real provider Layer.
    */
   readonly assist?: Advisor
+  /**
+   * The tenant delta the `artifact` above was assembled from, when it was.
+   *
+   * The harness does not apply it — the caller passes the effective document,
+   * exactly as the CLI does — so this is only what the run's Evidence records
+   * about which document executed.
+   */
+  readonly appliedOverride?: AppliedOverride
 }): Effect.Effect<ReplayOutcome, unknown> =>
   Effect.gen(function* () {
     const core = yield* serve({ port: 0, ...options.core })
@@ -133,7 +147,10 @@ export const replay = (options: {
       inputs: prepared.success,
       baseUrl: options.baseUrl ?? core.origin,
       runId,
-      ...(options.assist === undefined ? {} : { assist: options.assist })
+      ...(options.assist === undefined ? {} : { assist: options.assist }),
+      ...(options.appliedOverride === undefined
+        ? {}
+        : { appliedOverride: options.appliedOverride })
     }).pipe(
       Effect.provide(
         Layer.mergeAll(

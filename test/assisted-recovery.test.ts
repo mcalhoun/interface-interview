@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url"
 import { it } from "@effect/vitest"
 import { Effect, Ref, Result, Schema } from "effect"
 import { describe, expect } from "vitest"
-import { ASSIST_VERBS, assistTools, modelAdvisor } from "@cua/agent"
+import { ASSIST_VERBS, assistTargetTools, assistTools, modelAdvisor } from "@cua/agent"
 import { DISCOVERY_VERBS } from "@cua/agent"
 import { classificationOf } from "@cua/artifact"
 import { ACTION_TYPES, compilePolicy, decideAssist } from "@cua/policy"
@@ -104,9 +104,11 @@ const confidentAdvisor = (
 
 describe("the boundary: acting is not representable", () => {
   it("the assist vocabulary contains no verb that touches a surface", () => {
-    // Two words, and neither is an action. Compare `DISCOVERY_VERBS`, which has
-    // five that are.
-    expect([...ASSIST_VERBS]).toEqual(["classify", "cannotClassify"])
+    // Three words, and none of them is an action. Two classify a screen; the
+    // third (ticket 16) names one of the screen's own controls as a proposal for
+    // a person to confirm, which is a sentence rather than a gesture. Compare
+    // `DISCOVERY_VERBS`, which has five words that really do touch a Surface.
+    expect([...ASSIST_VERBS]).toEqual(["classify", "proposeTarget", "cannotClassify"])
 
     // Disjoint from both other vocabularies in the system. A verb copied here
     // from either fails this before it fails anything else.
@@ -124,6 +126,21 @@ describe("the boundary: acting is not representable", () => {
 
     const tools = assistTools(candidates)
     expect(Object.keys(tools.tools).sort()).toEqual(["cannotClassify", "classify"])
+
+    // The three-word toolkit is only reachable by a caller holding a list of the
+    // screen's own controls, and it is scanned by exactly the same rule. A
+    // control's *name* is not a Target: there is no role in it, no scope, no
+    // ordinal and no selector, so there is still nothing here the engine could
+    // resolve and press.
+    const withTarget = assistTargetTools(candidates, 'button "Search"', [
+      { name: "Find", role: "button", region: "Member Number Search" },
+      { name: "Look Up", role: "button", region: "Cross-Reference Lookup" }
+    ])
+    expect(Object.keys(withTarget.tools).sort()).toEqual([
+      "cannotClassify",
+      "classify",
+      "proposeTarget"
+    ])
 
     // The JSON Schema is what actually reaches the model, so that is what is
     // asserted rather than the TypeScript type. Every word a control could be
@@ -147,15 +164,17 @@ describe("the boundary: acting is not representable", () => {
       "y"
     ]
 
-    for (const [name, tool] of Object.entries(tools.tools)) {
-      const rendered = JSON.stringify(
-        Schema.toJsonSchemaDocument(tool.parametersSchema as never)
-      )
-      for (const word of forbidden) {
-        expect(
-          rendered,
-          `the ${name} tool's parameters mention "${word}"`
-        ).not.toMatch(new RegExp(`"${word}"`, "i"))
+    for (const toolkit of [tools, withTarget]) {
+      for (const [name, tool] of Object.entries(toolkit.tools)) {
+        const rendered = JSON.stringify(
+          Schema.toJsonSchemaDocument(tool.parametersSchema as never)
+        )
+        for (const word of forbidden) {
+          expect(
+            rendered,
+            `the ${name} tool's parameters mention "${word}"`
+          ).not.toMatch(new RegExp(`"${word}"`, "i"))
+        }
       }
     }
   })

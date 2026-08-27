@@ -34,7 +34,9 @@ import {
   type InterventionRecord,
   type NextTimeAnswer,
   type OwnerTransition,
+  type ProposalAnswer,
   SessionControl,
+  THE_PROPOSAL_QUESTION,
   THE_QUESTION,
   describeOwner
 } from "@cua/session"
@@ -115,7 +117,8 @@ const route = (
                   operator: field("operator") === "" ? "(unnamed)" : field("operator"),
                   classification: classificationOf(field("classification")),
                   detail: field("detail") === "" ? "(no detail given)" : field("detail"),
-                  nextTime: nextTimeOf(field("nextTime"))
+                  nextTime: nextTimeOf(field("nextTime")),
+                  confirmProposal: confirmProposalOf(field("confirmProposal"))
                 })
               : undefined
 
@@ -153,6 +156,31 @@ const classificationOf = (value: string): ControlReturnClassification =>
  */
 const nextTimeOf = (value: string): NextTimeAnswer =>
   value === "automation_handles_it" || value === "always_stop_here" ? value : "not_asked"
+
+/**
+ * The second question's answer, read off the form the same careful way.
+ *
+ * Anything that is not one of the two answers is `not_asked`, which matters more
+ * here than it does above: this is the field a stored Tenant Override rests on,
+ * and a form that did not render the question at all — because there was no
+ * proposal to render — must never produce a confirmation. `curl` cannot confirm
+ * a correspondence that was never proposed either, because the Override is built
+ * from the proposal on the *Intervention* and this answer together.
+ */
+const confirmProposalOf = (value: string): ProposalAnswer =>
+  value === "confirmed" || value === "rejected" ? value : "not_asked"
+
+/** How the second answer reads back on a closed episode. */
+const describeConfirmation = (answer: ProposalAnswer): string => {
+  switch (answer) {
+    case "confirmed":
+      return "Confirmed."
+    case "rejected":
+      return "Rejected."
+    case "not_asked":
+      return "Not asked."
+  }
+}
 
 /** How an answer reads back on a closed episode. */
 const describeAnswer = (answer: NextTimeAnswer): string => {
@@ -279,6 +307,7 @@ const pendingPanel = (snapshot: HandoffSnapshot): string => {
 </table>
 <p class="note">The live browser window for this session is already on that screen.
 Work in it directly &mdash; this page does not drive the browser.</p>
+${proposalPanel(record)}
 <h2>What the automation could see</h2>
 <pre>${escape(it.accessibility)}</pre>`
 
@@ -307,6 +336,7 @@ Work in it directly &mdash; this page does not drive the browser.</p>
   Not resolved &mdash; end the run and report that a person is needed</label>
 <label>What you did <input type="text" name="detail" placeholder="authorized the account as supervisor SUP7"></label>
 ${theQuestion(record)}
+${theProposalQuestion(record)}
 <button type="submit">Return control</button>
 </form>`
     : `<h2>Take control</h2>
@@ -362,6 +392,61 @@ const theQuestion = (record: InterventionRecord): string => {
 </fieldset>`
 }
 
+/**
+ * What assisted recovery suggested about the control it could not find.
+ *
+ * Shown above the tree rather than below it, because it is the first thing the
+ * person arriving needs: the automation is not lost, it is looking for a button
+ * this institution calls something else, and here is the candidate. It is framed
+ * as a suggestion in the copy as well as in the code — nothing has been pressed,
+ * and nothing will be until this page gets an answer.
+ */
+const proposalPanel = (record: InterventionRecord): string => {
+  const proposal = record.intervention.proposal
+  if (proposal === undefined) return ""
+  return `<h2>What assisted recovery suggested</h2>
+<table>
+<tr><th>Looking for</th><td>${escape(proposal.forTarget)}</td></tr>
+<tr><th>Proposed</th><td><b>${escape(proposal.control)}</b> on this screen</td></tr>
+<tr><th>Confidence</th><td>${proposal.confidence.toFixed(2)}</td></tr>
+<tr><th>Why</th><td>${escape(proposal.rationale)}</td></tr>
+<tr><th>Recorded at</th><td><code>${escape(proposal.proposalRef)}</code></td></tr>
+</table>
+<p class="note">Nothing was pressed. A model read the screen and named a control; whether
+  that is the right one is the question below, and the answer is what gets written down.</p>`
+}
+
+/**
+ * The second question, asked only when there is a proposal on the Intervention.
+ *
+ * Conditional on purpose, and it is the difference between this and the question
+ * above it. "What should automation do next time it meets this state" is well
+ * posed at every return of control. "Is this control the correspondent of that
+ * one" is not a question at all unless something proposed a correspondent, and a
+ * form that asked it anyway would be inviting an answer about nothing.
+ *
+ * The default is again "I would rather not say", for the reason the other
+ * default is: the commonest thing anybody does with a form is submit it without
+ * reading, and that must not write a Tenant Override.
+ */
+const theProposalQuestion = (record: InterventionRecord): string => {
+  const proposal = record.intervention.proposal
+  if (proposal === undefined) return ""
+  return `<fieldset>
+<legend>${escape(THE_PROPOSAL_QUESTION)}</legend>
+<p class="note">Answering yes writes a tenant override: from then on this capability looks
+  for ${escape(JSON.stringify(proposal.control))} at this institution and for
+  ${escape(JSON.stringify(proposal.forTarget))} everywhere else. The capability itself is not
+  changed.</p>
+<label><input type="radio" name="confirmProposal" value="confirmed">
+  Yes &mdash; ${escape(proposal.control)} is the control this step needs here</label>
+<label><input type="radio" name="confirmProposal" value="rejected">
+  No &mdash; that is not it</label>
+<label><input type="radio" name="confirmProposal" value="not_asked" checked>
+  I would rather not say &mdash; write nothing</label>
+</fieldset>`
+}
+
 const resolvedList = (records: ReadonlyArray<InterventionRecord>): string =>
   records.length === 0
     ? ""
@@ -374,6 +459,12 @@ const resolvedList = (records: ReadonlyArray<InterventionRecord>): string =>
               escape(record.returnedAt ?? "")
             } &mdash; ${escape(record.detail ?? "")}<br>${
               escape(`${THE_QUESTION} ${describeAnswer(record.nextTime)}`)
+            }${
+              record.intervention.proposal === undefined
+                ? ""
+                : `<br>${escape(
+                    `${THE_PROPOSAL_QUESTION} ${describeConfirmation(record.confirmProposal)}`
+                  )}`
             }</td></tr>`
           )
           .join("")

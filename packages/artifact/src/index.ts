@@ -144,16 +144,32 @@ export {
 
 export { ArtifactInvalid, bakedInLiterals, formatArtifact, parseArtifact } from "./parse.ts"
 
+export type { ConfirmedTarget, OverrideOptions, OverrideTarget, TenantOverride } from "./Override.ts"
+export {
+  OverrideRefused,
+  OverrideTarget as OverrideTargetSchema,
+  TenantOverride as TenantOverrideSchema,
+  applyOverride,
+  declareTargetOverride,
+  describeOverride,
+  formatOverride,
+  parseOverride
+} from "./Override.ts"
+
 export type { CapabilityTarget } from "./Target.ts"
 export { CapabilityTarget as CapabilityTargetSchema, toSurfaceTarget } from "./Target.ts"
 
 export {
   ARTIFACTS_DIRECTORY,
   ArtifactNotWritable,
+  OVERRIDES_DIRECTORY,
   listCapabilities,
+  listTenants,
   listVersions,
   loadArtifact,
-  writeArtifact
+  loadOverride,
+  writeArtifact,
+  writeOverride
 } from "./store.ts"
 
 export { toYaml } from "./yaml.ts"

@@ -195,7 +195,7 @@ export const strategyFor = (resolvedBy: ReadonlyArray<string>): string => {
     ? "caption-label"
     : narrowing === "textNear"
       ? "text-near"
-      : narrowing === "name" || narrowing === "nameContains"
+      : narrowing === "name" || narrowing === "nameContains" || narrowing === "nameTokens"
         ? "accessible-name"
         : narrowing === "ordinal"
           ? "ordinal"

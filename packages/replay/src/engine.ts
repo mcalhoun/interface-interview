@@ -139,13 +139,14 @@ import {
 } from "@cua/artifact"
 import { Evidence, type EvidenceUnwritable } from "@cua/evidence"
 import { type ActionRequest, Policy, describeUnsafeRepeat, unsafeRepeats } from "@cua/policy"
-import { Session } from "@cua/session"
+import { type TargetProposal, Session } from "@cua/session"
 import {
   type SurfaceAdapterService,
   type SurfaceState,
   type Target as SurfaceTarget,
   type TargetFailure,
   SurfaceAdapter,
+  controlsOfferedIn,
   describeMatch,
   describeTarget
 } from "@cua/surface"
@@ -153,8 +154,10 @@ import {
   type Advisor,
   type AssistGate,
   type AssistCandidate,
+  type AssistControl,
   ASSIST_BUDGET_PER_RUN,
   ASSIST_QUESTION,
+  ASSIST_TARGET_QUESTION,
   consultAssist,
   proposableOutcomes
 } from "./assist.ts"
@@ -202,6 +205,28 @@ export interface ReplayRequest {
    * here.
    */
   readonly assist?: Advisor
+
+  /**
+   * The Tenant delta this run's Artifact was assembled from, if any.
+   *
+   * The `artifact` above is already the *effective* document — base plus delta,
+   * put together by whoever assembled the run — so the engine executes one thing
+   * and has no branch anywhere that asks which tenant it is on. This is here for
+   * the Evidence and for nothing else: without it, a run against an institution
+   * whose button reads `Find` is indistinguishable in the log from a run against
+   * one whose button reads `Search`, and "which document actually executed" is
+   * the first question an auditor asks.
+   */
+  readonly appliedOverride?: AppliedOverride
+}
+
+/** What a run records about the delta it was assembled with. */
+export interface AppliedOverride {
+  readonly tenant: string
+  readonly baseVersion: string
+  /** Where the delta is stored, so its provenance is one file away. */
+  readonly source: string
+  readonly entries: ReadonlyArray<{ readonly was: string; readonly name: string }>
 }
 
 /** Runs one Capability Artifact end to end. Read the return type as a specification. */
@@ -1171,6 +1196,29 @@ export const replayCapability = (
             : undefined
         const candidates: ReadonlyArray<AssistCandidate> = proposableOutcomes(artifact, named)
 
+        /**
+         * The other half of what may be proposed, and only when it is well posed.
+         *
+         * A correspondent is offered for exactly one situation: an Action whose
+         * *named* control was not on the screen. Not a Checkpoint that would not
+         * hold — there is no single control at fault, so there would be nothing
+         * for a person to confirm about. Not a `selectFromList` that matched
+         * nothing either, and that exclusion is worth stating: a selection names
+         * no control in the first place, which is exactly why the second tenant's
+         * account names cost no Override. Asking about one would be asking about
+         * a Target that does not exist.
+         *
+         * The list is the screen's own controls of the role the Target asked
+         * for. A closed enumeration, read off the tree the run just observed, in
+         * the same spirit as `proposableOutcomes` — so a proposal names something
+         * a person can look at rather than something a model wrote.
+         */
+        const missingTarget = missingControlOf(step, stalled)
+        const controls: ReadonlyArray<AssistControl> =
+          missingTarget === undefined
+            ? []
+            : controlsOfferedIn(missingTarget.state.tree, missingTarget.target.role ?? "")
+
         const proposal = yield* consultAssist(
           {
             advisor: request.assist,
@@ -1195,10 +1243,18 @@ export const replayCapability = (
             // capability ref, step id, intent and candidate codes come from the
             // Artifact, which carries none (ADR-0008).
             stalled: scrub(`${said.reason}. ${said.detail}`),
-            question: ASSIST_QUESTION,
+            // One of two constants, chosen by the shape of the stall. Never a
+            // sentence assembled here: the Evidence records the question, and it
+            // has to be the question.
+            question: controls.length === 0 ? ASSIST_QUESTION : ASSIST_TARGET_QUESTION,
             url: scrub(said.url),
             accessibility: scrub(said.accessibility),
-            candidates
+            candidates,
+            // A Target's description comes from the Artifact, which carries no
+            // runtime data (ADR-0008), and a control's name comes from the same
+            // tree the line above has already scrubbed.
+            ...(missingTarget === undefined ? {} : { missing: missingTarget.described }),
+            controls
           }
         )
 
@@ -1212,13 +1268,39 @@ export const replayCapability = (
           }
         }
 
+        /**
+         * A proposed control does **not** produce an `Assisted`.
+         *
+         * This is the branch ADR-0005 turns on, so it is written as a branch
+         * rather than folded in. `Assisted` is the value that settles a Step and
+         * ends a run with an answer; a control cannot settle anything, because
+         * the run would have to press it and pressing is the thing this rung
+         * cannot do. It becomes an `Unassisted` carrying a suggestion, the run
+         * goes to the person it was already going to, and the only thing that
+         * changed is what they are shown.
+         */
+        const suggestion: TargetProposal | undefined =
+          proposal._tag === "TargetSuggested" && missingTarget !== undefined
+            ? {
+                forTarget: missingTarget.described,
+                control: proposal.control,
+                confidence: proposal.confidence,
+                rationale: proposal.rationale,
+                proposalRef: proposal.proposalRef
+              }
+            : undefined
+
         return {
           _tag: "Unassisted",
           stalled,
+          suggestion,
           // A run that never enabled the rung has nothing to report about it, and
           // saying "assisted recovery was not enabled" on every ordinary
           // escalation would train an Operator to skip the line that matters.
-          why: request.assist === undefined ? undefined : proposal.why
+          why:
+            request.assist === undefined || proposal._tag !== "NotProposed"
+              ? undefined
+              : proposal.why
         }
       })
 
@@ -1330,7 +1412,12 @@ export const replayCapability = (
               ? said.detail
               : `${said.detail} Assisted recovery did not settle it: ${why}.`,
           url: said.url,
-          accessibility: said.accessibility
+          accessibility: said.accessibility,
+          // Carried, not acted on. `handOff` is the only reader of this field in
+          // the engine and all it does is hand it to a person.
+          ...(forPerson._tag === "Unassisted" && forPerson.suggestion !== undefined
+            ? { proposal: forPerson.suggestion }
+            : {})
         })
 
         return episode.resumed
@@ -1686,6 +1773,20 @@ export const replayCapability = (
         }))
       })
 
+      // One event per correspondence in force, immediately after `run.start`, so
+      // the first three lines of the log say what ran, against whom, and what was
+      // different about them.
+      for (const entry of request.appliedOverride?.entries ?? []) {
+        yield* evidence.record({
+          kind: "override.applied",
+          tenant: request.appliedOverride!.tenant,
+          baseVersion: request.appliedOverride!.baseVersion,
+          source: request.appliedOverride!.source,
+          was: entry.was,
+          name: entry.name
+        })
+      }
+
       for (const [index, step] of artifact.steps.entries()) {
         const { reached, afterHandoff } = yield* runStep(step)
         if (reached === undefined) continue
@@ -1841,6 +1942,21 @@ interface Unassisted {
   readonly _tag: "Unassisted"
   readonly stalled: Stalled
   readonly why: string | undefined
+  /**
+   * A correspondent the consultation proposed for a control that was not on the
+   * screen, when it proposed one.
+   *
+   * On the `Unassisted` arm on purpose, and that placement is the argument. A
+   * proposed *outcome* produces an `Assisted`, which settles the Step: the rung
+   * concluded something and the run acts on it. A proposed *control* settles
+   * nothing — the Step is still blocked, the run is still going to a person, and
+   * this rides along as something for them to read. So it travels on the value
+   * that means "the rung did not settle this", because it did not.
+   *
+   * There is no branch anywhere below that reads this and resolves a Target from
+   * it. It reaches `session.pause` and stops.
+   */
+  readonly suggestion: TargetProposal | undefined
 }
 
 /**
@@ -2018,6 +2134,37 @@ type Performed =
        */
       readonly assisted?: Assisted
     }
+
+/**
+ * The control a Step's Action names, when the stall is that it was not there.
+ *
+ * `undefined` for every other shape of stall, and each exclusion is a decision
+ * rather than a gap:
+ *
+ *   - A **Checkpoint that would not hold** is about a *state*. There is no one
+ *     missing control at fault, so there is nothing a person could confirm about
+ *     one.
+ *   - A **`selectFromList` that matched nothing** names no control at all: it
+ *     works out which item to press from the labels the screen is offering. That
+ *     is precisely why a tenant renaming its products costs no Override, and
+ *     asking about a Target here would be asking about one that does not exist.
+ *   - A **`navigate`** has a path rather than a control.
+ *
+ * So exactly one situation reaches a `proposeTarget` tool, and it is the one
+ * SPEC's fourth tenant difference produces.
+ */
+const missingControlOf = (
+  step: Step,
+  stalled: Stalled
+): { readonly target: SurfaceTarget; readonly described: string; readonly state: SurfaceState } |
+  undefined => {
+  if (stalled._tag !== "ActionBlocked") return undefined
+  if (stalled.failure.reason !== "target_missing") return undefined
+  const action = step.action
+  if (action.type === "navigate" || action.type === "selectFromList") return undefined
+  const target = toSurfaceTarget(action.target)
+  return { target, described: describeTarget(target), state: stalled.state }
+}
 
 /** A missing control, or a list that offered nothing matching. Never ambiguity. */
 type ZeroMatchFailure = Extract<

@@ -15,7 +15,7 @@
 import { mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { serve } from "@cua/legacy-core"
+import { type LegacyCoreOptions, serve } from "@cua/legacy-core"
 import { type CapabilityArtifact, type ResolvedInputs, prepareInputs } from "@cua/artifact"
 import type { EvidenceEvent } from "@cua/evidence"
 import { serveOperator } from "@cua/operator"
@@ -28,7 +28,12 @@ import {
   sessionControl
 } from "@cua/session"
 import { type SurfaceAdapterService, SurfaceAdapter, playwrightSurface } from "@cua/surface"
-import { type ReplayResult, evidenceForRun, replayCapability } from "@cua/replay"
+import {
+  type Advisor,
+  type ReplayResult,
+  evidenceForRun,
+  replayCapability
+} from "@cua/replay"
 import { Effect, Fiber, Layer, Result } from "effect"
 import { shippedPolicy } from "./replay-harness.ts"
 
@@ -87,6 +92,20 @@ export interface AttendedOptions {
   readonly attended?: boolean
   readonly waitMillis?: number
   /**
+   * Which institution's installation this run is against, and anything else
+   * about how the mock core should behave.
+   *
+   * `{ tenant: "community-cu" }` is the second tenant. Nothing else about the
+   * harness changes: same browser, same policy, same evidence writer, same
+   * operator interface over HTTP.
+   */
+  readonly core?: Omit<LegacyCoreOptions, "port" | "hostname">
+  /**
+   * The Assisted Recovery rung, when the episode being driven is one where a
+   * consultation happens before the person is woken.
+   */
+  readonly assist?: Advisor
+  /**
    * The person. Runs concurrently with the replay, inside the same provided
    * services — which is how it can act on the same live browser and, in the
    * guard test, run a second replay against the same Session.
@@ -100,7 +119,7 @@ export const attendedReplay = (
   options: AttendedOptions
 ): Effect.Effect<AttendedOutcome, unknown> =>
   Effect.gen(function* () {
-    const core = yield* serve({ port: 0 })
+    const core = yield* serve({ port: 0, ...options.core })
     // The same sensitivity policy the CLI runs under. A handoff run writes the
     // same Evidence every other run does, redaction included, so nothing here is
     // a test-only arrangement.
@@ -153,7 +172,8 @@ export const attendedReplay = (
           artifact: options.artifact,
           inputs: prepared.success,
           baseUrl: core.origin,
-          runId
+          runId,
+          ...(options.assist === undefined ? {} : { assist: options.assist })
         })
       )
 

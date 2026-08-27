@@ -17,8 +17,12 @@ export type {
   InterventionRecord,
   InterventionRequest,
   NextTimeAnswer,
-  OperatorAction
+  OperatorAction,
+  ProposalAnswer,
+  TargetProposal
 } from "./Intervention.ts"
+
+export { THE_PROPOSAL_QUESTION } from "./Intervention.ts"
 
 export type { Learned } from "./Learning.ts"
 export { classify, THE_QUESTION } from "./Learning.ts"

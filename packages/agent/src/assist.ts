@@ -17,16 +17,36 @@
  * This toolkit is stricter, and stricter in kind rather than in degree. There is
  * **no acting verb in it**. Not disabled, not gated, not denied at run time:
  * absent. A model consulted here cannot propose a click, because `click` is not a
- * word it has. It cannot name a control, because no tool below has a `target`
- * parameter, or a `path`, or a `value`, or a selector of any description. The
- * strongest thing that can go wrong is that it returns the wrong one of the
- * Capability's own documented outcome codes, at a confidence the engine then
- * weighs.
+ * word it has. No tool below has a `target` parameter, or a `path`, or a `value`,
+ * or a selector of any description, so there is nowhere to put something the
+ * engine could resolve and press.
  *
  * That is what "a hallucination cannot cause an unintended action on a banking
  * system" means when it is a property of a type rather than a promise:
  * `test/assisted-recovery.test.ts` enumerates the toolkit, renders each tool's
- * JSON Schema, and asserts there is nowhere in any of them to put a control.
+ * JSON Schema, and asserts there is nowhere in any of them to put a Target.
+ *
+ * ## The third word, added for the second tenant, and why it does not move the line
+ *
+ * `proposeTarget` (ticket 16) lets a consultation say that an institution calls
+ * one control something else. It is the only tool here that mentions a control
+ * at all, and the boundary survives it for three independent reasons, none of
+ * them a runtime check:
+ *
+ *   - its `control` parameter is a `Schema.Literals` over names **read off the
+ *     live screen**, so there is no free text and nothing to invent;
+ *   - a name is not a Target — no role, no scope, no ordinal, no selector — so
+ *     there is nothing in the reply the engine could resolve;
+ *   - the engine turns the reply into an `Unassisted`, which is the value that
+ *     means *the rung did not settle this*, and hands it to a person. Nothing
+ *     between the model and that person acts on it, and the only expression that
+ *     can write it down takes an `InterventionRecord` carrying a human's
+ *     confirmation (ADR-0006).
+ *
+ * It is also **absent** from every consultation that is not about a named
+ * control that was missing: `assistToolkit` and `assistTargetToolkit` are two
+ * different types, and the caller has to be holding a list of the screen's
+ * controls to reach the second.
  *
  * ## Bounded by construction
  *
@@ -41,7 +61,9 @@
  * ## The candidate set comes from the Artifact, not from here
  *
  * `assistTools` takes the codes it may offer as an argument, and they are built
- * by `@cua/replay`'s `proposableOutcomes` from the document being executed. So
+ * by `@cua/replay`'s `proposableOutcomes` from the document being executed — and
+ * the control list, when there is one, comes from `controlsOfferedIn` over the
+ * tree the run just observed. Both enumerations are somebody else's facts. So
  * the enumeration in the schema the model is sent *is* the Capability's own
  * vocabulary, minus anything learned to need a person. An invented code fails
  * schema validation inside `generateText` before this module sees it, and
@@ -56,7 +78,13 @@
  * `LanguageModel` layer through the identical path.
  */
 
-import type { Advisor, AssistCandidate, AssistConsultation, AssistReply } from "@cua/replay"
+import type {
+  Advisor,
+  AssistCandidate,
+  AssistConsultation,
+  AssistControl,
+  AssistReply
+} from "@cua/replay"
 import { AssistUnavailable } from "@cua/replay"
 import { Effect, Layer, Schema } from "effect"
 import type { ConfigError } from "effect/Config"
@@ -67,13 +95,17 @@ import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 // ---------------------------------------------------------------------------
 
 /**
- * Everything the consulted model may say. Two words, and neither is an action.
+ * Everything the consulted model may say. Three words, and none of them is an
+ * action: two classify a screen, and the third names a control for a person to
+ * confirm.
  *
  * A test asserts this set is disjoint from both `@cua/policy`'s `ACTION_TYPES`
  * and the Discovery vocabulary, so a verb cannot be added here by copying one
- * from the loop without the disjointness failing first.
+ * from the loop without the disjointness failing first. `proposeTarget` is in
+ * neither: Discovery's word for pressing something is `click`, and Policy's list
+ * of things that can happen to a Surface does not contain a way to suggest.
  */
-export const ASSIST_VERBS = ["classify", "cannotClassify"] as const
+export const ASSIST_VERBS = ["classify", "proposeTarget", "cannotClassify"] as const
 
 export type AssistVerb = (typeof ASSIST_VERBS)[number]
 
@@ -116,6 +148,54 @@ const classifyTool = (candidates: ReadonlyArray<AssistCandidate>) =>
   })
 
 /**
+ * "This screen calls that control something else."
+ *
+ * ## Why this is not an acting verb, and how that is enforced rather than said
+ *
+ * It is the one tool in this system that mentions a control at all, so it is
+ * worth being exact about what it can and cannot do.
+ *
+ * 1. **`control` is `Schema.Literals` over names read off the live screen.**
+ *    There is no free-text field: a model cannot name a control that is not
+ *    there, because the enumeration it is sent contains only what is. An
+ *    invented name fails validation inside `generateText`, and `consultAssist`
+ *    checks membership again on arrival.
+ * 2. **A name is not a Target.** There is no role here, no scope, no ordinal, no
+ *    selector and no coordinate — nothing the engine could resolve. The test
+ *    that renders every tool's JSON Schema and asserts no property is called
+ *    `target`, `selector`, `css`, `xpath`, `path`, `url`, `value`, `role`,
+ *    `label`, `click`, `action` or `coordinates` still passes, unchanged.
+ * 3. **Nothing in the engine turns the reply into a gesture.** It becomes an
+ *    `Unassisted` — the value that means the rung did *not* settle the stall —
+ *    travels to `session.pause`, and is read by a person. The only expression
+ *    that can promote it into a stored Tenant Override takes an
+ *    `InterventionRecord` with a human's confirmation on it, exactly as
+ *    `proposeAmendment` does for an outcome (ADR-0006: overrides are discovered
+ *    and confirmed, never hand-written).
+ *
+ * So the boundary ADR-0005 draws is unmoved. What the rung may do is *say what
+ * it sees*; what it may not do is touch the application, and a proposal that a
+ * person has to agree to before it is even written down is the weakest possible
+ * form of saying.
+ */
+const proposeTargetTool = (missing: string, controls: ReadonlyArray<AssistControl>) =>
+  Tool.make("proposeTarget", {
+    description:
+      `The capability could not find ${missing} on this screen. If this institution simply ` +
+      "calls that control something else, say which of the controls listed corresponds to " +
+      "it. You may only choose from the controls listed; there is no way to write a new " +
+      "one, and nothing will be pressed on your say-so — a person confirms it before it is " +
+      "written down anywhere. If the control is genuinely absent rather than renamed, or if " +
+      "the screen means one of the outcome codes instead, do not use this tool.",
+    parameters: Schema.Struct({
+      control: Schema.Literals(controls.map((control) => control.name)),
+      /** `Finite` for the reason `classify`'s is. See the note there. */
+      confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+      rationale: Rationale
+    })
+  })
+
+/**
  * "None of these fits."
  *
  * A real answer, and worth a tool of its own rather than a low confidence on the
@@ -131,9 +211,25 @@ const CannotClassify = Tool.make("cannotClassify", {
   parameters: Schema.Struct({ rationale: Rationale })
 })
 
-/** The two tools, for one Artifact's candidate codes. */
+/**
+ * The toolkit for one consultation: the Artifact's candidate codes, and the
+ * screen's controls when a correspondent may be proposed at all.
+ *
+ * `proposeTarget` is **absent** when `controls` is empty, which is every
+ * consultation except one about a named control that was not on the screen. Not
+ * disabled, not denied at run time: not a word the model has. That is the same
+ * construction `ASSIST_VERBS` uses against acting verbs, applied one level down
+ * — a rung cannot be asked a question it was not given the vocabulary for.
+ */
 export const assistTools = (candidates: ReadonlyArray<AssistCandidate>) =>
   Toolkit.make(classifyTool(candidates), CannotClassify)
+
+/** The three-word vocabulary, for the tests that enumerate what it can say. */
+export const assistTargetTools = (
+  candidates: ReadonlyArray<AssistCandidate>,
+  missing: string,
+  controls: ReadonlyArray<AssistControl>
+) => Toolkit.make(classifyTool(candidates), proposeTargetTool(missing, controls), CannotClassify)
 
 /**
  * Handlers that refuse to run.
@@ -150,12 +246,49 @@ const refuseToResolve = (verb: AssistVerb) => () =>
       `${verb} was resolved by the framework instead of being read as data`
   )
 
+/**
+ * The classification-only toolkit: two words, neither of them an action.
+ *
+ * This is what every consultation gets except one about a control that was named
+ * and not found. There is no `proposeTarget` in it — not disabled, absent — so a
+ * model consulted about a Checkpoint that would not hold has no vocabulary in
+ * which to suggest pressing anything.
+ */
 export const assistToolkit = (candidates: ReadonlyArray<AssistCandidate>) => {
-  const tools = assistTools(candidates)
+  const tools = Toolkit.make(classifyTool(candidates), CannotClassify)
   return Effect.provide(
     tools,
     tools.toLayer({
       classify: refuseToResolve("classify"),
+      cannotClassify: refuseToResolve("cannotClassify")
+    })
+  )
+}
+
+/**
+ * The same two words, plus the one that names a control on this screen.
+ *
+ * A separate function rather than a branch inside the one above, because the two
+ * toolkits are different *types* and keeping them so is what makes "the tool is
+ * absent" a fact rather than a runtime condition. A caller that wants
+ * `proposeTarget` has to be holding a list of controls read off the live screen
+ * to build it with, and there is no way to reach this function without one.
+ */
+export const assistTargetToolkit = (
+  candidates: ReadonlyArray<AssistCandidate>,
+  missing: string,
+  controls: ReadonlyArray<AssistControl>
+) => {
+  const tools = Toolkit.make(
+    classifyTool(candidates),
+    proposeTargetTool(missing, controls),
+    CannotClassify
+  )
+  return Effect.provide(
+    tools,
+    tools.toLayer({
+      classify: refuseToResolve("classify"),
+      proposeTarget: refuseToResolve("proposeTarget"),
       cannotClassify: refuseToResolve("cannotClassify")
     })
   )
@@ -171,6 +304,13 @@ const Classification = Schema.Struct({
   rationale: Schema.String
 })
 const decodeClassification = Schema.decodeUnknownResult(Classification)
+
+const Correspondence = Schema.Struct({
+  control: Schema.String,
+  confidence: Schema.Number,
+  rationale: Schema.String
+})
+const decodeCorrespondence = Schema.decodeUnknownResult(Correspondence)
 
 const Refusal = Schema.Struct({ rationale: Schema.String })
 const decodeRefusal = Schema.decodeUnknownResult(Refusal)
@@ -197,7 +337,7 @@ Your job is to classify the state, not to fix it. Read the accessibility structu
 
 Judge only from what is on the screen. A code is right when the screen shows the state that code names, and wrong when you are inferring it from what you expect a banking application to do. If two codes could fit, or the screen shows something none of them names, use cannotClassify: a person will be asked, which is a perfectly good result and much better than a confident wrong answer about somebody's account.
 
-You have no way to act. There is no click, no navigation, no field to fill and no control to name in anything you can return: this consultation reads a screen and returns a classification. Do not describe a remedy or suggest a next step; nothing is listening for one.`
+You have no way to act. There is no click, no navigation and no field to fill in anything you can return: this consultation reads a screen. If you are offered a list of the screen's controls, naming one of them is a suggestion for a person to confirm — nothing will be pressed because you said so. Do not describe a remedy or a next step beyond that; nothing is listening for one.`
 
 /** The user turn: what stalled, what the codes mean, and the screen. */
 export const consultationPrompt = (consultation: AssistConsultation): string =>
@@ -214,6 +354,19 @@ export const consultationPrompt = (consultation: AssistConsultation): string =>
       (candidate) => `  ${candidate.code}: ${candidate.meaning}`
     ),
     "",
+    ...(consultation.missing === undefined || (consultation.controls ?? []).length === 0
+      ? []
+      : [
+          `THE CONTROL THAT WAS NOT FOUND: ${consultation.missing}`,
+          "",
+          "THE CONTROLS THIS SCREEN OFFERS (a proposal for a person to confirm, never an action):",
+          ...(consultation.controls ?? []).map(
+            (control) =>
+              `  ${JSON.stringify(control.name)}` +
+              (control.region === "" ? "" : ` in ${JSON.stringify(control.region)}`)
+          ),
+          ""
+        ]),
     "CURRENT SCREEN",
     `  url: ${consultation.url}`,
     "",
@@ -266,18 +419,38 @@ export interface AdvisorOptions {
 export const modelAdvisor = (options: AdvisorOptions): Advisor => ({
   consult: (consultation: AssistConsultation) =>
     Effect.gen(function* () {
-      const answered = yield* LanguageModel.generateText({
-        prompt: assistPrompt(consultation),
-        // Built from this consultation's candidates, so the legal answers are
-        // this Capability's own codes and nothing else.
-        toolkit: assistToolkit(consultation.candidates),
-        // It must answer with one of the two, rather than narrating.
-        toolChoice: "required",
-        // The framework resolves nothing; the reply comes back as data. Same as
-        // the Discovery loop, though here there is nothing a resolution could
-        // have performed even if it ran.
-        disableToolCallResolution: true
-      })
+      const controls = consultation.controls ?? []
+      const missing = consultation.missing
+
+      /**
+       * One call, one of two vocabularies.
+       *
+       * Written as two calls rather than one call with a computed toolkit
+       * because the toolkits are different types, and that is the point: which
+       * words the model has is decided here, from the shape of the stall, and
+       * cannot be changed by anything the model returns. Everything else about
+       * the two branches — the prompt, `toolChoice`, the resolution ban, the
+       * single turn — is identical.
+       */
+      const answered = yield* (controls.length === 0 || missing === undefined
+        ? LanguageModel.generateText({
+            prompt: assistPrompt(consultation),
+            // Built from this consultation's candidates, so the legal answers
+            // are this Capability's own codes and nothing else.
+            toolkit: assistToolkit(consultation.candidates),
+            // It must answer with one of the words it has, rather than narrating.
+            toolChoice: "required",
+            // The framework resolves nothing; the reply comes back as data. Same
+            // as the Discovery loop, though here there is nothing a resolution
+            // could have performed even if it ran.
+            disableToolCallResolution: true
+          })
+        : LanguageModel.generateText({
+            prompt: assistPrompt(consultation),
+            toolkit: assistTargetToolkit(consultation.candidates, missing, controls),
+            toolChoice: "required",
+            disableToolCallResolution: true
+          }))
 
       const call = answered.toolCalls[0]
       if (call === undefined) {
@@ -291,6 +464,22 @@ export const modelAdvisor = (options: AdvisorOptions): Advisor => ({
       // One turn only. A reply that does not decode is not corrected and asked
       // again — that is the loop this rung must not become. It is an
       // unavailability, and a person is asked.
+      if (call.name === "proposeTarget") {
+        const decoded = decodeCorrespondence(call.params)
+        return decoded._tag === "Failure"
+          ? yield* Effect.fail(
+              new AssistUnavailable({
+                reason: `the model's proposed control did not validate: ${decoded.failure}`
+              })
+            )
+          : ({
+              _tag: "TargetProposed",
+              proposedControl: decoded.success.control,
+              confidence: decoded.success.confidence,
+              rationale: decoded.success.rationale
+            } satisfies AssistReply)
+      }
+
       if (call.name === "cannotClassify") {
         const decoded = decodeRefusal(call.params)
         return decoded._tag === "Failure"

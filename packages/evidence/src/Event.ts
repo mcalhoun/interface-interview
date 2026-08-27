@@ -312,11 +312,70 @@ const InterventionResolve = event("intervention.resolve", {
    * auditor can re-derive a learned classification from the log alone rather
    * than having to trust the Amendment that came out of it.
    */
-  nextTime: Schema.String
+  nextTime: Schema.String,
+  /**
+   * The Operator's answer to the second question, when there was one to ask:
+   * is the control assisted recovery proposed the right correspondent?
+   *
+   * `not_asked` on every episode where no proposal was carried, which is almost
+   * all of them. Written rather than inferred, because this is the field a
+   * stored Tenant Override rests on: ADR-0006 says an override is discovered and
+   * *confirmed*, and an auditor has to be able to find the confirmation.
+   */
+  confirmProposal: Schema.String
+})
+
+/**
+ * A correspondent for a control the run could not find, proposed and recorded.
+ *
+ * Its own kind rather than a widened `assist.proposal`, for the reason that
+ * decides every question of this shape in this repository: the two say different
+ * things and a reader has to be able to tell them apart without reading the
+ * payload. An `assist.proposal` is a classification the run may *act on* — it
+ * can end the run with a Business Outcome. This one can end nothing: the run is
+ * already stopping, and all this does is give the person who arrives something
+ * to agree or disagree with. A log where those looked alike would make "the
+ * model classified this state" and "the model suggested a control to a human"
+ * one line.
+ *
+ * `accepted` means carried to a person, never acted on. A proposal below the
+ * run's confidence floor is recorded here *and* marked refused, so the floor is
+ * visible in the log rather than being an absence.
+ */
+const AssistTargetProposal = event("assist.target_proposal", {
+  assistId: Schema.String,
+  /** The control the capability asked for, as its Target reads. */
+  forTarget: Schema.String,
+  /** The control on this screen the consultation says corresponds to it. */
+  proposedControl: Schema.String,
+  confidence: Schema.Number,
+  rationale: Schema.String,
+  accepted: Schema.Boolean
+})
+
+/**
+ * A run assembled its capability from a base version plus a tenant's delta.
+ *
+ * One event per confirmed correspondence in force. Without it, a run against a
+ * tenant is indistinguishable in the log from a run against the vendor's own
+ * installation, and the question "which document actually executed" — the one an
+ * auditor asks first — would have no answer in the record.
+ */
+const OverrideApplied = event("override.applied", {
+  tenant: Schema.String,
+  /** The base version the delta was applied to. */
+  baseVersion: Schema.String,
+  /** Where the delta is stored, so the provenance is one file away. */
+  source: Schema.String,
+  /** The accessible name the base capability asks for. */
+  was: Schema.String,
+  /** What this tenant calls it. */
+  name: Schema.String
 })
 
 export const EvidenceEvent = Schema.Union([
   RunStart,
+  OverrideApplied,
   Observe,
   Decide,
   PolicyCheck,
@@ -328,6 +387,7 @@ export const EvidenceEvent = Schema.Union([
   RecoveryResolved,
   AssistRequest,
   AssistProposal,
+  AssistTargetProposal,
   AssistDeclined,
   InterventionRaise,
   InterventionHumanAction,

@@ -144,7 +144,7 @@ it("defines every event kind SPEC lists, including the ones replay may never emi
   // contains no decide event" to be a claim worth testing.
   expect(KINDS_FORBIDDEN_IN_REPLAY).toEqual(["decide"])
 
-  // Four additions to SPEC's list, and both groups are added for the reason SPEC
+  // Six additions to SPEC's list, and every group is added for the reason SPEC
   // itself gives for `assist.*` having its own kinds rather than reusing
   // `decide`.
   //
@@ -157,9 +157,23 @@ it("defines every event kind SPEC lists, including the ones replay may never emi
   // "every assisted-recovery decision recorded as evidence" would hold only for
   // the decisions that went well.
   //
+  // `assist.target_proposal` (ticket 16): a proposed *outcome* is something the
+  // run may act on and a proposed *control* is something only a person may act
+  // on. One kind for both would put "the model classified this state" and "the
+  // model suggested a button to somebody" on the same line.
+  //
+  // `override.applied` (ticket 16): a run against a tenant executes the base
+  // capability plus that tenant's confirmed delta, and which document actually
+  // ran is the first thing an auditor asks. Without it the log of a run against
+  // an institution whose button reads Find is identical to one against an
+  // institution whose button reads Search.
+  //
   // Pinning the whole set here means a further kind is a decision somebody has
   // to make on purpose.
   const RECOVERY_KINDS = ["recovery.detected", "recovery.attempt", "recovery.resolved"]
-  const ASSIST_KINDS = ["assist.declined"]
-  expect(kinds).toEqual(new Set([...SPEC_KINDS, ...RECOVERY_KINDS, ...ASSIST_KINDS]))
+  const ASSIST_KINDS = ["assist.declined", "assist.target_proposal"]
+  const TENANT_KINDS = ["override.applied"]
+  expect(kinds).toEqual(
+    new Set([...SPEC_KINDS, ...RECOVERY_KINDS, ...ASSIST_KINDS, ...TENANT_KINDS])
+  )
 })

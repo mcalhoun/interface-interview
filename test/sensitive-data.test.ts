@@ -26,7 +26,12 @@ import { extname, join } from "node:path"
 import { it } from "@effect/vitest"
 import { Effect, Redacted, Result } from "effect"
 import { expect } from "vitest"
-import { ARTIFACTS_DIRECTORY, bakedInLiterals, prepareInputs } from "@cua/artifact"
+import {
+  ARTIFACTS_DIRECTORY,
+  OVERRIDES_DIRECTORY,
+  bakedInLiterals,
+  prepareInputs
+} from "@cua/artifact"
 import { placeholderFor, scrubbing } from "@cua/evidence"
 import { declassifierFor, declassifying, sensitivityPolicy } from "@cua/policy"
 import { scrubberFor, sensitiveNames } from "@cua/replay"
@@ -73,12 +78,20 @@ it.live("no sensitive value appears in any artifact or any text evidence file", 
     const inArtifacts = scanForSecrets(ARTIFACTS_DIRECTORY, EVERY_MEMBER_ID)
     expect(describeAppearances(inArtifacts)).toBe("")
 
+    // Tenant overrides are the second kind of document that lands on disk and
+    // outlives the run it came from, and they quote an Operator's own sentence
+    // verbatim — which is exactly where somebody types a member number without
+    // thinking. Same rule, same scan, same walker.
+    const inOverrides = scanForSecrets(OVERRIDES_DIRECTORY, EVERY_MEMBER_ID)
+    expect(describeAppearances(inOverrides)).toBe("")
+
     // And the scan was not vacuous: it read files, and they were the ones the run
     // produced.
     const scanned = filesUnder(evidenceDirectory)
     expect(scanned.length).toBeGreaterThan(0)
     expect(scanned.some((path) => path.endsWith("events.jsonl"))).toBe(true)
     expect(filesUnder(ARTIFACTS_DIRECTORY).length).toBeGreaterThan(0)
+    expect(filesUnder(OVERRIDES_DIRECTORY).length).toBeGreaterThan(0)
   })
 )
 
