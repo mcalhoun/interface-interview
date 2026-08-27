@@ -121,7 +121,13 @@ it.live("a target matching nothing is distinguishable from one matching several"
 
     const first = yield* replay({ artifact: missing, inputs: { memberId: "12345" } })
     if (first.result.result !== "failure") throw new Error("expected a failure")
-    expect(first.result.failure.reason).toBe("target_missing")
+    if (first.result.failure.reason !== "target_missing") {
+      throw new Error(`expected a missing control, got ${first.result.failure.reason}`)
+    }
+    // Which part of the Target ran out. The screen was the right one and no
+    // control on it answers to that name, which is a different diagnosis from
+    // "this is not the screen we expected" and reads as one.
+    expect(first.result.failure.narrowedBy).toBe("nameContains")
 
     // Two controls answer to a partial name on the search screen, and the run
     // stops rather than taking the first. Every candidate is listed, because
@@ -147,6 +153,16 @@ it.live("a target matching nothing is distinguishable from one matching several"
     }
     expect(second.result.failure.candidates.length).toBeGreaterThan(1)
     expect(second.result.failure.candidates.join(" ")).toContain("Legacy")
+
+    // Each candidate is distinct and says where it sits, so the list is usable
+    // even on a screen where the controls share a role and a name. And the
+    // failure says what to change about the Target rather than only that
+    // something is wrong with it.
+    expect(new Set(second.result.failure.candidates).size).toBe(
+      second.result.failure.candidates.length
+    )
+    expect(second.result.failure.candidates[0]).toContain("Member Number Search")
+    expect(second.result.failure.remedy).toContain("Cross-Reference Lookup")
   })
 )
 

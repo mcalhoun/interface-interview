@@ -25,7 +25,7 @@ export type {
   TargetStrategy,
   UnresolvedTarget
 } from "./resolution.ts"
-export { labelOf, readTextOf, resolveTargetIn } from "./resolution.ts"
+export { describeMatch, labelOf, readTextOf, regionOf, resolveTargetIn } from "./resolution.ts"
 
 export type { Target, TargetScope } from "./Target.ts"
 export { describeTarget, Target as TargetSchema, TargetScope as TargetScopeSchema } from "./Target.ts"

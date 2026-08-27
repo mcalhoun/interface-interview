@@ -145,7 +145,10 @@ export const layer = (
               new TargetNotFound({
                 target: describeTarget(target),
                 rationale: resolution.rationale,
-                considered: resolution.considered
+                considered: resolution.considered,
+                ...(resolution.narrowedBy === undefined
+                  ? {}
+                  : { narrowedBy: resolution.narrowedBy })
               })
             )
           case "Ambiguous":
@@ -153,6 +156,7 @@ export const layer = (
               new TargetAmbiguous({
                 target: describeTarget(target),
                 rationale: resolution.rationale,
+                remedy: resolution.remedy,
                 matches: resolution.matches
               })
             )
@@ -164,7 +168,8 @@ export const layer = (
                 match: resolution.match,
                 strategies: resolution.strategies,
                 rationale: resolution.rationale,
-                considered: resolution.considered
+                considered: resolution.considered,
+                alternatives: resolution.alternatives
               }
             })
         }

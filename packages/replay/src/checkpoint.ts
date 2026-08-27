@@ -80,6 +80,7 @@ import type {
   SurfaceUnavailable,
   TargetFailure
 } from "@cua/surface"
+import { describeMatch } from "@cua/surface"
 
 /** How long a Checkpoint has to come true when the Artifact does not say. */
 export const DEFAULT_CHECKPOINT_MILLIS = 5_000
@@ -277,7 +278,7 @@ const resolutionProblem =
       case "TargetAmbiguous":
         return Effect.succeed(
           `${failure.matches.length} controls matched: ${
-            failure.matches.map((match) => match.description).join(", ")
+            failure.matches.map(describeMatch).join("; ")
           }`
         )
       case "TargetNotFound":
