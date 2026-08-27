@@ -4,11 +4,14 @@
  *   bun run surface observe /
  *   bun run surface observe "/account?memberNumber=12345&accountNumber=0000012345-S01"
  *   bun run surface resolve / --role textbox --name "Member Number" --within "Member Number Search"
+ *   bun run surface select "/member?memberNumber=22222" --within "Share and Deposit Accounts" \
+ *     --item-role link --match Savings
  *
- * Two subcommands, because those are the two things worth being able to see by
- * hand: what a screen looks like as an accessibility tree, and which control a
- * Target picks out of it and why. The second one prints the reasoning, since a
- * Target that resolves for the wrong reason is the failure mode that matters.
+ * Three subcommands, because those are the things worth being able to see by
+ * hand: what a screen looks like as an accessibility tree, which control a
+ * Target picks out of it and why, and which item of a list a parameter selects
+ * and out of what. Each prints its reasoning, since something that resolves for
+ * the wrong reason is the failure mode that matters.
  *
  * A bare path starts Heritage Core in-process on a free port; an absolute URL is
  * used as given, so the same command works against anything.
@@ -21,17 +24,25 @@
 import { serve } from "@cua/legacy-core"
 import { Console, Effect } from "effect"
 import {
+  type ListDescription,
   type Target,
   SurfaceAdapter,
   TargetAmbiguous,
   TargetNotFound,
   describeTarget,
-  playwrightSurface
+  playwrightSurface,
+  selectFromTree
 } from "./index.ts"
 
 const USAGE = `usage:
   bun run surface observe <path|url>
   bun run surface resolve <path|url> [target options]
+  bun run surface select  <path|url> --item-role <role> --match <text> [--within <text>]
+
+select options:
+  --item-role <role>   the role each item of the list carries, e.g. link
+  --match <text>       the value to match against the item labels, by token subset
+  --within <text>      the panel or table the list sits in
 
 target options:
   --role <role>        e.g. textbox, button, link, cell
@@ -146,12 +157,69 @@ const resolveCommand = Effect.fn("cli.resolve")(function* (target: Target) {
   yield* Console.log(`considered: ${resolution.considered} accessibility nodes`)
 })
 
+/**
+ * Show the account list the way Replay sees it, and which item a parameter picks
+ * out of it.
+ *
+ *   bun run surface select "/member?memberNumber=12345" \
+ *     --within "Share and Deposit Accounts" --item-role link --match Savings
+ *
+ * Worth having by hand because the interesting question about token-subset
+ * matching is not whether it worked once — it is what a *different* tenant's
+ * labels do to it, and this prints the whole list beside the verdict.
+ */
+const selectCommand = Effect.fn("cli.select")(function* (options: Options) {
+  const itemRole = options.flags.get("item-role")
+  const wanted = options.flags.get("match")
+  if (itemRole === undefined || wanted === undefined) {
+    yield* Console.log(USAGE)
+    return
+  }
+  const within = options.flags.get("within")
+  const list: ListDescription = {
+    itemRole,
+    ...(within === undefined ? {} : { within: { name: within } })
+  }
+
+  const state = yield* printState()
+  const selection = selectFromTree(state.tree, { list, wanted })
+
+  yield* Console.log("")
+  yield* Console.log(`list:  ${itemRole} items${within === undefined ? "" : ` in "${within}"`}`)
+  yield* Console.log(`match: ${JSON.stringify(wanted)} by token subset`)
+  yield* Console.log("")
+  switch (selection._tag) {
+    case "Selected":
+      yield* Console.log(`SELECTED: ${JSON.stringify(selection.item.label)}`)
+      break
+    case "NoMatch":
+      yield* Console.log("NO MATCHING ITEM")
+      process.exitCode = 1
+      break
+    case "AmbiguousMatch":
+      yield* Console.log(
+        `AMBIGUOUS MATCH: ${selection.matches.map((match) => JSON.stringify(match.label)).join(", ")}`
+      )
+      process.exitCode = 1
+      break
+  }
+  yield* Console.log(`because:  ${selection.rationale}`)
+  yield* Console.log("")
+  yield* Console.log("on offer:")
+  for (const item of selection.items) {
+    yield* Console.log(`  - ${JSON.stringify(item.label)}  [${item.frame}]  ${item.path}`)
+  }
+})
+
 const program = Effect.gen(function* () {
   const argv = Bun.argv.slice(2)
   const command = argv[0]
   const location = argv[1]
 
-  if ((command !== "observe" && command !== "resolve") || location === undefined) {
+  if (
+    (command !== "observe" && command !== "resolve" && command !== "select") ||
+    location === undefined
+  ) {
     yield* Console.log(USAGE)
     return
   }
@@ -162,7 +230,12 @@ const program = Effect.gen(function* () {
     : (yield* serve({ port: 0 })).origin
   const url = origin === undefined ? location : origin + location
 
-  const run = command === "observe" ? observeCommand() : resolveCommand(buildTarget(parseOptions(argv)))
+  const options = parseOptions(argv)
+  const run = command === "observe"
+    ? observeCommand()
+    : command === "select"
+      ? selectCommand(options)
+      : resolveCommand(buildTarget(options))
 
   yield* run.pipe(Effect.provide(playwrightSurface({ startUrl: url })))
 })

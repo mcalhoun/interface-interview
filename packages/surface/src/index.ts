@@ -19,13 +19,26 @@ export {
 
 export type {
   AmbiguousTarget,
+  ListDescription,
+  ListItem,
   Resolution,
   ResolvedTarget,
+  Selection,
+  SelectionRequest,
   TargetMatch,
   TargetStrategy,
   UnresolvedTarget
 } from "./resolution.ts"
-export { labelOf, readTextOf, resolveTargetIn } from "./resolution.ts"
+export {
+  isTokenSubsetOf,
+  labelOf,
+  listItemsIn,
+  readTextOf,
+  resolveTargetIn,
+  selectFrom,
+  selectFromTree,
+  tokensOf
+} from "./resolution.ts"
 
 export type { Target, TargetScope } from "./Target.ts"
 export { describeTarget, Target as TargetSchema, TargetScope as TargetScopeSchema } from "./Target.ts"

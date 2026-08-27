@@ -113,6 +113,22 @@ const referentialProblems = (artifact: CapabilityArtifact): ReadonlyArray<string
     const where = `step ${step.id}`
     if (step.action.type === "navigate") checkValue(`${where}'s path`, step.action.path)
     if (step.action.type === "fill") checkValue(`${where}'s value`, step.action.value)
+    if (step.action.type === "selectFromList") {
+      checkValue(`${where}'s match`, step.action.match.against)
+      // A selection that cannot say what it is choosing between, or what to
+      // escalate when it lands on none or several, is not reviewable. The two
+      // outcomes are the reason the Action exists, so an empty code is refused
+      // here rather than surfacing at 3am as an escalation named "".
+      if (step.action.list.itemRole.trim() === "") {
+        problems.push(`${where} selects from a list without saying what an item is`)
+      }
+      if (step.action.onNoMatch.escalate.trim() === "") {
+        problems.push(`${where} declares no code to escalate under when nothing matches`)
+      }
+      if (step.action.onMultiple.escalate.trim() === "") {
+        problems.push(`${where} declares no code to escalate under when several match`)
+      }
+    }
     // An `extract` binds its reading under the step's own id, and a Checkpoint on
     // that same step is allowed to assert on it — so bind before checking.
     if (step.action.type === "extract") readBefore.add(step.id)

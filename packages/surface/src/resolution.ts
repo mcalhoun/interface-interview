@@ -10,13 +10,21 @@
  * and a naive match returns a stack of nodes that are all "right". Two rules do
  * most of the work: prefer an exact name to a containment fallback, and discard
  * any candidate that merely encloses another candidate.
+ *
+ * The second half of the file does something different: *selection*, choosing
+ * among the items a screen currently offers by matching a parameter against
+ * their labels by token subset. That is the same tree and the same scoping rule,
+ * but a different question, and it is what makes one Capability serve both a
+ * savings and a checking account without a second discovery run.
  */
 
 import {
+  type AccessibilityNode,
   type IndexedNode,
   type ObservedNode,
   type TreeIndex,
   describeNode,
+  indexTree,
   isAncestorOf,
   nodeText,
   normalise,
@@ -24,7 +32,7 @@ import {
   treeDistance,
   walk
 } from "./AccessibilityTree.ts"
-import { type Target, describeTarget } from "./Target.ts"
+import { type Target, type TargetScope, describeTarget } from "./Target.ts"
 
 /** Which of the Target's strategies actually did the narrowing. */
 export type TargetStrategy = "role" | "name" | "nameContains" | "label" | "textNear" | "within" | "ordinal"
@@ -350,3 +358,196 @@ export const resolveTargetIn = (index: TreeIndex, target: Target): Resolution =>
     considered
   }
 }
+
+// ---------------------------------------------------------------------------
+// Choosing among the items on a screen
+// ---------------------------------------------------------------------------
+
+/**
+ * Selection, as distinct from resolution.
+ *
+ * Resolution answers "which control does this description name". Selection
+ * answers "which of the things currently on offer does this *parameter* mean",
+ * and the things on offer are read off the live screen rather than written down
+ * anywhere. See
+ * docs/adr/0007-selection-matches-by-token-subset-against-a-discovered-set.md.
+ *
+ * The rule is token subset, in one direction: every token of the wanted value
+ * must appear among the tokens of an item's label. The direction is the whole
+ * point. `savings` is a subset of `Primary Savings` *and* of `Regular Savings`,
+ * so a Tenant that labels the same account differently still matches with no
+ * Override anywhere — multi-tenant reuse falls out of the matching rule instead
+ * of arriving as configuration. Meanwhile `Primary Savings` is a subset of
+ * neither `Regular Savings` nor `Checking`, which is what keeps a parameter that
+ * genuinely does not apply a clean no-match rather than a lucky hit.
+ *
+ * Nothing here consults a model. Same list, same parameter, same choice, every
+ * time — which is what determinism means in this system: no model in the loop,
+ * not no logic.
+ */
+
+/**
+ * The comparable words in a piece of text.
+ *
+ * Unicode letter and number classes rather than `\w`, because an item's label is
+ * whatever the Tenant configured it to be and that is not always ASCII. Case and
+ * punctuation are discarded, so `Primary Savings`, `primary savings` and
+ * `Primary-Savings` all compare the same.
+ */
+export const tokensOf = (text: string): ReadonlyArray<string> =>
+  normalise(text)
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((token) => token !== "")
+
+/**
+ * True when every token of `wanted` appears in `label`.
+ *
+ * An empty `wanted` never matches. A parameter that says nothing selecting the
+ * first thing on the screen is exactly the silent wrong answer this design
+ * exists to prevent.
+ */
+export const isTokenSubsetOf = (wanted: string, label: string): boolean => {
+  const available = new Set(tokensOf(label))
+  const required = tokensOf(wanted)
+  return required.length > 0 && required.every((token) => available.has(token))
+}
+
+/** Which items are on offer: a role, optionally inside a named region. */
+export interface ListDescription {
+  /** The region the list sits in, named by the caption heading it. */
+  readonly within?: TargetScope | undefined
+  /** The role each item carries, e.g. `link` for a list of account links. */
+  readonly itemRole: string
+}
+
+/** One thing on offer, as it reads on screen. */
+export interface ListItem extends TargetMatch {
+  /** What the item is called: the text a person would point at. */
+  readonly label: string
+}
+
+export type Selection =
+  | {
+      readonly _tag: "Selected"
+      readonly item: ListItem
+      readonly items: ReadonlyArray<ListItem>
+      readonly rationale: string
+    }
+  | {
+      readonly _tag: "NoMatch"
+      readonly items: ReadonlyArray<ListItem>
+      readonly rationale: string
+    }
+  | {
+      readonly _tag: "AmbiguousMatch"
+      readonly matches: ReadonlyArray<ListItem>
+      readonly items: ReadonlyArray<ListItem>
+      readonly rationale: string
+    }
+
+export interface SelectionRequest {
+  readonly list: ListDescription
+  /** The value being matched, as the caller supplied it. */
+  readonly wanted: string
+  /**
+   * How to name that value in prose, when quoting it would be wrong.
+   *
+   * A rationale ends up in Evidence and in a failure report, and an input is
+   * sensitive unless an Artifact says otherwise (ADR-0008). A caller holding a
+   * sensitive parameter passes a description here rather than letting the value
+   * be quoted back at it.
+   */
+  readonly describedAs?: string | undefined
+}
+
+/** An item's own text: its accessible name, or the text it carries. */
+const labelTextOf = (node: ObservedNode): string => {
+  const own = identity(node)
+  return own !== "" ? own : nodeText(node)
+}
+
+/** Everything the list offers, in document order. */
+export const listItemsIn = (
+  index: TreeIndex,
+  list: ListDescription
+): { readonly items: ReadonlyArray<ListItem>; readonly rationale: string } => {
+  const reasons: Array<string> = []
+  let entries: ReadonlyArray<IndexedNode> = index.nodes.filter((entry) => entry.node !== index.root)
+
+  if (list.within !== undefined) {
+    const scope = scopeOf(index, list.within)
+    entries = entries.filter((entry) =>
+      scope.roots.some((root) => root === entry.node || isAncestorOf(index, root, entry.node))
+    )
+    reasons.push(scope.rationale)
+  }
+
+  entries = entries.filter((entry) => entry.node.role === list.itemRole)
+  // The same rule Target resolution uses: a layout table exposes the same text
+  // at every enclosing level, and only the innermost node is the item itself.
+  const innermost = entries.filter(
+    (entry) => !entries.some((other) => other !== entry && isAncestorOf(index, entry.node, other.node))
+  )
+  const items = [...innermost]
+    .sort((a, b) => a.order - b.order)
+    .map((entry) => ({ ...toMatch(entry), label: labelTextOf(entry.node) }))
+
+  reasons.push(
+    items.length === 0
+      ? `nothing with role ${list.itemRole} is on offer there`
+      : `${items.length} ${list.itemRole}(s) on offer: ${
+          items.map((item) => JSON.stringify(item.label)).join(", ")
+        }`
+  )
+  return { items, rationale: reasons.join("; ") }
+}
+
+/**
+ * Picks the one item whose label carries every token of the wanted value.
+ *
+ * Three outcomes, all of them values. The choice; nothing matching; or more than
+ * one matching. The last is never settled by taking the first — ADR-0007 says an
+ * item matching two or more is a Hard Failure — and the difference between "the
+ * list does not have it" and "the list has it twice" is the difference between a
+ * domain fact and a broken Artifact, so the two never collapse into one report.
+ */
+export const selectFrom = (index: TreeIndex, request: SelectionRequest): Selection => {
+  const { items, rationale } = listItemsIn(index, request.list)
+  const said = request.describedAs ?? JSON.stringify(request.wanted)
+  const matches = items.filter((item) => isTokenSubsetOf(request.wanted, item.label))
+
+  if (matches.length === 0) {
+    return {
+      _tag: "NoMatch",
+      items,
+      rationale: `${rationale}; no label carries every token of ${said}`
+    }
+  }
+  if (matches.length > 1) {
+    return {
+      _tag: "AmbiguousMatch",
+      matches,
+      items,
+      rationale: `${rationale}; ${matches.length} labels carry every token of ${said}: ${
+        matches.map((match) => JSON.stringify(match.label)).join(", ")
+      }, and nothing chooses between them`
+    }
+  }
+  const only = matches[0]!
+  return {
+    _tag: "Selected",
+    item: only,
+    items,
+    rationale: `${rationale}; every token of ${said} is in ${JSON.stringify(only.label)}`
+  }
+}
+
+/**
+ * The same choice, made against a tree the caller already holds.
+ *
+ * Replay observes once per Step and selects against that observation, so the
+ * accessibility snapshot recorded in Evidence is provably the one the choice was
+ * made from rather than a second look that might have differed.
+ */
+export const selectFromTree = (tree: AccessibilityNode, request: SelectionRequest): Selection =>
+  selectFrom(indexTree(tree), request)

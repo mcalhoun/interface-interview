@@ -55,7 +55,7 @@ it.live("every step reached the state it intended, and says which one it was", (
       "open-member-search",
       "enter-member-number",
       "run-member-search",
-      "open-savings-account",
+      "open-account",
       "read-available-balance",
       "read-current-balance"
     ])
@@ -165,7 +165,14 @@ it.live("records no runtime input value in the run.start event", () =>
     // Names and classifications, never values. The accessibility snapshots in the
     // same file still carry the rendered member number: scrubbing those is ticket
     // 08's job at the writer's single serialisation point.
-    expect(start.inputs).toEqual([{ name: "memberId", sensitive: true }])
+    //
+    // `accountType` is here because it defaulted rather than being passed, and it
+    // is classified in the same breath as the one that was — the record says what
+    // the run could see, not what the caller happened to type.
+    expect(start.inputs).toEqual([
+      { name: "memberId", sensitive: true },
+      { name: "accountType", sensitive: false }
+    ])
     expect(JSON.stringify(start)).not.toContain("12345")
   })
 )

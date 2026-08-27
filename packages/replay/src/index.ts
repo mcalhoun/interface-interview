@@ -12,6 +12,9 @@ export { DEFAULT_CHECKPOINT_MILLIS, evaluate as evaluateCheckpoint, resolveValue
 export type { ReplayRequest } from "./engine.ts"
 export { replayCapability } from "./engine.ts"
 
+export type { Choice, ChoiceContext } from "./selection.ts"
+export { chooseItem } from "./selection.ts"
+
 export type {
   ReplayFailure,
   ReplayFailureBody,
