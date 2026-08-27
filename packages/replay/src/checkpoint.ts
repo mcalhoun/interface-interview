@@ -64,7 +64,7 @@
  * let a transient-overlay rule swallow a terminal domain answer.
  */
 
-import { Effect } from "effect"
+import { Effect, Redacted } from "effect"
 import {
   type Assertion,
   type Checkpoint,
@@ -320,16 +320,34 @@ const describeScreen = (state: SurfaceState): string =>
  * not have it.
  *
  * Shared with the executor so a Checkpoint and the Action it verifies can never
- * disagree about what a parameter means. This is also the single unwrap point
- * ticket 08 turns into an explicit `Redacted.value(...)`.
+ * disagree about what a parameter means.
+ *
+ * ## UNWRAP SITE 2 OF 2 (ticket 08)
+ *
+ * A `fill` has to type real characters into a real field, and a `targetReads`
+ * checkpoint has to compare against the same real characters, so somewhere the
+ * `Redacted<string>` has to come apart. That somewhere is this line, and it is
+ * one line because both callers were already routed through this function.
+ *
+ * What the unwrap does *not* do is escape. The plaintext is returned to a caller
+ * that hands it straight to `SurfaceAdapter.fill` or compares it with `===`;
+ * nothing stores it, and nothing puts it in an Evidence event. The one place a
+ * comparison failure could quote it — `it reads "12345"` in the observed string
+ * below — is a value read back off the screen, and the Evidence scrubber takes
+ * that out on the way to disk.
+ *
+ * The other unwrap is `scrubberFor` in `redaction.ts`.
+ * `test/sensitive-data.test.ts` asserts the set is exactly these two.
  */
 export const resolveValue = (
   context: Pick<EvaluationContext, "inputs" | "readings">,
   ref: ValueRef
 ): string | undefined => {
   switch (ref.from) {
-    case "parameter":
-      return context.inputs.get(ref.name)?.text
+    case "parameter": {
+      const input = context.inputs.get(ref.name)
+      return input === undefined ? undefined : Redacted.value(input.text)
+    }
     case "constant":
       return ref.text
     case "step":

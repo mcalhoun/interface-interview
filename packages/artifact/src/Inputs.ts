@@ -17,17 +17,24 @@
  * is the same argument ADR-0003 makes one level up. `test/replay-inputs.test.ts`
  * pins it.
  *
- * ## Seam for ticket 08 (sensitive data handling)
+ * ## Values are `Redacted`, uniformly (ticket 08)
  *
- * `ResolvedInput.text` is a plain string today. Ticket 08 turns a sensitive one
- * into `Redacted<string>`, so printing or serialising it takes a deliberate,
- * greppable `Redacted.value(...)`. Two call sites unwrap: the Surface `fill` in
- * the Replay executor, and the `targetReads` Checkpoint comparison. Everything
- * else already routes values through `ResolvedInputs` rather than passing raw
- * strings around, which is what makes that change small.
+ * `ResolvedInput.text` is a `Redacted<string>`, and it is *always* one — the
+ * wrapper does not appear and disappear with the `sensitive` flag. A type that
+ * changes shape according to a boolean somebody wrote in a YAML file is a type no
+ * call site can rely on, and the one call site that got it wrong would be the
+ * leak. So the representation is uniform and the flag governs something else
+ * entirely: whether Evidence gets scrubbed of the value on the way out.
+ *
+ * What the wrapper buys is that the ordinary ways a value escapes stop working.
+ * `String(input.text)`, `JSON.stringify(input)`, a template literal and a
+ * `console.log` all render `<redacted:memberId>`. Getting the characters back
+ * takes `Redacted.value(...)`, which is a string you can grep the repository for
+ * — and `test/sensitive-data.test.ts` does exactly that, pinning the call sites
+ * so a new one has to be argued for in review rather than merged by accident.
  */
 
-import { Result, Schema } from "effect"
+import { Redacted, Result, Schema } from "effect"
 
 /**
  * What kind of value an input holds.
@@ -69,16 +76,64 @@ export type InputDeclaration = typeof InputDeclaration.Type
 export const InputDeclarations = Schema.Record(Schema.String, InputDeclaration)
 export type InputDeclarations = typeof InputDeclarations.Type
 
+/**
+ * What the Artifact *asks* for. Not the answer on its own — see `Declassifier`.
+ *
+ * Absent means sensitive (ADR-0008). Read through this rather than touching
+ * `declaration.sensitive`, because `undefined` and `false` mean opposite things
+ * and only one of them is safe to get wrong.
+ */
 export const isSensitive = (declaration: InputDeclaration): boolean =>
   declaration.sensitive ?? true
 
 export const isRequired = (declaration: InputDeclaration): boolean =>
   declaration.required ?? true
 
-/** One validated value, carrying whether it may be written to Evidence as-is. */
+/**
+ * Whether Policy permits one parameter's value to appear in Evidence in the
+ * clear.
+ *
+ * A plain predicate rather than a service, because `prepareInputs` is a pure
+ * `Result` and has to stay one — a bad call must not be able to have opened a
+ * browser. `@cua/policy` builds these; nothing here imports it, so the
+ * dependency runs one way.
+ *
+ * The default declassifies nothing, which is what makes forgetting to pass one
+ * safe rather than silently permissive.
+ */
+export type Declassifier = (parameter: string) => boolean
+
+export const declassifiesNothing: Declassifier = () => false
+
+/**
+ * The deny-first rule: **two independent voices have to agree before a value is
+ * treated as non-sensitive.**
+ *
+ * The Artifact has to say `sensitive: false` in writing, *and* Policy has to
+ * allowlist the parameter. An Artifact is a discovered document — at ticket 11 a
+ * model writes it — so on its own it does not get to declassify anything.
+ * Configuration a human approved is the second signature.
+ *
+ * Written as an `||` on purpose: every path that is not "both said yes" lands on
+ * sensitive. ADR-0008 takes the false positives happily, because a rejected
+ * value is a much better failure than a leaked member identifier.
+ */
+export const classifySensitive = (
+  declaration: InputDeclaration,
+  parameter: string,
+  declassify: Declassifier
+): boolean => isSensitive(declaration) || !declassify(parameter)
+
+/**
+ * One validated value.
+ *
+ * `text` is `Redacted` whether or not it is sensitive; `sensitive` says whether
+ * the Evidence scrubber replaces occurrences of it in text evidence. See the
+ * module header for why those are two separate things.
+ */
 export interface ResolvedInput {
   readonly name: string
-  readonly text: string
+  readonly text: Redacted.Redacted<string>
   readonly sensitive: boolean
 }
 
@@ -110,7 +165,8 @@ export class InputsInvalid extends Schema.TaggedError<InputsInvalid>()("InputsIn
 export const prepareInputs = (
   capability: string,
   declarations: InputDeclarations,
-  supplied: Readonly<Record<string, string>>
+  supplied: Readonly<Record<string, string>>,
+  declassify: Declassifier = declassifiesNothing
 ): Result.Result<ResolvedInputs, InputsInvalid> => {
   const problems: Array<string> = []
   const resolved = new Map<string, ResolvedInput>()
@@ -133,7 +189,13 @@ export const prepareInputs = (
       problems.push(problem)
       continue
     }
-    resolved.set(name, { name, text: raw, sensitive: isSensitive(declaration) })
+    // Labelled with the input's own name, so an accidental serialisation renders
+    // `<redacted:memberId>` — which names the leak that did not happen.
+    resolved.set(name, {
+      name,
+      text: Redacted.make(raw, { label: name }),
+      sensitive: classifySensitive(declaration, name, declassify)
+    })
   }
 
   return problems.length === 0

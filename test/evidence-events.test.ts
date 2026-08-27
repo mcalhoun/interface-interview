@@ -20,15 +20,17 @@ import { Effect, Layer } from "effect"
 import { expect } from "vitest"
 import {
   type EvidenceEvent,
+  type Scrubber,
   Evidence,
   EvidenceEventSchema,
   KINDS_FORBIDDEN_IN_REPLAY,
-  evidenceFiles
+  evidenceFiles,
+  noScrubbing
 } from "@cua/evidence"
 
 const withEvidence = <A, E>(
   body: (evidence: Evidence["Service"], directory: string) => Effect.Effect<A, E>,
-  scrubber?: (text: string) => string
+  scrubber: Scrubber = noScrubbing
 ) =>
   Effect.gen(function* () {
     const root = mkdtempSync(join(tmpdir(), "cua-evidence-test-"))
@@ -36,7 +38,7 @@ const withEvidence = <A, E>(
       root,
       runId: "r1",
       sessionId: "s1",
-      ...(scrubber === undefined ? {} : { scrubber })
+      scrubber
     })
     return yield* Effect.gen(function* () {
       const evidence = yield* Evidence

@@ -69,6 +69,62 @@ export const formatArtifact = (artifact: CapabilityArtifact): string =>
   Bun.YAML.stringify(Schema.encodeSync(CapabilityArtifact)(artifact))
 
 /**
+ * Every fixed literal in the document that contains one of `values`.
+ *
+ * The other half of ADR-0008: "Artifact compilation fails outright if a value
+ * marked as fixed matches text from the Goal." A `{ from: parameter }` reference
+ * has nowhere to put a member number, but a `{ from: constant }` and an
+ * `assert: textPresent` both do — a discovery run that saw `Member 12345` on
+ * screen and wrote that as the thing to assert has baked a runtime value into a
+ * document that is supposed to outlive it.
+ *
+ * Containment rather than equality, because `Member 12345` is the shape the
+ * mistake actually takes. False positives are possible and are the trade ADR-0008
+ * names: a rejected Artifact is a much better failure than a leaked identifier.
+ *
+ * **Ticket 11:** call this with the Goal's terms and every value the discovery
+ * run typed, and refuse to write an Artifact that returns anything. It is
+ * deliberately not part of `parseArtifact`, because reading a stored document is
+ * not the moment you know what the runtime values were.
+ */
+export const bakedInLiterals = (
+  artifact: CapabilityArtifact,
+  values: Iterable<string>
+): ReadonlyArray<string> => {
+  const needles = [...values].filter((value) => value.length > 0)
+  if (needles.length === 0) return []
+
+  const found: Array<string> = []
+  const check = (where: string, text: string): void => {
+    for (const needle of needles) {
+      if (text.includes(needle)) {
+        found.push(`${where} contains the runtime value ${JSON.stringify(needle)}`)
+      }
+    }
+  }
+
+  const checkValue = (where: string, ref: ValueRef): void => {
+    if (ref.from === "constant") check(`${where}'s constant`, ref.text)
+  }
+
+  for (const step of artifact.steps) {
+    const where = `step ${step.id}`
+    if (step.action.type === "navigate") checkValue(`${where}'s path`, step.action.path)
+    if (step.action.type === "fill") checkValue(`${where}'s value`, step.action.value)
+    step.checkpoint.expect.forEach((assertion, index) => {
+      const at = `${where}'s checkpoint assertion ${index}`
+      if (assertion.assert === "textPresent" || assertion.assert === "textAbsent") {
+        check(at, assertion.text)
+      }
+      if (assertion.assert === "targetReads") checkValue(at, assertion.equals)
+      if (assertion.assert === "stepRead") check(`${at}'s pattern`, assertion.matches)
+    })
+  }
+
+  return found
+}
+
+/**
  * Every reference in the document that has to point at something.
  *
  * Collected as a list rather than thrown one at a time, for the same reason input

@@ -7,14 +7,19 @@
  * things in order: stamp the envelope, scrub, validate against the schema. That
  * ordering is the design.
  *
- * *Scrub* is the seam ticket 08 fills. SPEC: "Text evidence, meaning
+ * *Scrub* is where redaction happens. SPEC: "Text evidence, meaning
  * accessibility snapshots and event logs, passes a scrub replacing known
  * sensitive parameter values with a labelled placeholder, at the single point
- * where evidence gets serialized." There is one such point, it is `record`, and
- * the `Scrubber` below is currently the identity function. Nothing else in the
- * system may write to the evidence directory, which is what makes "keeping
- * sensitive values out of logs by construction" (user story 59) a property of the
- * code rather than of everyone's discipline.
+ * where evidence gets serialized." There is one such point and it is `record`.
+ * Nothing else in the system may write to the evidence directory, which is what
+ * makes "keeping sensitive values out of logs by construction" (user story 59) a
+ * property of the code rather than of everyone's discipline.
+ *
+ * **`scrubber` is a required option** (ticket 08). Not defaulted to identity, and
+ * not defaulted to anything else: a default is a decision made silently at every
+ * construction site that forgets, and the whole point of this ticket is that
+ * forgetting should not be possible. Switching redaction off is spelled
+ * `noScrubbing`, which a reviewer can grep for and find every instance of.
  *
  * *Validate* comes after scrubbing rather than before, so a scrubber that
  * corrupts an event is caught by the same check that catches a malformed one.
@@ -29,6 +34,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { Context, Effect, Layer, Result, Schema } from "effect"
 import { type EvidenceEvent, type EvidenceEventBody, EvidenceEvent as EvidenceEventSchema } from "./Event.ts"
+import type { Scrubber } from "./Scrub.ts"
 
 /** Evidence could not be written. Evidence failing silently is worse than a run failing. */
 export class EvidenceUnwritable extends Schema.TaggedError<EvidenceUnwritable>()(
@@ -38,18 +44,6 @@ export class EvidenceUnwritable extends Schema.TaggedError<EvidenceUnwritable>()
     reason: Schema.String
   }
 ) {}
-
-/**
- * Rewrites a text field before it is written.
- *
- * Ticket 08 supplies the real one: a function closed over the run's sensitive
- * input values, replacing each with a labelled placeholder. Until then it is
- * identity, and the type exists so that adding redaction touches one layer rather
- * than every call site.
- */
-export type Scrubber = (text: string) => string
-
-export const noScrubbing: Scrubber = (text) => text
 
 export class Evidence extends Context.Service<Evidence, {
   /** The directory this run's evidence lands in. Printed so a reader can find it. */
@@ -70,18 +64,82 @@ export interface EvidenceOptions {
   readonly root: string
   readonly runId: string
   readonly sessionId: string
-  readonly scrubber?: Scrubber
+  /**
+   * Required, not optional. See the module header: a default here is a decision
+   * made silently by every construction site that forgets to think about it.
+   * `noScrubbing` is the explicit way to say no.
+   */
+  readonly scrubber: Scrubber
+  /**
+   * The parameter *names* the scrubber was built from, for the note below.
+   * Never the values. A reviewer opening the directory should be able to see
+   * which parameters this run treated as sensitive without reading the code that
+   * decided.
+   */
+  readonly redacting?: ReadonlyArray<string>
+  /** One line saying which sensitivity policy the run was classified under. */
+  readonly policy?: string
 }
 
-const NOTE = `Evidence in this directory is over synthetic data from the mock Heritage Core
-application. Event logs and accessibility snapshots are scrubbed of declared
-sensitive values at the single point where they are serialised.
+/**
+ * The note written into every evidence directory, and the ADR-0010 disclosure.
+ *
+ * SPEC: screenshots "go only to /evidence, which carries a note that these are
+ * demo artifacts over synthetic data". This is that note. It lives next to the
+ * files it describes rather than only in an ADR, because the person who most
+ * needs to read it is the one looking at a screenshot, and they are not
+ * necessarily in the repository at the time.
+ */
+const note = (options: EvidenceOptions): string => {
+  const redacting = options.redacting ?? []
+  return `EVIDENCE FOR RUN ${options.runId}
+${"=".repeat(20 + options.runId.length)}
 
-Screenshots are NOT redacted. They contain rendered member identifiers and
-balances as captured. Masking them properly means optical recognition of known
-values, which is named as a known gap rather than half-solved. See
-docs/adr/0010-evidence-screenshots-are-not-redacted.md.
+This is a demo artifact over SYNTHETIC data from the mock Heritage Core
+application. No real member data exists anywhere in this system.
+
+WHAT IS REDACTED
+----------------
+events.jsonl and every accessibility snapshot in it pass a scrub at the single
+point where evidence is serialised. ${
+    redacting.length === 0
+      ? "This run declared no sensitive parameters."
+      : `Values of these parameters were replaced:\n  ${redacting.join("\n  ")}`
+  }
+
+Two placeholders appear, and they mean different things:
+
+  [redacted:<name>]   the literal value was found in text read off the screen
+                      (an accessibility snapshot, a URL, a quoted control value)
+                      and was taken out.
+  <redacted:<name>>   a value the system was holding was serialised, and the
+                      Redacted wrapper stopped it. Nothing leaked.
+
+A placeholder can appear in the middle of a longer identifier — Heritage Core's
+account number embeds the member number, so it reads 00000[redacted:memberId]-S01.
+That is the substitution working, not a bug. Redaction is by literal occurrence,
+with no minimum length and no attempt to guess field boundaries, because a rule
+that skipped short or embedded matches would be a hole with a number on it.
+
+${options.policy ?? "Sensitivity policy: deny-first (ADR-0008)."}
+
+WHAT IS NOT REDACTED
+--------------------
+Screenshots are NOT redacted. Every *.png in this directory is stored exactly as
+captured, and they contain rendered member identifiers and account balances.
+They do not pass the scrubber and nothing masks them.
+
+This is a stated limit, not an oversight. Redacting pixels properly means
+optical recognition of known values over a screenshot, which is a larger problem
+than this system needs to solve, and a half-implementation that missed a
+rendering would be worse than an honest gap: it would imply a protection that
+was not there. So the limit is written down here, where someone looking at the
+screenshot will see it, and the mitigation is that these files are over
+synthetic data and stay in this directory.
+
+See docs/adr/0010-evidence-screenshots-are-not-redacted.md.
 `
+}
 
 const encode = Schema.encodeSync(EvidenceEventSchema)
 const validate = Schema.decodeUnknownResult(EvidenceEventSchema)
@@ -109,12 +167,12 @@ export const layer = (options: EvidenceOptions): Layer.Layer<Evidence, EvidenceU
     Effect.gen(function* () {
       const directory = join(options.root, options.runId)
       const logPath = join(directory, "events.jsonl")
-      const scrubber = options.scrubber ?? noScrubbing
+      const scrubber = options.scrubber
 
       yield* Effect.try({
         try: () => {
           mkdirSync(directory, { recursive: true })
-          writeFileSync(join(directory, "README.txt"), NOTE)
+          writeFileSync(join(directory, "README.txt"), note(options))
         },
         catch: (cause) => new EvidenceUnwritable({ path: directory, reason: String(cause) })
       })
