@@ -21,6 +21,7 @@ export type {
   AmbiguousTarget,
   ListDescription,
   ListItem,
+  OfferedControl,
   Resolution,
   ResolvedTarget,
   Selection,
@@ -30,6 +31,7 @@ export type {
   UnresolvedTarget
 } from "./resolution.ts"
 export {
+  controlsOfferedIn,
   describeMatch,
   isTokenSubsetOf,
   labelOf,

@@ -14,6 +14,33 @@
  */
 
 /**
+ * A correspondence assisted recovery proposed, carried to the person who will
+ * decide about it.
+ *
+ * This is data, and it is only ever data. Nothing between here and the Operator
+ * acts on it: the Step's Action still names the control the Artifact names, the
+ * run is still stopped, and the only thing this changes is what the person on
+ * the other end is shown. ADR-0005 draws the line at *acting*, and naming a
+ * control is not pressing one — but the line only holds if there is no
+ * expression anywhere that turns one of these into a gesture, and there is not.
+ *
+ * Promoting it into a stored Tenant Override needs a confirmation, exactly as
+ * promoting a proposed outcome into a Capability version needs one. See
+ * `ProposalAnswer`.
+ */
+export interface TargetProposal {
+  /** The control the Capability asked for and did not find, in its own words. */
+  readonly forTarget: string
+  /** What the consultation says corresponds to it on this screen. */
+  readonly control: string
+  /** 0 to 1, as the model gave it. Shown to the Operator, never acted on. */
+  readonly confidence: number
+  readonly rationale: string
+  /** Where the proposal is in this run's Evidence, e.g. `events.jsonl#assist-1`. */
+  readonly proposalRef: string
+}
+
+/**
  * What the automation says when it stops.
  *
  * Every field answers a question an Operator asks in the first ten seconds:
@@ -36,6 +63,16 @@ export interface InterventionRequest {
   readonly url: string
   /** The accessibility tree at the moment it stopped. */
   readonly accessibility: string
+  /**
+   * What assisted recovery proposed about the control that was missing, if it
+   * proposed anything.
+   *
+   * Absent on almost every Intervention, and absent is the honest shape: a run
+   * without `--assist`, a stall that is not a missing control, and a
+   * consultation that could not tell are three different situations and none of
+   * them has a proposal in it.
+   */
+  readonly proposal?: TargetProposal | undefined
 }
 
 /** A raised Intervention: the request, plus who raised it and when. */
@@ -100,6 +137,29 @@ export type ControlReturnClassification = "resolved" | "unresolved"
  */
 export type NextTimeAnswer = "automation_handles_it" | "always_stop_here" | "not_asked"
 
+/**
+ * The second question, asked only when there is a proposal to ask about.
+ *
+ * `nextTime` is asked at every return of control, because every episode is about
+ * *a state* and the question "what should automation do next time it meets this
+ * one" is always well posed. This one is not: it asks whether a specific control
+ * on a specific screen is the correspondent of a specific Target, and that
+ * question does not exist unless a consultation proposed one. So it is optional
+ * on `ControlReturn` — an interface with no proposal on screen must not be made
+ * to answer about one — and required on the record, where `not_asked` says
+ * plainly that it never came up.
+ *
+ * `rejected` is a real answer and not the same as `not_asked`. A person who
+ * looked at `Find`, decided it is not the search button, and said so has told the
+ * system something worth having in the record; a person who was never shown it
+ * has not.
+ */
+export type ProposalAnswer = "confirmed" | "rejected" | "not_asked"
+
+/** How the second question reads on the operator interface and in a report. */
+export const THE_PROPOSAL_QUESTION =
+  "Assisted recovery could not find one control and proposes a correspondent. Is it right?"
+
 /** What an Operator submits when they hand the Session back. */
 export interface ControlReturn {
   /** Who is handing it back. Written into Evidence; never inferred. */
@@ -109,6 +169,15 @@ export interface ControlReturn {
   readonly detail: string
   /** Their answer to the one question. Required, so it can never be implied. */
   readonly nextTime: NextTimeAnswer
+  /**
+   * Whether the proposed correspondent is right. Only meaningful when the
+   * Intervention carried a proposal; absent reads as `not_asked`.
+   *
+   * This is the confirmation ADR-0006 requires before a Tenant Override is
+   * written. A model proposed it, this field is a person agreeing, and nothing
+   * is stored without both.
+   */
+  readonly confirmProposal?: ProposalAnswer | undefined
 }
 
 /**
@@ -137,6 +206,14 @@ export interface InterventionRecord {
    * next time. `not_asked` until somebody is asked, and after an expiry.
    */
   readonly nextTime: NextTimeAnswer
+  /**
+   * What the Operator said about the proposed correspondent, or `not_asked`.
+   *
+   * Required here even though it is optional on `ControlReturn`, for the same
+   * reason `nextTime` is: a record a reader cannot tell "they said no" from
+   * "nobody asked" is a record that cannot justify what was written from it.
+   */
+  readonly confirmProposal: ProposalAnswer
 }
 
 /**
@@ -166,5 +243,6 @@ export const raise = (intervention: Intervention): InterventionRecord => ({
   returnedAt: undefined,
   classification: undefined,
   detail: undefined,
-  nextTime: "not_asked"
+  nextTime: "not_asked",
+  confirmProposal: "not_asked"
 })

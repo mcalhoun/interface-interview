@@ -95,6 +95,9 @@ const record = (over: Partial<InterventionRecord> = {}): InterventionRecord => (
   classification: "resolved",
   detail: "released the hold as an authorized supervisor",
   nextTime: "always_stop_here",
+  // No consultation proposed a control in these episodes, so the second
+  // question never came up. Ticket 16.
+  confirmProposal: "not_asked",
   ...over
 })
 

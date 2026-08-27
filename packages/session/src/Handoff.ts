@@ -362,8 +362,9 @@ export const sessionControl = (
               operator: "(nobody)",
               classification: "unattended",
               detail: settled.closed.detail ?? "the wait expired",
-              // Nobody arrived, so the one question was never put to anybody.
-              nextTime: "not_asked"
+              // Nobody arrived, so neither question was put to anybody.
+              nextTime: "not_asked",
+              confirmProposal: "not_asked"
             })
             return {
               resumed: false,
@@ -467,7 +468,12 @@ export const sessionControl = (
             // The answer to the one question, recorded on the episode it was
             // asked about. Ticket 13's Amendment reads it from here, together
             // with `actions`, which is the other half of ADR-0004's table.
-            nextTime: body.nextTime
+            nextTime: body.nextTime,
+            // The second question, when there was one to ask. An absent answer
+            // is `not_asked` rather than a refusal: the same careful direction
+            // the operator interface takes, and for the same reason — a field
+            // nobody filled in must never read as a confirmation.
+            confirmProposal: body.confirmProposal ?? "not_asked"
           },
           // Not `automation`. The Operator has finished; the automation has not
           // yet noticed. Those are two facts and this state keeps them apart.
@@ -481,7 +487,8 @@ export const sessionControl = (
               operator: body.operator,
               classification: body.classification,
               detail: body.detail,
-              nextTime: body.nextTime
+              nextTime: body.nextTime,
+              confirmProposal: body.confirmProposal ?? "not_asked"
             })
           ),
           // Only now: the run wakes to a state that already says it may proceed.

@@ -12,11 +12,21 @@
  *
  * Not here, and that is the point of the shape of this file. What this module
  * defines is a **port** — `Advisor` — whose one operation takes a description of
- * a stuck Step and returns a `AssistReply`. Look at what an `AssistReply` can
- * be: a proposed outcome code with a confidence and a rationale, or an admission
- * that it could not tell. There is no Target in it, no url, no verb, no value.
+ * a stuck Step and returns an `AssistReply`. Look at what an `AssistReply` can
+ * be: a proposed outcome code with a confidence and a rationale, the *name* of a
+ * control the screen is offering, or an admission that it could not tell. There
+ * is no Target in it, no url, no verb, no value, no selector and no coordinate.
  * An implementation cannot ask this engine to click something because the type
  * it returns has nowhere to say so.
+ *
+ * The third arm is ticket 16's and is worth reading twice, because it is the one
+ * that looks like it might act. It carries a control's *name*, chosen from a
+ * closed list of what is on the screen. A name is not a Target — there is no
+ * role, no scope, no ordinal — and there is no expression in the engine that
+ * builds one from it. What happens to it is that it is recorded, put on the
+ * Intervention, and shown to the person the run was already going to. Promoting
+ * it into a stored Tenant Override needs that person's confirmation, exactly as
+ * promoting a classification into a Capability version needs one.
  *
  * The implementation on the other side of that port (`@cua/agent`'s
  * `modelAdvisor`) is stricter still: the toolkit it hands the model contains no
@@ -121,6 +131,28 @@ export const ASSIST_QUESTION =
   "Which of this capability's own outcome codes, if any, does the screen below mean? " +
   "Do not propose an action: nothing you return can touch this application."
 
+/**
+ * The question asked when a control the Step named is not on the screen.
+ *
+ * A second constant rather than a sentence assembled at the call site, for
+ * exactly the reason there is a first one: what an auditor reads in the log has
+ * to be what was asked, not a paraphrase of it. Which of the two is put is a
+ * choice between two values, and the engine makes it from the shape of the
+ * stall.
+ *
+ * It asks two things because the screen could be either. A control that is not
+ * there is very often the application answering — SPEC's reason for routing zero
+ * matches into the ladder at all — and sometimes it is simply the institution
+ * calling the button something else. The second half is a *proposal for a
+ * person*, and the sentence says so, because a model that thought its answer
+ * would be pressed would be answering a different question.
+ */
+export const ASSIST_TARGET_QUESTION =
+  "The control listed below as missing is not on this screen. Either the screen means one of " +
+  "this capability's own outcome codes, or this institution calls that control something " +
+  "else. Say which. A control you name is a proposal for a person to confirm and nothing " +
+  "will be pressed on your say-so: nothing you return can touch this application."
+
 // ---------------------------------------------------------------------------
 // The port
 // ---------------------------------------------------------------------------
@@ -137,6 +169,26 @@ export const ASSIST_QUESTION =
 export interface AssistCandidate {
   readonly code: string
   readonly meaning: string
+}
+
+/**
+ * One control the screen is currently offering, as an operator would point at it.
+ *
+ * The same discipline `AssistCandidate` follows, applied to the other axis: the
+ * legal answers are read off the live tree rather than written by the model, so
+ * a proposed control is one that is *on the screen*. There is no free-text field
+ * here and none in the tool built from it, which is why an invented control
+ * fails schema validation before anything sees it.
+ *
+ * `region` is the panel it sits in, which is what tells `Look Up` in the
+ * Cross-Reference panel apart from `Find` in the search panel. A person deciding
+ * whether to confirm needs it, and so does the model.
+ */
+export interface AssistControl {
+  readonly name: string
+  readonly role: string
+  /** The panel heading it sits under, or `""` when it sits in no named region. */
+  readonly region: string
 }
 
 /**
@@ -177,6 +229,22 @@ export interface AssistConsultation {
   readonly accessibility: string
   /** Every code the model may choose. Closed, and never empty when consulted. */
   readonly candidates: ReadonlyArray<AssistCandidate>
+  /**
+   * The control the Step asked for and did not find, in the Target's own words.
+   *
+   * Present only when the stall is a missing control. When it is absent there is
+   * nothing to propose a correspondent *for*, and `controls` is empty too.
+   */
+  readonly missing?: string | undefined
+  /**
+   * Every control the screen offers, if a correspondent may be proposed at all.
+   *
+   * Empty on a Checkpoint failure and on a run where the stall was not a missing
+   * control. An empty list is how the `proposeTarget` tool comes to not exist for
+   * that consultation: the toolkit is built from this, so there is no verb to
+   * misuse rather than a verb that gets refused.
+   */
+  readonly controls?: ReadonlyArray<AssistControl> | undefined
 }
 
 /**
@@ -192,6 +260,29 @@ export type AssistReply =
       /** One of the consultation's `candidates`. Checked again on arrival. */
       readonly proposedOutcome: string
       /** 0 to 1. Compared against `ASSIST_CONFIDENCE_FLOOR`. */
+      readonly confidence: number
+      readonly rationale: string
+    }
+  | {
+      /**
+       * "This screen calls that control something else, and here is which."
+       *
+       * The third arm, and the one that has to be read carefully. It still
+       * cannot describe an action: there is no verb in it, no value to type, no
+       * coordinate, and `proposedControl` is one of the consultation's own
+       * `controls` — a name read off the live screen, checked again on arrival.
+       * What it produces is a sentence for a person, and the only thing in this
+       * system that can turn it into a stored Override is somebody confirming it
+       * at return of control (ADR-0006).
+       *
+       * Widening this to carry a Target — a role, a scope, an ordinal, anything
+       * the engine could resolve — is how someone would break ADR-0005, and it
+       * would have to be done here and on purpose.
+       */
+      readonly _tag: "TargetProposed"
+      /** One of the consultation's `controls`. Checked again on arrival. */
+      readonly proposedControl: string
+      /** 0 to 1. Compared against the same floor a classification is. */
       readonly confidence: number
       readonly rationale: string
     }
@@ -306,6 +397,24 @@ export type AssistOutcome =
       /** Where the proposal is in this run's Evidence. Travels to the caller. */
       readonly proposalRef: string
     }
+  /**
+   * A correspondent for a missing control, proposed and recorded, and **not
+   * acted on**.
+   *
+   * Deliberately not a sibling of `Proposed` in behaviour, only in shape.
+   * `Proposed` ends the run with an answer; this one changes nothing about the
+   * run at all — it is carried to the person the run was already going to, and
+   * the rung below decides nothing differently because of it. That asymmetry is
+   * the whole of ADR-0005 at this rung: a classification is a conclusion the
+   * system may act on, and a control is a suggestion only a person may act on.
+   */
+  | {
+      readonly _tag: "TargetSuggested"
+      readonly control: string
+      readonly confidence: number
+      readonly rationale: string
+      readonly proposalRef: string
+    }
   | { readonly _tag: "NotProposed"; readonly why: string }
 
 /**
@@ -377,10 +486,11 @@ export const consultAssist = (
       return notProposed("assisted recovery was not enabled for this run (--assist)")
     }
 
-    if (consultation.candidates.length === 0) {
+    const controls = consultation.controls ?? []
+    if (consultation.candidates.length === 0 && controls.length === 0) {
       return notProposed(
-        `${consultation.capability} names no outcome code for this state, so there is ` +
-          `nothing a classification could propose`
+        `${consultation.capability} names no outcome code for this state and the screen ` +
+          `offers no control to propose, so there is nothing a consultation could return`
       )
     }
 
@@ -450,6 +560,57 @@ export const consultAssist = (
       return yield* decline(
         `assisted recovery could not classify this state: ${reply.rationale}`
       )
+    }
+
+    /**
+     * The proposed-control path, which records and then hands over.
+     *
+     * Note what is *not* here and is one line above for a classification: there
+     * is no branch that returns something the engine performs. The value that
+     * leaves here is `TargetSuggested`, the engine puts it on the Intervention,
+     * and the next thing that happens is a person reading it.
+     */
+    if (reply._tag === "TargetProposed") {
+      // Checked again, though the tool's own vocabulary was built from this
+      // list. Same reason as below: a control nobody can see on the screen is
+      // exactly the thing a person must never be asked to confirm.
+      const offered = controls.some((control) => control.name === reply.proposedControl)
+      if (!offered) {
+        return yield* decline(
+          `assisted recovery proposed a control this screen does not offer; only ` +
+            `${controls.map((control) => JSON.stringify(control.name)).join(", ")} were on it`
+        )
+      }
+
+      const worthShowing = reply.confidence >= floor
+      yield* gate.record({
+        kind: "assist.target_proposal",
+        stepId: consultation.stepId,
+        assistId,
+        forTarget: consultation.missing ?? "(no control named)",
+        proposedControl: reply.proposedControl,
+        confidence: reply.confidence,
+        rationale: reply.rationale,
+        // "Carried to a person", never "acted on". Nothing in this system can
+        // act on one of these, so there is no stronger sense for it to have.
+        accepted: worthShowing
+      })
+
+      if (!worthShowing) {
+        return notProposed(
+          `assisted recovery proposed the control ${JSON.stringify(reply.proposedControl)} at ` +
+            `confidence ${reply.confidence.toFixed(2)}, below the ${floor.toFixed(2)} this run ` +
+            `requires before putting a suggestion in front of somebody`
+        )
+      }
+
+      return {
+        _tag: "TargetSuggested",
+        control: reply.proposedControl,
+        confidence: reply.confidence,
+        rationale: reply.rationale,
+        proposalRef: `events.jsonl#${assistId}`
+      }
     }
 
     // Checked again, though the Advisor's own vocabulary is built from the same

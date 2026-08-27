@@ -20,6 +20,15 @@ export {
   findMember
 } from "./members.ts"
 export type { Router } from "./routes.ts"
+export type { Tenant } from "./tenants.ts"
+export {
+  COMMUNITY_CU,
+  DEFAULT_TENANT,
+  HERITAGE_CORE,
+  TENANTS,
+  accountNameFor,
+  tenantFor
+} from "./tenants.ts"
 export { router } from "./routes.ts"
 export type { LegacyCore, LegacyCoreOptions } from "./server.ts"
 export { DEFAULT_PORT, serve } from "./server.ts"

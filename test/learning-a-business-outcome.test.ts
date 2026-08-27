@@ -79,6 +79,9 @@ const record = (over: Partial<InterventionRecord> = {}): InterventionRecord => (
   classification: "unresolved",
   detail: "there is no such account to open",
   nextTime: "automation_handles_it",
+  // No consultation proposed a control in these episodes, so the second
+  // question never came up. Ticket 16.
+  confirmProposal: "not_asked",
   ...over
 })
 

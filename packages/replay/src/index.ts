@@ -13,6 +13,7 @@ export type {
   Advisor,
   AssistCandidate,
   AssistConsultation,
+  AssistControl,
   AssistGate,
   AssistOptions,
   AssistOutcome,
@@ -22,16 +23,20 @@ export {
   ASSIST_BUDGET_PER_RUN,
   ASSIST_CONFIDENCE_FLOOR,
   ASSIST_QUESTION,
+  ASSIST_TARGET_QUESTION,
   AssistUnavailable,
   consultAssist,
   isProposable,
   proposableOutcomes
 } from "./assist.ts"
 
+export type { OverrideRequest, ProposedOverride } from "./override.ts"
+export { proposeOverride } from "./override.ts"
+
 export type { CheckpointOutcome, EvaluationContext, StepReadings } from "./checkpoint.ts"
 export { DEFAULT_CHECKPOINT_MILLIS, evaluate as evaluateCheckpoint, resolveValue } from "./checkpoint.ts"
 
-export type { ReplayRequest } from "./engine.ts"
+export type { AppliedOverride, ReplayRequest } from "./engine.ts"
 export { replayCapability } from "./engine.ts"
 
 export type { RunEvidenceOptions } from "./redaction.ts"

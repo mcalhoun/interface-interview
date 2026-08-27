@@ -3,13 +3,16 @@
  *
  *   bun run replay member.account-balance --memberId 12345
  *   bun run replay member.account-balance --memberId 12345 --accountType Checking
- *   bun run replay member.account-balance --memberId 22222   # a tenant whose
- *                                                            # labels differ
+ *   bun run replay member.account-balance --memberId 22222   # a member whose
+ *                                                            # account labels differ
+ *   bun run replay member.account-balance --memberId 12345 --tenant community-cu
  *   bun run replay member.account-balance --memberId 12345 --headed
  *   bun run replay member.account-balance --memberId 12345 --baseUrl http://host:1234
  *
- * With no `--baseUrl`, Heritage Core starts in-process on a free port, so the
- * demo is one command with nothing to set up first.
+ * With no `--baseUrl`, the mock core starts in-process on a free port, so the
+ * demo is one command with nothing to set up first. `--tenant` picks which
+ * institution's installation that is, and applies that institution's stored
+ * override if it has one.
  *
  * ## The ordering here is the point
  *
@@ -44,12 +47,19 @@ import { modelAdvisor, providerFor } from "@cua/agent"
 import { serve } from "@cua/legacy-core"
 import {
   type CapabilityArtifact,
+  type TenantOverride,
   ARTIFACTS_DIRECTORY,
+  OVERRIDES_DIRECTORY,
+  applyOverride,
   describeOutputValue,
+  describeOverride,
   listCapabilities,
+  listTenants,
   loadArtifact,
+  loadOverride,
   prepareInputs,
-  writeArtifact
+  writeArtifact,
+  writeOverride
 } from "@cua/artifact"
 import type { EvidenceUnwritable } from "@cua/evidence"
 import { DEFAULT_OPERATOR_PORT, serveOperator } from "@cua/operator"
@@ -76,9 +86,11 @@ import { type SurfaceUnavailable, playwrightSurface } from "@cua/surface"
 import { Console, Effect, Layer, Result } from "effect"
 import type { Scope } from "effect/Scope"
 import {
+  type AppliedOverride,
   type ReplayResult,
   evidenceForRun,
   proposeAmendment,
+  proposeOverride,
   replayCapability,
   scrubberFor
 } from "./index.ts"
@@ -92,7 +104,13 @@ const usage = (): string =>
     "",
     "options:",
     "  --baseUrl <url>   the tenant installation to run against",
-    "                    (default: start Heritage Core in-process on a free port)",
+    "                    (default: start the mock core in-process on a free port)",
+    "  --tenant <key>    which institution this run is against. Starts that",
+    "                    tenant's installation of the mock core, and applies that",
+    "                    tenant's stored override if it has one. The capability",
+    "                    itself is unchanged: an override is a scoped delta, and",
+    "                    a tenant with no file here runs the vendor document as it",
+    "                    stands, which is the case for most of them",
     "  --version <ver>   a specific artifact version (default: the latest stored)",
     `  --policy <name>   the policy in force (default: ${DEFAULT_POLICY}), by name or path`,
     "  --headed          watch it happen in a visible browser",
@@ -104,17 +122,23 @@ const usage = (): string =>
     "                    checkpoint is a hard failure, because nobody is watching",
     "  --assist          allow one bounded consultation of a model when a step",
     "                    cannot be resolved, before anybody is woken. The model",
-    "                    has no acting operations available to it at all: it",
-    "                    reads the stuck screen and proposes one of this",
-    "                    capability's own outcome codes with a confidence. A",
-    "                    confident proposal returns an outcome marked assisted;",
-    "                    it never writes anything to artifacts/. Off by default,",
-    "                    and denied anyway by a policy with no assist: block",
+    "                    has no acting operations available to it at all. It",
+    "                    reads the stuck screen and either proposes one of this",
+    "                    capability's own outcome codes with a confidence, or —",
+    "                    when a named control was simply not there — names one of",
+    "                    the controls that is, for a person to confirm. A",
+    "                    confident classification returns an outcome marked",
+    "                    assisted; a named control is never pressed and is only",
+    "                    ever shown to whoever the run stops for. Neither writes",
+    "                    anything to artifacts/. Off by default, and denied anyway",
+    "                    by a policy with no assist: block",
     "  --operatorPort <n>       port for the operator interface (default 4180)",
     "  --handoffWait <seconds>  how long a paused run waits for someone",
-    "  --noAmend         do not store what an intervention taught this capability.",
-    "                    Without it, an operator answering yes to the one question",
-    "                    at return-of-control cuts a new version and prints the diff",
+    "  --noAmend         do not store what an intervention taught this capability,",
+    "                    or what it confirmed about this tenant's screens. Without",
+    "                    it, an operator answering yes at return-of-control cuts a",
+    "                    new version and prints the diff, or writes the confirmed",
+    "                    tenant override and says where it went",
     "  --amendTo <ver>   the version an amendment is cut as (default: next minor)",
     "  --expireSessionAfter <n>",
     "                    arm Heritage Core's one-shot session-expiry toggle after",
@@ -126,7 +150,12 @@ const usage = (): string =>
     "  (bun run catalog prints each one's inputs, outputs and the line to call it with)",
     "",
     "policies:",
-    ...listPolicies(POLICIES_DIRECTORY).map((name) => `  ${name}`)
+    ...listPolicies(POLICIES_DIRECTORY).map((name) => `  ${name}`),
+    "",
+    "tenants with a stored override:",
+    ...(listTenants(OVERRIDES_DIRECTORY).length === 0
+      ? ["  (none — every tenant so far is absorbed by matching alone)"]
+      : listTenants(OVERRIDES_DIRECTORY).map((name) => `  ${name}`))
   ].join("\n")
 
 interface Argv {
@@ -171,6 +200,7 @@ const parse = (argv: ReadonlyArray<string>): Argv => {
  */
 const RESERVED = new Set([
   "baseUrl",
+  "tenant",
   "version",
   "policy",
   "operatorPort",
@@ -355,8 +385,80 @@ const amend = (
     }
   })
 
+/**
+ * Store what an Operator confirmed about this Tenant's screens, and say so.
+ *
+ * The sibling of `amend` above, and it happens without a further confirmation
+ * for the same reason: the confirmation already happened, from the person who
+ * was looking at the screen. What protects the store is that the change is one
+ * shape — a control's name, on a step that already names one — that it lands in
+ * a tenant's own file rather than in the capability, and that it is printed the
+ * moment it is written.
+ *
+ * Nothing under `artifacts/` is touched by any path through this function. That
+ * is SPEC user story 55, and it is a property of what `declareTargetOverride` can
+ * build rather than a rule anybody has to remember.
+ */
+const confirmOverride = (
+  artifact: CapabilityArtifact,
+  existing: TenantOverride | undefined,
+  episodes: ReadonlyArray<InterventionRecord>,
+  scrub: (text: string) => string,
+  argv: Argv
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const tenant = argv.options["tenant"]
+    if (tenant === undefined || argv.switches.has("noAmend")) return
+
+    let carried = existing
+    for (const record of episodes) {
+      const proposal = proposeOverride({
+        artifact,
+        tenant,
+        record,
+        scrub,
+        ...(carried === undefined ? {} : { existing: carried })
+      })
+
+      // Silent for the ordinary case: almost no episode carries a proposal, and
+      // saying so every time would train everyone to skip the line that matters.
+      if (proposal._tag === "Unchanged") continue
+
+      if (proposal._tag === "Refused") {
+        yield* Console.error("")
+        yield* Console.error(`OVERRIDE REFUSED  ${proposal.refusal.message}`)
+        yield* Console.error(
+          "  the operator's confirmation was recorded in the evidence; nothing was stored"
+        )
+        continue
+      }
+
+      const stored = writeOverride(OVERRIDES_DIRECTORY, proposal.override)
+      if (Result.isFailure(stored)) {
+        yield* Console.error("")
+        yield* Console.error(`OVERRIDE NOT STORED  ${stored.failure.message}`)
+        continue
+      }
+      carried = proposal.override
+
+      yield* Console.log("")
+      yield* Console.log(
+        `CONFIRMED  ${tenant} override for ${artifact.capability}@${artifact.version}`
+      )
+      yield* Console.log(`  ${proposal.because}`)
+      yield* Console.log(`  written to ${stored.success}`)
+      yield* Console.log(
+        `  the capability itself is unchanged: artifacts/${artifact.capability}/ has not been ` +
+          `written to`
+      )
+    }
+  })
+
 const run = (
   artifact: CapabilityArtifact,
+  effective: CapabilityArtifact,
+  applied: AppliedOverride | undefined,
+  override: TenantOverride | undefined,
   policy: CompiledPolicy,
   argv: Argv
 ): Effect.Effect<void, SurfaceUnavailable | EvidenceUnwritable, Scope> =>
@@ -383,10 +485,17 @@ const run = (
     }
 
     const expireSessionAfter = argv.options["expireSessionAfter"]
+    const tenant = argv.options["tenant"]
     const baseUrl =
       argv.options["baseUrl"] ??
       (yield* serve({
         port: 0,
+        // One flag, both halves of what a tenant is: the installation the run
+        // talks to, and the delta the document was assembled with. Pointing
+        // `--tenant` at one institution while `--baseUrl` points at another is
+        // possible and is the caller's business — it is also the fastest way to
+        // see an override refuse to apply.
+        ...(tenant === undefined ? {} : { tenant }),
         ...(expireSessionAfter === undefined
           ? {}
           : { expireSessionAfter: Number(expireSessionAfter) })
@@ -478,11 +587,15 @@ const run = (
       }
 
       const result = yield* replayCapability({
-        artifact,
+        // The *effective* document: the vendor's version plus this tenant's
+        // confirmed differences. Identical to the stored version when there are
+        // none, which is every tenant but one.
+        artifact: effective,
         inputs: inputs.success,
         baseUrl,
         runId,
-        ...(assist === undefined ? {} : { assist })
+        ...(assist === undefined ? {} : { assist }),
+        ...(applied === undefined ? {} : { appliedOverride: applied })
       })
 
       // Every episode this Session closed, read once, after the run is over.
@@ -494,7 +607,12 @@ const run = (
 
     const { result } = ran
     yield* report(result, policy, argv.switches.has("json"))
+    // Both readings of the same episodes, and both take the **base** artifact.
+    // An amendment is a new version of the vendor's document, and an override is
+    // a delta against it; neither is ever cut from a document that already has
+    // somebody else's delta folded into it.
     yield* amend(artifact, ran.episodes, scrubberFor(inputs.success), argv)
+    yield* confirmOverride(artifact, override, ran.episodes, scrubberFor(inputs.success), argv)
 
     // A Business Outcome exits zero: the application answered and the answer is
     // the product. An Intervention does not, because nothing was produced and a
@@ -549,7 +667,70 @@ const program = Effect.gen(function* () {
     return
   }
 
-  yield* run(artifact.success, policy.success, argv)
+  /**
+   * The tenant's delta, and the document the run actually executes.
+   *
+   * Loaded here, beside the artifact and the policy, and for the same reason
+   * they are: a document that cannot legally run should not cost anybody a
+   * browser. A tenant with no file is the ordinary case and is not an error —
+   * it is the result SPEC's multi-tenant argument is about, and the CLI says so
+   * out loud rather than silently doing nothing.
+   */
+  const tenant = argv.options["tenant"]
+  const override =
+    tenant === undefined
+      ? Result.succeed(undefined)
+      : loadOverride(OVERRIDES_DIRECTORY, tenant, argv.capability)
+  if (Result.isFailure(override)) {
+    yield* Console.error(`cannot run against ${tenant}: ${override.failure.message}`)
+    process.exitCode = 2
+    return
+  }
+
+  const effective =
+    override.success === undefined
+      ? Result.succeed(artifact.success)
+      : applyOverride(artifact.success, override.success)
+  if (Result.isFailure(effective)) {
+    yield* Console.error(effective.failure.message)
+    process.exitCode = 2
+    return
+  }
+
+  const applied: AppliedOverride | undefined =
+    override.success === undefined
+      ? undefined
+      : {
+          tenant: override.success.tenant,
+          baseVersion: artifact.success.version,
+          source: `${OVERRIDES_DIRECTORY}/${override.success.tenant}/${argv.capability}.yaml`,
+          entries: override.success.targets.map((entry) => ({
+            was: entry.was,
+            name: entry.name
+          }))
+        }
+
+  if (tenant !== undefined) {
+    yield* Console.log(
+      override.success === undefined
+        ? `tenant:   ${tenant} (no override: every difference is absorbed by matching)`
+        : `tenant:   ${tenant} (${applied?.source})`
+    )
+    if (override.success !== undefined) {
+      for (const line of describeOverride(override.success).split("\n")) {
+        yield* Console.log(`  ${line}`)
+      }
+    }
+  }
+
+  yield* run(
+    artifact.success,
+    effective.success,
+    applied,
+    override.success,
+    policy.success,
+    argv
+  )
 })
 
 Effect.runPromise(Effect.scoped(program)).catch((cause) => {
