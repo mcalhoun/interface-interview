@@ -78,6 +78,7 @@ import type {
   SurfaceAdapterService,
   SurfaceState,
   SurfaceUnavailable,
+  Target,
   TargetFailure
 } from "@cua/surface"
 import { describeMatch } from "@cua/surface"
@@ -120,8 +121,33 @@ export type CheckpointOutcome =
       readonly observed: string
     } & Observed)
 
+/**
+ * All of the Surface a Checkpoint may touch by itself.
+ *
+ * Deliberately not `SurfaceAdapterService`. `observe` and `resolveTarget` are
+ * perception: they look, and looking needs no permission. Everything in the
+ * Action vocabulary is missing from this type on purpose, so a Checkpoint cannot
+ * reach the adapter's acting methods even by accident — which matters because a
+ * Checkpoint is the one part of Replay that is *about* touching the live system
+ * without being a Step (ticket 07).
+ */
+export interface Perception {
+  readonly observe: SurfaceAdapterService["observe"]
+  readonly resolveTarget: SurfaceAdapterService["resolveTarget"]
+}
+
 export interface EvaluationContext {
-  readonly surface: SurfaceAdapterService
+  readonly surface: Perception
+  /**
+   * Reads a control's text, for a `targetReads` assertion.
+   *
+   * Supplied by the caller rather than taken off the adapter, because reading a
+   * control *is* an `extract` and every `extract` passes Policy first. The engine
+   * builds this function only after the gate has allowed every read the
+   * Checkpoint declares, so a reader that exists is a reader that was permitted.
+   * Nothing here can construct one.
+   */
+  readonly read: (target: Target) => Effect.Effect<string, TargetFailure>
   readonly inputs: ResolvedInputs
   readonly readings: StepReadings
 }
@@ -250,7 +276,7 @@ const check = (
       if (wanted === undefined) {
         return Effect.succeed("the artifact referred to a value this run does not have")
       }
-      return context.surface.extract(toSurfaceTarget(assertion.target)).pipe(
+      return context.read(toSurfaceTarget(assertion.target)).pipe(
         Effect.map((read) => (read.trim() === wanted ? undefined : `it reads ${JSON.stringify(read)}`)),
         Effect.catch(resolutionProblem(state))
       )

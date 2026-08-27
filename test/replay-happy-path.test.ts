@@ -138,7 +138,10 @@ it.live("every action passed the policy chokepoint before it happened", () =>
 
     const checks = events.filter((event) => event.kind === "policy.check")
     const actions = events.filter((event) => event.kind === "action")
-    expect(checks).toHaveLength(actions.length)
+    // One check per Action, and one more: ticket 07 put the read a Checkpoint's
+    // `targetReads` assertion performs through the same gate, because it reaches
+    // the adapter's `extract` however it is spelled. This capability has one.
+    expect(checks).toHaveLength(actions.length + 1)
     expect(checks.every((check) => check.kind === "policy.check" && check.verdict === "allow")).toBe(
       true
     )

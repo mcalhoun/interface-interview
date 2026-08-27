@@ -90,12 +90,28 @@ const Decide = event("decide", {
   action: Schema.String
 })
 
+/**
+ * Policy was asked, and this is what it said.
+ *
+ * One of these exists for every Action either mode performs, recorded before the
+ * Action reaches the adapter — which is the auditable form of SPEC user story 57.
+ * `policy` and `risk` are required rather than optional because the useful
+ * question a year later is not "was it allowed" but "under which document, and
+ * how did that document classify what it let through", and neither is
+ * recoverable from a bare verdict.
+ */
 const PolicyCheck = event("policy.check", {
   action: Schema.String,
   /** Where the action would land. What an origin allowlist is checked against. */
   subject: Schema.String,
   verdict: Schema.Literals(["allow", "deny"]),
-  reason: Schema.String
+  reason: Schema.String,
+  /** Which Policy document was in force. */
+  policy: Schema.String,
+  /** How that document's vocabulary classifies this Action type. */
+  risk: Schema.Literals(["safe", "risky", "unknown"]),
+  /** The origin the Action was judged against, absent before a page is open. */
+  origin: Schema.optional(Schema.String)
 })
 
 const ActionEvent = event("action", {

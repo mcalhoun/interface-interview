@@ -32,7 +32,14 @@ import {
   prepareInputs
 } from "@cua/artifact"
 import { type EvidenceUnwritable, evidenceFiles } from "@cua/evidence"
-import { permissivePolicy } from "@cua/policy"
+import {
+  type CompiledPolicy,
+  DEFAULT_POLICY,
+  POLICIES_DIRECTORY,
+  listPolicies,
+  loadPolicy,
+  policyFrom
+} from "@cua/policy"
 import { automationOwnedSession } from "@cua/session"
 import { type SurfaceUnavailable, playwrightSurface } from "@cua/surface"
 import { Console, Effect, Layer, Result } from "effect"
@@ -50,11 +57,15 @@ const usage = (): string =>
     "  --baseUrl <url>   the tenant installation to run against",
     "                    (default: start Heritage Core in-process on a free port)",
     "  --version <ver>   a specific artifact version (default: the latest stored)",
+    `  --policy <name>   the policy in force (default: ${DEFAULT_POLICY}), by name or path`,
     "  --headed          watch it happen in a visible browser",
     "  --json            print the whole ReplayResult rather than a summary",
     "",
     "capabilities:",
-    ...listCapabilities(ARTIFACTS_DIRECTORY).map((name) => `  ${name}`)
+    ...listCapabilities(ARTIFACTS_DIRECTORY).map((name) => `  ${name}`),
+    "",
+    "policies:",
+    ...listPolicies(POLICIES_DIRECTORY).map((name) => `  ${name}`)
   ].join("\n")
 
 interface Argv {
@@ -86,9 +97,13 @@ const parse = (argv: ReadonlyArray<string>): Argv => {
 }
 
 /** Everything the CLI consumes itself, so the rest is the capability's inputs. */
-const RESERVED = new Set(["baseUrl", "version"])
+const RESERVED = new Set(["baseUrl", "version", "policy"])
 
-const report = (result: ReplayResult, asJson: boolean): Effect.Effect<void> =>
+const report = (
+  result: ReplayResult,
+  policy: CompiledPolicy,
+  asJson: boolean
+): Effect.Effect<void> =>
   Effect.gen(function* () {
     if (asJson) {
       yield* Console.log(JSON.stringify(result, undefined, 2))
@@ -127,11 +142,13 @@ const report = (result: ReplayResult, asJson: boolean): Effect.Effect<void> =>
       yield* Console.log(`  [${step.checkpoint}] ${step.id}  ${step.intent}${read}`)
     }
     yield* Console.log("")
+    yield* Console.log(`policy:   ${policy.name} (${policy.source})`)
     yield* Console.log(`evidence: ${result.evidenceDirectory}`)
   })
 
 const run = (
   artifact: CapabilityArtifact,
+  policy: CompiledPolicy,
   argv: Argv
 ): Effect.Effect<void, SurfaceUnavailable | EvidenceUnwritable, Scope> =>
   Effect.gen(function* () {
@@ -157,7 +174,7 @@ const run = (
     // ADR-0003's compile-time proof rests on.
     const services = Layer.mergeAll(
       playwrightSurface({ headless: !argv.switches.has("headed") }),
-      permissivePolicy,
+      policyFrom(policy),
       evidenceFiles({ root: EVIDENCE_ROOT, runId, sessionId }),
       automationOwnedSession(sessionId)
     )
@@ -169,7 +186,7 @@ const run = (
       runId
     }).pipe(Effect.provide(services))
 
-    yield* report(result, argv.switches.has("json"))
+    yield* report(result, policy, argv.switches.has("json"))
     if (result.result === "failure") process.exitCode = 1
   })
 
@@ -191,7 +208,17 @@ const program = Effect.gen(function* () {
     return
   }
 
-  yield* run(artifact.success, argv)
+  // Resolved before anything opens, like the inputs and for the same reason: a
+  // policy that does not load is a run that does not happen. There is no
+  // unrestricted fallback to fall through to.
+  const policy = loadPolicy(POLICIES_DIRECTORY, argv.options["policy"] ?? DEFAULT_POLICY)
+  if (Result.isFailure(policy)) {
+    yield* Console.error(`cannot run under this policy: ${policy.failure.message}`)
+    process.exitCode = 2
+    return
+  }
+
+  yield* run(artifact.success, policy.success, argv)
 })
 
 Effect.runPromise(Effect.scoped(program)).catch((cause) => {
