@@ -42,22 +42,46 @@
     "packages/artifact": {
       "name": "@cua/artifact",
       "version": "0.0.0",
+      "dependencies": {
+        "@cua/surface": "workspace:*",
+        "effect": "4.0.0-rc.112",
+      },
     },
     "packages/evidence": {
       "name": "@cua/evidence",
       "version": "0.0.0",
+      "dependencies": {
+        "effect": "4.0.0-rc.112",
+      },
     },
     "packages/policy": {
       "name": "@cua/policy",
       "version": "0.0.0",
+      "dependencies": {
+        "effect": "4.0.0-rc.112",
+      },
     },
     "packages/replay": {
       "name": "@cua/replay",
       "version": "0.0.0",
+      "dependencies": {
+        "@cua/artifact": "workspace:*",
+        "@cua/evidence": "workspace:*",
+        "@cua/policy": "workspace:*",
+        "@cua/session": "workspace:*",
+        "@cua/surface": "workspace:*",
+        "effect": "4.0.0-rc.112",
+      },
+      "devDependencies": {
+        "@cua/legacy-core": "workspace:*",
+      },
     },
     "packages/session": {
       "name": "@cua/session",
       "version": "0.0.0",
+      "dependencies": {
+        "effect": "4.0.0-rc.112",
+      },
     },
     "packages/surface": {
       "name": "@cua/surface",

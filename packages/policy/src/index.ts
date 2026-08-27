@@ -1,9 +1,14 @@
 /**
- * The Policy engine. Every Action passes through it in both Discovery and Replay:
- * which origins may be reached, which Actions are permitted, and how conservatively
- * risky ones are treated.
- *
- * Scaffold only. Filled in by a later ticket.
+ * Policy: the one place that decides whether an Action may happen. Ticket 03
+ * builds the chokepoint every Action passes through; ticket 07 fills in the
+ * origin and action-type allowlists and the conservative treatment of risky
+ * Actions.
  */
 
-export {}
+export type { ActionRequest, PolicyVerdict } from "./Policy.ts"
+export {
+  ActionRequest as ActionRequestSchema,
+  permissive as permissivePolicy,
+  Policy,
+  PolicyVerdict as PolicyVerdictSchema
+} from "./Policy.ts"
