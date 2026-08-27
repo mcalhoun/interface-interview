@@ -32,8 +32,14 @@ import {
   prepareInputs
 } from "@cua/artifact"
 import { type EvidenceUnwritable, evidenceFiles } from "@cua/evidence"
+import { DEFAULT_OPERATOR_PORT, serveOperator } from "@cua/operator"
 import { permissivePolicy } from "@cua/policy"
-import { automationOwnedSession } from "@cua/session"
+import {
+  DEFAULT_HANDOFF_WAIT_MILLIS,
+  SessionControl,
+  handoffSession,
+  sessionControl
+} from "@cua/session"
 import { type SurfaceUnavailable, playwrightSurface } from "@cua/surface"
 import { Console, Effect, Layer, Result } from "effect"
 import type { Scope } from "effect/Scope"
@@ -52,6 +58,13 @@ const usage = (): string =>
     "  --version <ver>   a specific artifact version (default: the latest stored)",
     "  --headed          watch it happen in a visible browser",
     "  --json            print the whole ReplayResult rather than a summary",
+    "  --handoff         attend the run: start the operator interface, and pause",
+    "                    for a person instead of failing when a checkpoint will",
+    "                    not hold. Use with --headed; the operator works in that",
+    "                    window. Without it the run is unattended and a stuck",
+    "                    checkpoint is a hard failure, because nobody is watching",
+    "  --operatorPort <n>       port for the operator interface (default 4180)",
+    "  --handoffWait <seconds>  how long a paused run waits for someone",
     "",
     "capabilities:",
     ...listCapabilities(ARTIFACTS_DIRECTORY).map((name) => `  ${name}`)
@@ -86,7 +99,7 @@ const parse = (argv: ReadonlyArray<string>): Argv => {
 }
 
 /** Everything the CLI consumes itself, so the rest is the capability's inputs. */
-const RESERVED = new Set(["baseUrl", "version"])
+const RESERVED = new Set(["baseUrl", "version", "operatorPort", "handoffWait"])
 
 const report = (result: ReplayResult, asJson: boolean): Effect.Effect<void> =>
   Effect.gen(function* () {
@@ -110,6 +123,7 @@ const report = (result: ReplayResult, asJson: boolean): Effect.Effect<void> =>
       case "intervention_required":
         yield* Console.log(`${result.capability}@${result.version}  INTERVENTION REQUIRED`)
         yield* Console.log(`  at step ${result.stepId}: ${result.reason}`)
+        yield* Console.log(`  session:  ${result.sessionId}`)
         break
       case "failure":
         yield* Console.log(`${result.capability}@${result.version}  FAILURE`)
@@ -152,25 +166,66 @@ const run = (
     }`
     const sessionId = randomUUID()
 
+    const attended = argv.switches.has("handoff")
+    const waitSeconds = Number(argv.options["handoffWait"])
+
     // Only now does anything open. The four services the engine requires, and
     // nothing else: there is no language model in this layer, which is what
     // ADR-0003's compile-time proof rests on.
+    //
+    // `SessionControl` is in the composition alongside `Session`, and one Ref
+    // underlies both. It is the *operator's* half, which is why the operator
+    // interface can be handed it and the engine cannot: `Session` is what the
+    // engine requires, and nothing on it returns control to itself.
+    const evidence = evidenceFiles({ root: EVIDENCE_ROOT, runId, sessionId })
+    const control = sessionControl({
+      sessionId,
+      waitMillis: Number.isFinite(waitSeconds) && waitSeconds > 0
+        ? waitSeconds * 1000
+        : DEFAULT_HANDOFF_WAIT_MILLIS,
+      announce: (intervention, operatorUrl) =>
+        Console.log(
+          [
+            "",
+            `PAUSED at step ${intervention.stepId}: ${intervention.reason}`,
+            `  the live browser window is on ${intervention.url}`,
+            `  take control at ${operatorUrl}`,
+            ""
+          ].join("\n")
+        )
+    }).pipe(Layer.provideMerge(evidence))
+
     const services = Layer.mergeAll(
       playwrightSurface({ headless: !argv.switches.has("headed") }),
       permissivePolicy,
-      evidenceFiles({ root: EVIDENCE_ROOT, runId, sessionId }),
-      automationOwnedSession(sessionId)
+      handoffSession.pipe(Layer.provideMerge(control))
     )
 
-    const result = yield* replayCapability({
-      artifact,
-      inputs: inputs.success,
-      baseUrl,
-      runId
+    const result = yield* Effect.gen(function* () {
+      // Attaching the interface is what makes the run attended. An unattended
+      // run has nobody to escalate to, so the engine reports a hard failure
+      // rather than pausing for someone who is not coming.
+      if (attended) {
+        const operator = yield* serveOperator({
+          control: yield* SessionControl,
+          port: Number(argv.options["operatorPort"] ?? DEFAULT_OPERATOR_PORT)
+        })
+        yield* Console.log(`operator interface: ${operator.origin}`)
+      }
+
+      return yield* replayCapability({ artifact, inputs: inputs.success, baseUrl, runId })
     }).pipe(Effect.provide(services))
 
     yield* report(result, argv.switches.has("json"))
-    if (result.result === "failure") process.exitCode = 1
+
+    // A Business Outcome exits zero: the application answered and the answer is
+    // the product. An Intervention does not, because nothing was produced and a
+    // person is still required — that it is not a *failure* in the taxonomy does
+    // not make it a completed job. Callers that care about the difference read
+    // `result` rather than the exit code.
+    if (result.result === "failure" || result.result === "intervention_required") {
+      process.exitCode = 1
+    }
   })
 
 const program = Effect.gen(function* () {

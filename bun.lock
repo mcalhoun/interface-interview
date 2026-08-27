@@ -34,6 +34,10 @@
     "apps/operator": {
       "name": "@cua/operator",
       "version": "0.0.0",
+      "dependencies": {
+        "@cua/session": "workspace:*",
+        "effect": "4.0.0-rc.112",
+      },
     },
     "packages/agent": {
       "name": "@cua/agent",
@@ -67,6 +71,7 @@
       "dependencies": {
         "@cua/artifact": "workspace:*",
         "@cua/evidence": "workspace:*",
+        "@cua/operator": "workspace:*",
         "@cua/policy": "workspace:*",
         "@cua/session": "workspace:*",
         "@cua/surface": "workspace:*",
@@ -80,6 +85,7 @@
       "name": "@cua/session",
       "version": "0.0.0",
       "dependencies": {
+        "@cua/evidence": "workspace:*",
         "effect": "4.0.0-rc.112",
       },
     },

@@ -64,10 +64,17 @@ export const handle = (request: Request): Response => {
       if (member === undefined || account === undefined) {
         return html(systemMessagePage("Account could not be retrieved."), 404)
       }
+      // Supervisor credentials ride on the query string of the panel document
+      // itself, so releasing a hold is one full page load inside the iframe and
+      // this server keeps no session state. The outer Account Detail page never
+      // navigates while it happens.
       return html(
         url.pathname === "/account"
           ? accountDetailPage(member, account)
-          : accountDetailPanel(member, account)
+          : accountDetailPanel(member, account, {
+              supervisorId: url.searchParams.get("supervisorId") ?? "",
+              authorizationCode: url.searchParams.get("authorizationCode") ?? ""
+            })
       )
     }
 

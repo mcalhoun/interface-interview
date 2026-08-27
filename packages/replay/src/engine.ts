@@ -31,6 +31,24 @@
  * and the outer boundary folds it into the `failure` class of `ReplayResult`. So
  * the public signature has `never` in its error channel: every outcome is a value
  * the caller branches on, which is the entire point of the result contract.
+ *
+ * ## The human rung
+ *
+ * A Checkpoint that does not hold is not always the automation being broken.
+ * Sometimes the application has correctly refused, and getting past it needs
+ * authority rather than perception. When an Operator is reachable, this engine
+ * stops there, hands them the live Session, and waits (`handOff` below).
+ *
+ * Resuming re-asks the **Checkpoint**, never the Action. The Action already
+ * happened; what failed is the state it was supposed to produce, and a person has
+ * just changed that state by hand. Re-running the Action would at best be
+ * redundant and at worst irreversible — clicking a link that is no longer on the
+ * screen the Operator left behind. `evaluate` is idempotent, so asking again
+ * costs nothing and assumes nothing about what they did.
+ *
+ * That is also what "resumes from the paused step" means concretely: the fiber
+ * never unwound. Every reading taken before the pause is still in hand, the
+ * Steps before it do not run again, and the Steps after it run exactly once.
  */
 
 import { Effect, Result } from "effect"
@@ -54,7 +72,7 @@ import {
   SurfaceAdapter,
   describeTarget
 } from "@cua/surface"
-import { type StepReadings, evaluate, resolveValue } from "./checkpoint.ts"
+import { type CheckpointOutcome, type StepReadings, evaluate, resolveValue } from "./checkpoint.ts"
 import type { ReplayFailure, ReplayFailureBody, ReplayResult, StepRecord } from "./ReplayResult.ts"
 import { describeResult } from "./ReplayResult.ts"
 
@@ -165,7 +183,7 @@ export const replayCapability = (
     // One step
     // -----------------------------------------------------------------------
 
-    const runStep = (step: Step): Effect.Effect<void, ReplayFailure | EvidenceUnwritable> =>
+    const runStep = (step: Step): Effect.Effect<void, StepProblem> =>
       Effect.gen(function* () {
         const fail = failing(step)
 
@@ -195,27 +213,56 @@ export const replayCapability = (
         const read = yield* performAction(step, before.url)
         if (read !== undefined) readings.set(step.id, read)
 
-        const outcome = yield* evaluate({ surface, inputs, readings }, step.checkpoint).pipe(
+        // The same evaluation, available twice: once now, and once after an
+        // Operator has been in the session. It is idempotent, so re-asking is how
+        // the run finds out what they did rather than being told.
+        const verify = evaluate({ surface, inputs, readings }, step.checkpoint).pipe(
           Effect.catch((unavailable) =>
-            Effect.fail(
+            Effect.fail<StepProblem>(
               fail({
                 reason: "surface_failed",
                 expected: `to verify: ${step.checkpoint.description}`,
                 observed: unavailable.reason
               })
             )
+          ),
+          Effect.tap((outcome) =>
+            evidence.record({
+              kind: "checkpoint",
+              stepId: step.id,
+              description: step.checkpoint.description,
+              verdict: outcome.held ? "held" : "failed",
+              expected: outcome.held ? step.checkpoint.description : outcome.expected,
+              observed: outcome.held ? "the intended state was reached" : outcome.observed,
+              waitedMillis: outcome.waitedMillis
+            })
           )
         )
 
-        yield* evidence.record({
-          kind: "checkpoint",
-          stepId: step.id,
-          description: step.checkpoint.description,
-          verdict: outcome.held ? "held" : "failed",
-          expected: outcome.held ? step.checkpoint.description : outcome.expected,
-          observed: outcome.held ? "the intended state was reached" : outcome.observed,
-          waitedMillis: outcome.waitedMillis
-        })
+        let outcome = yield* verify
+        let escalation: Escalated | undefined
+
+        if (!outcome.held) {
+          // The Recovery Ladder's human rung. Everything above it — waiting,
+          // retrying, matching harder — has already had its turn by the time a
+          // Checkpoint has spent its whole bound and still does not hold.
+          const handed = yield* handOff(step, outcome)
+          if (handed.resumed) {
+            outcome = yield* verify
+            if (!outcome.held) {
+              // They said they had resolved it and the screen disagrees. Not a
+              // failure of the automation, and not something to escalate a
+              // second time: report it and let a person read the record.
+              escalation = escalated(
+                step,
+                outcome,
+                `control was returned as resolved, but ${outcome.expected} is still not true`
+              )
+            }
+          } else {
+            escalation = handed.escalation
+          }
+        }
 
         steps.push({
           id: step.id,
@@ -225,8 +272,9 @@ export const replayCapability = (
           ...(read === undefined ? {} : { read })
         })
 
-        if (!outcome.held) {
-          return yield* Effect.fail(
+        if (outcome.held) return
+        return yield* Effect.fail<StepProblem>(
+          escalation ??
             fail({
               reason: "checkpoint_failed",
               expected: outcome.expected,
@@ -236,9 +284,68 @@ export const replayCapability = (
               accessibility: outcome.state.accessibility,
               url: outcome.state.url
             })
-          )
-        }
+        )
       })
+
+    /**
+     * Hand the live Session to a person, and wait.
+     *
+     * Asking `handoffAvailable` first is the whole difference between an
+     * Intervention and a Hard Failure. A Checkpoint that will not hold on an
+     * unattended run has nobody to resolve it, and returning
+     * `intervention_required` into an empty room would name a person as
+     * responsible for a run no person can see. So an unattended run reports the
+     * Hard Failure it always did, and only a run with an Operator reachable stops
+     * and asks.
+     *
+     * ## Seam
+     *
+     * Only a failed Checkpoint escalates today, because it is the case where the
+     * Action landed and the resulting *state* is the problem — which is exactly
+     * what a person can change by hand. Ticket 05 routes a Target that matched
+     * nothing into the same rung; note that its resume semantics differ, because
+     * there the Action never ran and re-asking the Checkpoint would prove
+     * nothing. That branch re-attempts the Step.
+     */
+    const handOff = (
+      step: Step,
+      outcome: Extract<CheckpointOutcome, { held: false }>
+    ): Effect.Effect<
+      { readonly resumed: boolean; readonly escalation: Escalated | undefined },
+      EvidenceUnwritable
+    > =>
+      Effect.gen(function* () {
+        if (!(yield* session.handoffAvailable)) {
+          return { resumed: false, escalation: undefined }
+        }
+
+        const episode = yield* session.pause({
+          capability: artifact.capability,
+          version: artifact.version,
+          runId,
+          stepId: step.id,
+          stepIntent: step.intent,
+          reason: `the checkpoint "${step.checkpoint.description}" did not hold`,
+          detail: `expected ${outcome.expected}; observed ${outcome.observed}`,
+          url: outcome.state.url,
+          accessibility: outcome.state.accessibility
+        })
+
+        return episode.resumed
+          ? { resumed: true, escalation: undefined }
+          : { resumed: false, escalation: escalated(step, outcome, episode.reason) }
+      })
+
+    const escalated = (
+      step: Step,
+      outcome: Extract<CheckpointOutcome, { held: false }>,
+      reason: string
+    ): Escalated => ({
+      _tag: "Escalated",
+      reason: `${step.checkpoint.description}: ${reason}`,
+      stepId: step.id,
+      accessibility: outcome.state.accessibility
+    })
 
     /**
      * Carries out one Action and returns what it read, if it read anything.
@@ -392,21 +499,32 @@ export const replayCapability = (
 
     const result: ReplayResult = yield* body.pipe(
       Effect.catch((problem) =>
-        Effect.succeed<ReplayResult>({
-          result: "failure",
-          ...common,
-          steps,
-          failure: isEvidenceProblem(problem)
+        Effect.succeed<ReplayResult>(
+          isEscalation(problem)
             ? {
-                reason: "evidence_failed",
-                stepId: steps.at(-1)?.id ?? "run",
-                stepIntent: "record what happened",
-                expected: "the run to be auditable",
-                observed: problem.reason,
-                path: problem.path
+                result: "intervention_required",
+                ...common,
+                steps,
+                reason: problem.reason,
+                stepId: problem.stepId,
+                accessibility: problem.accessibility
               }
-            : problem
-        })
+            : {
+                result: "failure",
+                ...common,
+                steps,
+                failure: isEvidenceProblem(problem)
+                  ? {
+                      reason: "evidence_failed",
+                      stepId: steps.at(-1)?.id ?? "run",
+                      stepIntent: "record what happened",
+                      expected: "the run to be auditable",
+                      observed: problem.reason,
+                      path: problem.path
+                    }
+                  : problem
+              }
+        )
       )
     )
 
@@ -417,6 +535,33 @@ export const replayCapability = (
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * A Step stopped because a person is needed, not because anything is broken.
+ *
+ * Internal, and carried in the same error channel as a `ReplayFailure` purely so
+ * that one Step abandoning the run short-circuits the loop. The boundary turns it
+ * into the `intervention_required` class, which is a *result* — a run that ends
+ * this way reports no failure anywhere, exactly as a Business Outcome does.
+ *
+ * It is not a member of `ReplayFailure` for that reason. Putting it there would
+ * make "an Intervention is a kind of failure" true in the type that the result
+ * contract exists to keep it false in.
+ */
+interface Escalated {
+  readonly _tag: "Escalated"
+  /** Why the run is not continuing, in a sentence a caller can be given. */
+  readonly reason: string
+  readonly stepId: string
+  /** What the screen showed when it stopped, so an Operator has context. */
+  readonly accessibility: string
+}
+
+/** Everything one Step can stop for. */
+type StepProblem = ReplayFailure | EvidenceUnwritable | Escalated
+
+const isEscalation = (problem: StepProblem): problem is Escalated =>
+  "_tag" in problem && problem._tag === "Escalated"
 
 /** Attaches the Step a failure happened in, so no failure can omit it. */
 const failing =

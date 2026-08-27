@@ -1,32 +1,51 @@
 /**
  * Session ownership: who is currently permitted to act on the live browser.
  *
- * **Ticket 12 owns the transfer. Ticket 03 owns the guard and the identity.**
- *
  * CONTEXT.md defines Control Owner as "always answerable, never implied". The
  * cheapest way to make that untrue is to build the engine first and add ownership
  * afterwards, because by then "who holds the session" is implied by whichever
- * function happens to be on the stack. So the Replay executor asks
- * `Session.claim` before every single Surface Action, today, while the answer is
- * always yes.
+ * function happens to be on the stack. So the Replay executor asked
+ * `Session.claim` before every single Surface Action from ticket 03 onward, while
+ * the answer was always yes — and the guard's failure type has been in the
+ * executor's signature since then, which is why ticket 12 changed the value of a
+ * field rather than the shape of every Step.
  *
- * SPEC's state machine is `AUTOMATION → PAUSED → HUMAN → RESUME_REQUESTED →
- * AUTOMATION`. Only `AUTOMATION` is reachable at this point. What ticket 12 adds:
+ * ## The state machine
  *
- *   1. The other four states and the transitions between them.
- *   2. `pause`, which raises an Intervention and blocks on an Effect `Deferred`
- *      the operator UI's resume endpoint resolves.
- *   3. Real teeth on `claim`: it already fails with `SessionNotOwned` when the
- *      owner is not `automation`, and that failure is already in the Replay
- *      executor's error channel. Ticket 12 changes the value of a field, not the
- *      shape of anything.
+ * SPEC's is `AUTOMATION → PAUSED → HUMAN → RESUME_REQUESTED → AUTOMATION`, and
+ * all four states are reachable. `ControlOwner` spells the third one `operator`
+ * because CONTEXT.md's word for the person is Operator; `describeOwner` renders
+ * SPEC's labels for anything a person reads.
  *
- * That last point is the reason this exists now rather than later: the guard's
- * failure type has to be in the executor's signature from the start, or adding it
- * later is a change to every Step's type.
+ * Each arrow is a method, and each is refused rather than ignored when the
+ * session is not in the state it expects:
+ *
+ * | Arrow                          | Method                        | Refused unless |
+ * | ------------------------------ | ----------------------------- | -------------- |
+ * | (any action at all)            | `Session.claim`               | `automation`   |
+ * | `AUTOMATION → PAUSED`          | `Session.pause`               | `automation`   |
+ * | `PAUSED → HUMAN`               | `SessionControl.takeControl`  | `paused`       |
+ * | (acting, repeatedly)           | `SessionControl.noteAction`   | `operator`     |
+ * | `HUMAN → RESUME_REQUESTED`     | `SessionControl.returnControl`| `operator`     |
+ * | `RESUME_REQUESTED → AUTOMATION`| the waking `pause`, only      | —              |
+ *
+ * The last row is the one worth reading twice. Nothing an Operator can call puts
+ * the Session back in automation's hands; only the paused run itself does, as it
+ * wakes. `RESUME_REQUESTED` exists precisely so that "the human has finished" and
+ * "the automation has taken over" are two different, separately observable
+ * facts rather than one optimistic assumption.
+ *
+ * ## Two halves of one machine
+ *
+ * `Session` is the automation-facing half: claim, and pause. `SessionControl`
+ * (see `Handoff.ts`) is the operator-facing half: take, act, return. They are the
+ * same state underneath, and they are separate interfaces because the engine
+ * must not be able to hand control back to itself.
  */
 
 import { Context, Effect, Layer, Ref, Schema } from "effect"
+import type { EvidenceUnwritable } from "@cua/evidence"
+import type { InterventionOutcome, InterventionRequest } from "./Intervention.ts"
 
 export const ControlOwner = Schema.Literals([
   "automation",
@@ -35,6 +54,20 @@ export const ControlOwner = Schema.Literals([
   "resume_requested"
 ])
 export type ControlOwner = typeof ControlOwner.Type
+
+/** SPEC's spelling of each state, for anything a person reads. */
+export const describeOwner = (owner: ControlOwner): string => {
+  switch (owner) {
+    case "automation":
+      return "AUTOMATION"
+    case "paused":
+      return "PAUSED"
+    case "operator":
+      return "HUMAN"
+    case "resume_requested":
+      return "RESUME_REQUESTED"
+  }
+}
 
 /**
  * The engine tried to act while it did not hold control. A Hard Failure.
@@ -48,7 +81,7 @@ export class SessionNotOwned extends Schema.TaggedError<SessionNotOwned>()("Sess
   attempted: Schema.String
 }) {
   override get message(): string {
-    return `${this.attempted} was attempted while control belonged to ${this.owner}`
+    return `${this.attempted} was attempted while control belonged to ${describeOwner(this.owner)}`
   }
 }
 
@@ -61,11 +94,36 @@ export class Session extends Context.Service<Session, {
    * in the Replay executor, with no path around it.
    */
   readonly claim: (attempted: string) => Effect.Effect<void, SessionNotOwned>
+  /**
+   * Whether there is an Operator to escalate to at all.
+   *
+   * The engine asks before it pauses, because a checkpoint that cannot be
+   * resolved and has nobody to resolve it is a Hard Failure, not an Intervention.
+   * Raising `intervention_required` into an empty room would report a person as
+   * responsible for a run no person can see.
+   */
+  readonly handoffAvailable: Effect.Effect<boolean>
+  /**
+   * Stop, hand the live Session to a person, and block until they hand it back.
+   *
+   * Never fails on account of the Operator: refusal, resolution, abandonment and
+   * expiry are all values in `InterventionOutcome`, because every one of them is
+   * something the engine has to report rather than something it has to catch.
+   * It fails only if the episode could not be recorded, since an Intervention
+   * nobody can audit is the one outcome worse than not pausing.
+   */
+  readonly pause: (
+    request: InterventionRequest
+  ) => Effect.Effect<InterventionOutcome, EvidenceUnwritable>
 }>()("cua/session/Session") {}
 
 /**
- * A Session automation holds throughout. The only reachable configuration until
- * ticket 12 adds the transfer.
+ * A Session automation holds throughout, with no Operator attached.
+ *
+ * This is what every unattended run gets — the test suite, CI, and a scheduled
+ * replay at three in the morning. `pause` refuses immediately and says why, so
+ * the engine falls back to reporting a Hard Failure rather than waiting for
+ * somebody who was never going to arrive.
  */
 export const automationOwned = (id: string): Layer.Layer<Session> =>
   Layer.effect(Session)(
@@ -81,7 +139,14 @@ export const automationOwned = (id: string): Layer.Layer<Session> =>
                 ? Effect.void
                 : Effect.fail(new SessionNotOwned({ sessionId: id, owner: current, attempted }))
             )
-          )
+          ),
+        handoffAvailable: Effect.succeed(false),
+        pause: () =>
+          Effect.succeed({
+            resumed: false,
+            reason: "this run is unattended: no operator interface is attached to it",
+            record: undefined
+          })
       }
     })
   )

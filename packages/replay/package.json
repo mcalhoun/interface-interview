@@ -8,6 +8,7 @@
   "dependencies": {
     "@cua/artifact": "workspace:*",
     "@cua/evidence": "workspace:*",
+    "@cua/operator": "workspace:*",
     "@cua/policy": "workspace:*",
     "@cua/session": "workspace:*",
     "@cua/surface": "workspace:*",
