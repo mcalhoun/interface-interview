@@ -62,6 +62,13 @@
     "packages/surface": {
       "name": "@cua/surface",
       "version": "0.0.0",
+      "dependencies": {
+        "effect": "4.0.0-rc.112",
+        "playwright": "1.62.1",
+      },
+      "devDependencies": {
+        "@cua/legacy-core": "workspace:*",
+      },
     },
   },
   "packages": {
