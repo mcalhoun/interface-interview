@@ -66,6 +66,17 @@ actions:
       values are member data. The control that keeps that from happening is the
       Target robustness argument recorded against each fill in its Capability
       Artifact, which a reviewer approves before the artifact runs.
+  - type: selectFromList
+    because: >
+      A selection reads the items a screen is currently offering and presses the
+      one whose label matches the parameter, so it commits exactly what a click
+      commits and is classified the same way. It is permitted because the
+      alternative is recording one artifact per account type, which multiplies
+      the number of documents a reviewer has to approve without reducing what
+      any of them can do. What bounds it is that the match is a token subset of
+      a label the screen itself offered, never a free-text instruction: a
+      selection cannot reach a control the list does not contain, and an
+      ambiguous match stops the run rather than choosing.
   - type: click
     because: >
       Clicking is how a search is submitted and how an account is opened from a

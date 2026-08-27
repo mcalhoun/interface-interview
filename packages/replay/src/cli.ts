@@ -2,6 +2,9 @@
  * `bun run replay` — invoke a saved Capability by name with typed arguments.
  *
  *   bun run replay member.account-balance --memberId 12345
+ *   bun run replay member.account-balance --memberId 12345 --accountType Checking
+ *   bun run replay member.account-balance --memberId 22222   # a tenant whose
+ *                                                            # labels differ
  *   bun run replay member.account-balance --memberId 12345 --headed
  *   bun run replay member.account-balance --memberId 12345 --baseUrl http://host:1234
  *
@@ -132,6 +135,12 @@ const report = (
         yield* Console.log(`${result.capability}@${result.version}  FAILURE`)
         yield* Console.log(`  step:     ${result.failure.stepId} (${result.failure.stepIntent})`)
         yield* Console.log(`  reason:   ${result.failure.reason}`)
+        // A selection failure carries the code the artifact declared for it, and
+        // that code is what a caller routes on — so it is printed rather than
+        // left to be dug out of the JSON.
+        if ("code" in result.failure) {
+          yield* Console.log(`  escalate: ${result.failure.code}`)
+        }
         yield* Console.log(`  expected: ${result.failure.expected}`)
         yield* Console.log(`  observed: ${result.failure.observed}`)
         break

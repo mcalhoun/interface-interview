@@ -29,9 +29,20 @@ import {
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
-const SHIPPED = join(ARTIFACTS_DIRECTORY, "member.account-balance", "1.0.0.yaml")
+const shippedPath = (version: string) =>
+  join(ARTIFACTS_DIRECTORY, "member.account-balance", `${version}.yaml`)
 
-const parseShipped = () => parseArtifact(SHIPPED, readFileSync(SHIPPED, "utf8"))
+/**
+ * Assertions here name a version rather than following `latest` around.
+ *
+ * An immutable store means 1.0.0 has to keep parsing and keep meaning what it
+ * meant after every later version lands beside it, and a test that always reads
+ * the newest file cannot notice when it stops. The version-blind loops below say
+ * "every stored version" on purpose, so they widen on their own as the learning
+ * tickets add files.
+ */
+const parseShipped = (version = "1.0.0") =>
+  parseArtifact(shippedPath(version), readFileSync(shippedPath(version), "utf8"))
 
 const expectSuccess = <A, E>(result: Result.Result<A, E>): A => {
   if (Result.isFailure(result)) throw new Error(`expected success, got ${String(result.failure)}`)
@@ -54,14 +65,14 @@ it("the shipped artifact parses, and says what it does without any code being re
     "open-member-search",
     "enter-member-number",
     "run-member-search",
-    "open-savings-account",
+    "open-account",
     "read-available-balance",
     "read-current-balance"
   ])
 
   // The reviewer's contract: inputs typed and classified, outputs typed, every
   // step explained, every step verified, every target argued for.
-  expect(Object.keys(artifact.inputs)).toEqual(["memberId"])
+  expect(Object.keys(artifact.inputs)).toEqual(["memberId", "accountType"])
   expect(Object.keys(artifact.outputs)).toEqual(["availableBalance", "currentBalance"])
   expect(artifact.outputs["availableBalance"]?.currency).toBe("USD")
   for (const step of artifact.steps) {
@@ -70,17 +81,21 @@ it("the shipped artifact parses, and says what it does without any code being re
   }
 })
 
-it("no origin appears anywhere in the artifact, so one document serves every tenant", () => {
+it("no origin appears anywhere in any stored version, so one document serves every tenant", () => {
   // A capability is a property of the vendor product; which institution's
   // installation it runs against is environment. Baking a URL in is how one
   // artifact per tenant starts.
-  expect(readFileSync(SHIPPED, "utf8")).not.toMatch(/https?:\/\//)
+  for (const version of listVersions(ARTIFACTS_DIRECTORY, "member.account-balance")) {
+    expect(readFileSync(shippedPath(version), "utf8"), version).not.toMatch(/https?:\/\//)
+  }
 })
 
 it("every target records how it is identified and why that strategy was chosen", () => {
   const artifact = expectSuccess(parseShipped())
   const targets = artifact.steps.flatMap((step) => [
-    ...(step.action.type === "navigate" ? [] : [step.action.target]),
+    ...(step.action.type === "navigate" || step.action.type === "selectFromList"
+      ? []
+      : [step.action.target]),
     ...step.checkpoint.expect.flatMap((assertion) =>
       "target" in assertion ? [assertion.target] : []
     )
@@ -95,6 +110,44 @@ it("every target records how it is identified and why that strategy was chosen",
   }
 })
 
+it("an action that names no single control still argues for how it picks one", () => {
+  // A `selectFromList` has no Target to hang the reviewer's contract on, so it
+  // carries the argument itself. Without this, generalising the step would have
+  // been a way to quietly opt out of explaining it.
+  const artifact = expectSuccess(parseShipped())
+  const selections = artifact.steps.flatMap((step) =>
+    step.action.type === "selectFromList" ? [step.action] : []
+  )
+
+  expect(selections).toHaveLength(1)
+  for (const selection of selections) {
+    expect(selection.robustness.length).toBeGreaterThan(80)
+    expect(selection.match.strategy).toBe("tokenSubset")
+    // Both ways it can fail to land on exactly one item are declared up front,
+    // and under different codes, because they mean different things.
+    expect(selection.onNoMatch.escalate).toBe("NO_MATCHING_ITEM")
+    expect(selection.onMultiple.escalate).toBe("AMBIGUOUS_MATCH")
+    expect(selection.onNoMatch.escalate).not.toBe(selection.onMultiple.escalate)
+  }
+})
+
+it("the selection's legal values come from the page, and its default from the goal", () => {
+  const artifact = expectSuccess(parseShipped())
+  const accountType = artifact.inputs["accountType"]!
+
+  // ADR-0007: the enum was read off the account list, not written into source.
+  expect(accountType.type).toBe("enum")
+  expect(accountType.values).toEqual(["Primary Savings", "Checking"])
+  expect(accountType.discoveredFrom).toContain("goal term 'savings'")
+
+  // And the default is the goal's own word rather than the label it matched
+  // here, which is what makes it survive a tenant that labels the account
+  // differently. Recording "Primary Savings" would have made one institution's
+  // vocabulary the contract.
+  expect(accountType.default).toBe("Savings")
+  expect(accountType.values).not.toContain(accountType.default)
+})
+
 it("parameters are sensitive unless the artifact says otherwise in writing", () => {
   const artifact = expectSuccess(parseShipped())
   expect(isSensitive(artifact.inputs["memberId"]!)).toBe(true)
@@ -107,10 +160,15 @@ it("parameters are sensitive unless the artifact says otherwise in writing", () 
   expect(isSensitive(undeclared["somethingNew"]!)).toBe(true)
 })
 
-it("round-trips through YAML unchanged", () => {
-  const artifact = expectSuccess(parseShipped())
-  const again = expectSuccess(parseArtifact("round-trip", formatArtifact(artifact)))
-  expect(again).toEqual(artifact)
+it("every stored version round-trips through YAML unchanged", () => {
+  // Ticket 11's compiler writes these files, a reviewer reads them and the
+  // engine executes them. All three have to agree about what the document says,
+  // including for the nested shape of a `selectFromList`.
+  for (const version of listVersions(ARTIFACTS_DIRECTORY, "member.account-balance")) {
+    const artifact = expectSuccess(parseShipped(version))
+    const again = expectSuccess(parseArtifact("round-trip", formatArtifact(artifact)))
+    expect(again, version).toEqual(artifact)
+  }
 })
 
 it("rejects a value referring to an input that is not declared", () => {
@@ -200,6 +258,42 @@ steps:
   expect(problems.length).toBeGreaterThan(0)
 })
 
+it("rejects a selection that matches against an input nobody declared", () => {
+  // Selection is the one action whose subject is not written down, so the thing
+  // it matches against had better exist. Caught when the file is read rather
+  // than four steps into a live run.
+  const problems = expectProblems(
+    parseArtifact(
+      "broken",
+      `
+capability: broken
+version: 1.0.0
+title: Broken
+summary: Selects by a parameter nobody declared, and escalates under nothing.
+authored: hand-written
+surface: { kind: web, product: Test, entry: / }
+inputs: {}
+outputs: {}
+steps:
+  - id: pick-one
+    intent: Choose from a list using a parameter that does not exist.
+    action:
+      type: selectFromList
+      list: { within: { name: Accounts }, itemRole: link }
+      match: { against: { from: parameter, name: notDeclared }, strategy: tokenSubset }
+      onNoMatch: { escalate: "" }
+      onMultiple: { escalate: AMBIGUOUS_MATCH }
+      robustness: because
+    checkpoint:
+      description: It happened.
+      expect: [{ assert: textPresent, text: anything }]
+`
+    )
+  )
+  expect(problems.join(" ")).toContain("notDeclared")
+  expect(problems.join(" ")).toContain("nothing matches")
+})
+
 it("rejects text that is not an artifact at all", () => {
   expect(expectProblems(parseArtifact("junk", ": : not yaml : :")).length).toBeGreaterThan(0)
   expect(expectProblems(parseArtifact("empty", "capability: only-this")).length).toBeGreaterThan(0)
@@ -211,6 +305,17 @@ it("resolves the latest stored version, and lists what is callable", () => {
   expect(expectSuccess(loadArtifact(ARTIFACTS_DIRECTORY, "member.account-balance")).version).toBe(
     "1.0.0"
   )
+})
+
+it("v1.1.0 and v1.2.0 are left free for the outcomes an intervention teaches", () => {
+  // SPEC's scenario table reserves those two for members 88888 and 77777 —
+  // changes a human confirmed, each landing in its own file beside the
+  // intervention record that justified it. Ticket 09's selection is a correction
+  // to a hand-written document rather than something learned, so it belongs in
+  // 1.0.0. Taking a reserved slot would blur the one diff worth showing.
+  const versions = listVersions(ARTIFACTS_DIRECTORY, "member.account-balance")
+  expect(versions).not.toContain("1.1.0")
+  expect(versions).not.toContain("1.2.0")
 })
 
 it("turns a scraped amount into money, and refuses one in the wrong currency", () => {

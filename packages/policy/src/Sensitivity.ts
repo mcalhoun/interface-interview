@@ -93,9 +93,25 @@ export const declassifierFor = (
 /**
  * The policy every entry point uses.
  *
- * Deliberately empty. The demo runs on a member identifier and account balances
- * against a regulated core banking system, and there is no parameter in it that a
- * reviewer would sign off as safe to print. An allowlist with a placeholder entry
- * in it is how allowlists stop being read.
+ * One entry, and it earns its place. Everything about a member stays sensitive:
+ * the identifier, and by consequence the account number that embeds it.
+ *
+ * `accountType` is different in kind. It is the name of a product an institution
+ * offers, it is on every screenshot of the account list already, and it says
+ * nothing about who the member is. Scrubbing it would also be actively harmful
+ * here, because scrubbing replaces literal occurrences: treating "Savings" as
+ * secret would blank the word out of the account list in the accessibility tree,
+ * which is the one part of the Evidence that shows what the selection was
+ * choosing between and why it chose. A control that destroys the record of its
+ * own decision is not protecting anything.
  */
-export const sensitivityPolicy: SensitivityPolicy = nothingDeclassified
+export const sensitivityPolicy: SensitivityPolicy = declassifying([
+  {
+    capability: "member.account-balance",
+    parameter: "accountType",
+    because:
+      "A product label the institution prints on the account list itself, carrying " +
+      "nothing about the member. Scrubbing it by literal occurrence would erase the " +
+      "list the selection matched against, destroying the evidence of the choice."
+  }
+])

@@ -15,6 +15,9 @@ export { replayCapability } from "./engine.ts"
 export type { RunEvidenceOptions } from "./redaction.ts"
 export { evidenceForRun, scrubberFor, sensitiveNames } from "./redaction.ts"
 
+export type { Choice, ChoiceContext } from "./selection.ts"
+export { chooseItem } from "./selection.ts"
+
 export type {
   ReplayFailure,
   ReplayFailureBody,

@@ -83,7 +83,10 @@ export const RISK = {
   navigate: "safe",
   extract: "safe",
   fill: "risky",
-  click: "risky"
+  click: "risky",
+  // A selection resolves to a control and then presses it. It is a click that
+  // worked out its own subject, so it carries a click's risk.
+  selectFromList: "risky"
 } as const satisfies Record<ActionType, Risk>
 
 /** Every Action type Policy knows how to judge. A Policy file may not add to it. */

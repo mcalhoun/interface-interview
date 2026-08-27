@@ -68,6 +68,7 @@ import { type ActionRequest, Policy } from "@cua/policy"
 import { Session } from "@cua/session"
 import {
   type SurfaceAdapterService,
+  type SurfaceState,
   type Target as SurfaceTarget,
   type TargetFailure,
   SurfaceAdapter,
@@ -75,6 +76,7 @@ import {
   describeTarget
 } from "@cua/surface"
 import { type CheckpointOutcome, type StepReadings, evaluate, resolveValue } from "./checkpoint.ts"
+import { chooseItem } from "./selection.ts"
 import type { ReplayFailure, ReplayFailureBody, ReplayResult, StepRecord } from "./ReplayResult.ts"
 import { describeResult } from "./ReplayResult.ts"
 
@@ -269,7 +271,7 @@ export const replayCapability = (
           accessibility: before.accessibility
         })
 
-        const performed = yield* performAction(step, before.url)
+        const performed = yield* performAction(step, before)
         if (performed.read !== undefined) readings.set(step.id, performed.read)
         const read = performed.read
 
@@ -353,10 +355,18 @@ export const replayCapability = (
      * up, taken from the state each acting method returns rather than from a
      * second observation. That is what the Step's Checkpoint reads are then
      * authorised against.
+     *
+     * `selectFromList` is the one Action whose subject is not written down. It
+     * works out a Target first, by matching a parameter against the labels the
+     * screen is currently offering (see `selection.ts`), and then proceeds as an
+     * ordinary click. That ordering is what lets Policy see the control actually
+     * about to be pressed, and it is why selection adds no new way for this
+     * engine to touch the Surface. It takes the whole observed state rather than
+     * just a url because the choice is made against the tree the Step just saw.
      */
     const performAction = (
       step: Step,
-      url: string
+      before: SurfaceState
     ): Effect.Effect<
       { readonly read: string | undefined; readonly url: string },
       ReplayFailure | EvidenceUnwritable
@@ -364,6 +374,7 @@ export const replayCapability = (
       Effect.gen(function* () {
         const action = step.action
         const fail = failing(step)
+        const url = before.url
 
         if (action.type === "navigate") {
           const path = resolveValue({ inputs, readings }, action.path)
@@ -391,7 +402,29 @@ export const replayCapability = (
           return { read: undefined, url: opened.url }
         }
 
-        const surfaceTarget = toSurfaceTarget(action.target)
+        // A `selectFromList` names no control. It reads the list the Step just
+        // observed and works one out, by token subset against the live labels
+        // (ADR-0007). The choice happens *before* the chokepoint so that Policy
+        // and the record both name the control actually about to be pressed,
+        // rather than an abstract "select something".
+        let surfaceTarget: SurfaceTarget
+        let declaredStrategy: string
+        let chosenBy: string | undefined
+        if (action.type === "selectFromList") {
+          const wanted = resolveValue({ inputs, readings }, action.match.against)
+          if (wanted === undefined) {
+            return yield* Effect.fail(unresolvable(fail, action.match.against))
+          }
+          const choice = chooseItem({ inputs, tree: before.tree, url }, action, wanted)
+          if (choice._tag === "Unchosen") return yield* Effect.fail(fail(choice.failure))
+          surfaceTarget = choice.target
+          declaredStrategy = action.match.strategy
+          chosenBy = choice.rationale
+        } else {
+          surfaceTarget = toSurfaceTarget(action.target)
+          declaredStrategy = action.target.strategy
+        }
+
         const described = describeTarget(surfaceTarget)
         const onTargetFailure = targetFailed(fail, action.type, described, url)
 
@@ -412,6 +445,10 @@ export const replayCapability = (
                   .pipe(Effect.catch(onTargetFailure))
                 return { resolution, read: undefined, url: filled.url }
               }
+              // A selection has already worked out *which* item; pressing it is
+              // an ordinary click, through the one call site a click has ever
+              // used. The engine gains no new way to reach the Surface.
+              case "selectFromList":
               case "click": {
                 const clicked = yield* surface
                   .click(surfaceTarget)
@@ -434,9 +471,15 @@ export const replayCapability = (
           stepId: step.id,
           action: action.type,
           target: described,
-          declaredStrategy: action.target.strategy,
+          declaredStrategy,
           resolvedBy: outcome.resolution.strategies,
-          rationale: outcome.resolution.rationale
+          // For a selection, the record carries the whole reasoning: what the
+          // live list offered, why one item carried every token of the
+          // parameter, and then how the resulting Target resolved. A reviewer
+          // can re-derive the choice from the snapshot in the same file.
+          rationale: chosenBy === undefined
+            ? outcome.resolution.rationale
+            : `${chosenBy}; then ${outcome.resolution.rationale}`
         })
 
         return { read: outcome.read, url: outcome.url }

@@ -62,6 +62,10 @@ _Avoid_: selector, locator, element, node
 What the system perceives of a Surface at one moment: its accessibility structure, location and frames. The only thing Discovery ever sees.
 _Avoid_: snapshot, DOM, page state, screen
 
+**Selection**:
+Choosing one of the items a Surface currently offers by matching a parameter against their labels by token subset. Distinct from resolving a Target: a Target says which control, a Selection works out which control from a list read at Replay time. The legal values are read off the page during Discovery, never written into source.
+_Avoid_: filter, lookup, search, pick
+
 ### Outcomes
 
 **Business Outcome**:

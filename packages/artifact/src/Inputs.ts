@@ -35,14 +35,28 @@
  */
 
 import { Redacted, Result, Schema } from "effect"
+import { isTokenSubsetOf } from "@cua/surface"
 
 /**
  * What kind of value an input holds.
  *
- * `enum` carries its legal values, which ticket 09 reads off the page during
- * Discovery rather than taking from a human (ADR-0007). Deliberately small: an
- * Artifact declaring an input type nothing can validate is worse than one that
- * declares a string.
+ * `enum` carries its legal values, read off the page during Discovery rather
+ * than taken from a human (ADR-0007). Deliberately small: an Artifact declaring
+ * an input type nothing can validate is worse than one that declares a string.
+ *
+ * ## Why an enum is judged by token subset
+ *
+ * `values` holds the labels the screen actually showed, so a reviewer reading
+ * the Artifact sees the real vocabulary. But the value a caller passes is a
+ * *goal term* — `savings`, not `Primary Savings` — and it has to stay one, since
+ * a Tenant labelling the same account `Regular Savings` must still match it.
+ *
+ * So legality uses exactly the rule selection uses: a value is legal when it is
+ * one of the declared labels, or when every token of it appears in one of them.
+ * One matching rule, applied twice — once to decide what may be asked for, once
+ * to decide what it lands on. `Money Market` is still refused before a browser
+ * opens; `Savings` is accepted and lets the live screen settle which account it
+ * meant.
  */
 export const InputType = Schema.Literals(["string", "integer", "enum"])
 export type InputType = typeof InputType.Type
@@ -227,8 +241,8 @@ const validate = (
       return undefined
     case "enum": {
       const values = declaration.values ?? []
-      if (!values.includes(value)) {
-        return `${name} must be one of: ${values.join(", ")}`
+      if (!values.some((legal) => legal === value || isTokenSubsetOf(value, legal))) {
+        return `${name} must be one of, or a token subset of one of: ${values.join(", ")}`
       }
       return undefined
     }

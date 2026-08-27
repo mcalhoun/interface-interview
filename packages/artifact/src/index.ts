@@ -7,8 +7,8 @@
  * reading any code. Start there.
  */
 
-export type { Action, ActionType } from "./Action.ts"
-export { Action as ActionSchema } from "./Action.ts"
+export type { Action, ActionType, ItemList, SelectFromListAction } from "./Action.ts"
+export { Action as ActionSchema, describeItemList } from "./Action.ts"
 
 export type { OutcomeCode, OutcomeDeclaration, OutcomeDeclarations } from "./BusinessOutcomes.ts"
 export {

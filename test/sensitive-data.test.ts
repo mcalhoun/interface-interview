@@ -240,9 +240,19 @@ function allowlistingEverything(): (name: string) => boolean {
   )
 }
 
-it("the shipped policy declassifies nothing, so the demo runs fully redacted", () => {
-  expect(sensitivityPolicy.declassified).toEqual([])
+it("the shipped policy declassifies only what a reviewer signed off, and nothing about a member", () => {
+  // Deny-first still holds. The one exception is a product label the institution
+  // prints on the account list itself; every parameter carrying member data is
+  // absent from this list, which is the property worth asserting rather than the
+  // list being empty.
   expect(sensitivityPolicy.summary).toContain("deny-first")
+  expect(sensitivityPolicy.declassified.map((entry) => entry.parameter)).toEqual(["accountType"])
+  expect(sensitivityPolicy.declassified.every((entry) => entry.because.length > 40)).toBe(true)
+
+  // memberId is not declassified for the capability that actually uses it.
+  const shipped = declassifierFor(sensitivityPolicy, "member.account-balance")
+  expect(shipped("memberId")).toBe(false)
+  expect(shipped("accountType")).toBe(true)
 
   // An allowlist entry is scoped to one capability. A parameter that is harmless
   // in one is not thereby harmless in another.

@@ -90,7 +90,7 @@ describe("the policy is the file, not the code", () => {
     const operating = shippedPolicy()
     expect(operating.name).toBe("heritage-core-default")
     expect([...operating.permitted.get("replay")!.keys()].sort()).toEqual(
-      ["click", "extract", "fill", "navigate"]
+      ["click", "extract", "fill", "navigate", "selectFromList"]
     )
 
     const readOnly = shippedPolicy("read-only")
@@ -194,9 +194,10 @@ describe("risk classification", () => {
       navigate: "safe",
       extract: "safe",
       fill: "risky",
-      click: "risky"
+      click: "risky",
+      selectFromList: "risky"
     })
-    expect([...RISKY_ACTION_TYPES].sort()).toEqual(["click", "fill"])
+    expect([...RISKY_ACTION_TYPES].sort()).toEqual(["click", "fill", "selectFromList"])
   })
 
   it("classifies every action type the artifact vocabulary contains", () => {
@@ -213,7 +214,7 @@ describe("risk classification", () => {
   })
 
   it("an action nobody classified is unknown, and unknown is always denied", () => {
-    expect(riskOf("selectFromList")).toBe("unknown")
+    expect(riskOf("transferFunds")).toBe("unknown")
 
     // Not reachable from a Capability Artifact — the union would not decode — but
     // exactly what a Discovery model proposing an invented verb produces.

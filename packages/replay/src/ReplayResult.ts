@@ -137,6 +137,41 @@ const TargetAmbiguous = failure("target_ambiguous", {
   url: Schema.String
 })
 
+/**
+ * A `selectFromList` read the live list and nothing in it matched.
+ *
+ * Distinct from `target_missing`, and the distinction is the diagnostic. A
+ * missing Target says a control is not there and leaves open whether the screen
+ * changed or the member simply has no such thing. A no-match says the list
+ * rendered perfectly, here is everything it offered, and none of it carries the
+ * tokens that were asked for — which is usually the domain saying no. Ticket 13
+ * turns exactly this into a declared Business Outcome.
+ */
+const NoMatchingItem = failure("no_matching_item", {
+  /** The Artifact's declared `onNoMatch.escalate` code. */
+  code: Schema.String,
+  list: Schema.String,
+  /** Every label that *was* on offer. The first thing anyone wants to see. */
+  items: Schema.Array(Schema.String),
+  url: Schema.String
+})
+
+/**
+ * A `selectFromList` matched two or more items.
+ *
+ * Always a Hard Failure, never a coin flip (ADR-0007). Where a no-match is often
+ * domain truth, an ambiguous match means the Capability has stopped being
+ * precise enough about what it wants, and picking one would be a silently wrong
+ * answer in a system where the wrong account is the worst outcome available.
+ */
+const AmbiguousMatch = failure("ambiguous_match", {
+  /** The Artifact's declared `onMultiple.escalate` code. */
+  code: Schema.String,
+  list: Schema.String,
+  candidates: Schema.Array(Schema.String),
+  url: Schema.String
+})
+
 /** The Surface could not be reached or operated at all. */
 const SurfaceFailed = failure("surface_failed", {})
 
@@ -174,6 +209,8 @@ export const ReplayFailure = Schema.Union([
   CheckpointFailed,
   TargetMissing,
   TargetAmbiguous,
+  NoMatchingItem,
+  AmbiguousMatch,
   SurfaceFailed,
   PolicyViolation,
   OutputUnreadable,
