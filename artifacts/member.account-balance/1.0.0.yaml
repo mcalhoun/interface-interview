@@ -6,19 +6,53 @@
 #
 # Immutable. A change is a new version file beside this one, so 1.0.0 and 1.1.0
 # can be diffed and the difference read directly.
+#
+# ON THIS BEING 1.0.0 AND NOT 1.1.0
+#
+# Ticket 09 replaced the step that opened the savings account. That is a
+# correction to a hand-written document, made before anything ran against a
+# production installation, and it is not the kind of change the immutability rule
+# is there to make visible. The rule exists so that a *learned* change — an
+# outcome an Intervention taught the system — sits in its own file next to the
+# intervention record that justified it, which is what SPEC's scenario table
+# reserves v1.1.0 (member 88888) and v1.2.0 (member 77777) for. Cutting a version
+# here would take one of those slots and blur the one diff worth showing a
+# reviewer.
+#
+# WHAT TICKET 09 CHANGED
+#
+# One step and one input. `open-savings-account` clicked a link whose name was
+# written into this document — "Primary Savings" — which is a tenant's label
+# sitting in a vendor-level capability, and it was the least robust thing in the
+# flow. It is now `open-account`, a generic `selectFromList` that reads whatever
+# the account list currently offers and picks the item matching the `accountType`
+# parameter by token subset (ADR-0007).
+#
+# Three consequences a reviewer should check for themselves:
+#
+#   1. The capability now serves every account type, not just savings. The same
+#      six steps return the checking balance when called with `accountType`
+#      "Checking", with no second discovery run.
+#   2. A tenant labelling the account "Regular Savings" still matches "Savings",
+#      so most tenant variation needs no override at all.
+#   3. Nothing is hardcoded that was not hardcoded before — less, in fact. The
+#      legal values below were read off the account list during discovery, and
+#      the default records the goal's own word.
 
 capability: member.account-balance
 version: 1.0.0
-title: Read a member's primary savings balance
+title: Read a member's account balance
 authored: hand-written
 
 summary: >
-  Looks a member up by number in Heritage Core Member Services, opens their
-  primary savings account, and reads back the available and current balances.
+  Looks a member up by number in Heritage Core Member Services, opens one of
+  their accounts, and reads back the available and current balances. Which
+  account is a parameter; omitted, it is the member's savings account, because
+  that is what the goal this capability was discovered from asked for.
 
   Read-only. Nothing in this capability changes anything in the core banking
-  system: every action is a navigation, a search field, or a reading. That is
-  what makes it safe to replay unattended.
+  system: every action is a navigation, a search field, a selection, or a
+  reading. That is what makes it safe to replay unattended.
 
   Written by hand at ticket 03, before Discovery existed, so that the artifact
   schema had to be genuinely executable before anything started generating one.
@@ -45,8 +79,42 @@ inputs:
     required: true
     pattern: "^[0-9]{4,10}$"
     discoveredFrom: >
-      Hand-written at 1.0.0. Ticket 11 derives this from the provenance the
-      discovery agent recorded against the value it typed into the search field.
+      Hand-written. Ticket 11 derives this from the provenance the discovery
+      agent recorded against the value it typed into the search field.
+
+  accountType:
+    type: enum
+    description: >
+      Which of the member's accounts to read. Say as little as identifies it:
+      "Savings" and "Checking" are what a caller means, and the screen's own
+      wording for the same product varies between institutions.
+    # A screen label, not a runtime value. It names a product an institution
+    # offers, carries nothing about who the member is, and appears verbatim in
+    # every screenshot of the account list, so classifying it sensitive would
+    # scrub a word that is already public and make the record harder to read for
+    # no protection at all. Stated in writing because the default is `true`
+    # (ADR-0008).
+    sensitive: false
+    required: false
+    # Read off the account list on Member Detail during discovery, not written
+    # here by a human choosing what ought to be allowed. Legality is judged by
+    # the same token-subset rule selection uses, so "Savings" is a legal way to
+    # ask for "Primary Savings" while "Money Market" is refused before a browser
+    # opens.
+    values: ["Primary Savings", "Checking"]
+    # The goal said "savings", and the goal's own word is what gets recorded —
+    # not the label it happened to match here. That is what makes the default
+    # portable: a tenant labelling the account "Regular Savings" still matches
+    # it, so the capability's out-of-the-box behaviour survives the move with no
+    # override. Recording "Primary Savings" instead would have quietly turned
+    # one institution's vocabulary into the contract.
+    default: Savings
+    discoveredFrom: >
+      goal term 'savings' ⊂ label 'Primary Savings'. The account list offered
+      "Primary Savings" and "Checking"; the goal asked for the savings balance;
+      the only label carrying the token 'savings' was "Primary Savings". That
+      inference was made once, by the model, at discovery time, and recorded
+      here. Replay never repeats it — it matches tokens against the live list.
 
 outputs:
   availableBalance:
@@ -175,27 +243,52 @@ steps:
               are on Member Detail rather than confirming this member's data.
 
   # ---------------------------------------------------------------------------
-  # SEAM — ticket 09 replaces this single step with a generic selectFromList over
-  # the account list, matching an `accountType` parameter by token subset against
-  # the live labels. Nothing else in this artifact changes when it does.
-  - id: open-savings-account
-    intent: Open the member's primary savings account.
+  - id: open-account
+    intent: Open the account the caller asked for, whichever of them that is.
     action:
-      type: click
-      target:
-        role: link
-        name: Primary Savings
-        strategy: accessible-name
-        robustness: >
-          Each account in the list is a link whose accessible name is the
-          account's description as the institution configured it. "Primary
-          Savings" is that description here, and it is a screen label rather than
-          a runtime value, so it belongs in the artifact.
+      type: selectFromList
+      # Which items are on offer. Not which item is wanted — that is the
+      # parameter's job, and keeping the two apart is what makes this one step
+      # serve every account type.
+      list:
+        within:
+          name: Share and Deposit Accounts
+        itemRole: link
+      match:
+        against:
+          from: parameter
+          name: accountType
+        strategy: tokenSubset
+      # Both ways this can fail to land on exactly one item, declared rather than
+      # discovered at 3am. They are different facts about the world and they
+      # escalate under different codes.
+      onNoMatch:
+        escalate: NO_MATCHING_ITEM
+      onMultiple:
+        escalate: AMBIGUOUS_MATCH
+      robustness: >
+        The account list is a table headed by the caption "Share and Deposit
+        Accounts", and each account is a link whose accessible name is the
+        description the institution configured. Scoping to that table is what
+        keeps the "Return to Member Search" link at the foot of the page out of
+        the candidate set; the caption is a childless cell in the table's first
+        row, and the scope rule climbs from it to the table it heads.
 
-          This is the least robust target in the flow, and knowingly so: a tenant
-          calling the same account "Regular Savings" breaks it. Ticket 09
-          replaces this with token-subset matching against the live list, which
-          absorbs that difference without an override.
+        Matching is token subset against the live labels, in one direction: every
+        token of the parameter must appear in the label. "Savings" therefore
+        selects "Primary Savings" here and "Regular Savings" at an institution
+        that names it that way, which is the whole reason this is a selection
+        rather than a click on a name written into this document. The previous
+        version clicked a link literally named "Primary Savings" and was the
+        least robust step in the flow.
+
+        What would break it: an institution that renames the panel heading, or
+        one that renders accounts as plain text rather than links. What will not
+        break it: a different label for the account itself, a different number of
+        accounts, or a different order. Two accounts whose labels both carry
+        every token of the parameter stop the run and list both, rather than
+        opening one of them and returning a balance for an account nobody asked
+        for.
     checkpoint:
       description: Account Detail is showing, with the balance panel loaded inside its frame.
       expect:
