@@ -87,6 +87,7 @@ const usage = (): string =>
     "",
     "capabilities:",
     ...listCapabilities(ARTIFACTS_DIRECTORY).map((name) => `  ${name}`),
+    "  (bun run catalog prints each one's inputs, outputs and the line to call it with)",
     "",
     "policies:",
     ...listPolicies(POLICIES_DIRECTORY).map((name) => `  ${name}`)

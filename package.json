@@ -12,6 +12,7 @@
     "replay": "bun run packages/replay/src/cli.ts",
     "discover": "bun run packages/agent/src/cli.ts",
     "compile": "bun run packages/agent/src/compile-cli.ts",
+    "catalog": "bun run packages/artifact/src/catalog-cli.ts",
     "operator": "bun run apps/operator/src/main.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun run --bun vitest run"
