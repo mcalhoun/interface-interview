@@ -14,6 +14,7 @@
         "@cua/replay": "workspace:*",
         "@cua/session": "workspace:*",
         "@cua/surface": "workspace:*",
+        "@effect/ai-openai": "4.0.0-rc.112",
         "effect": "4.0.0-rc.112",
       },
       "devDependencies": {
@@ -120,6 +121,8 @@
     "@cua/session": ["@cua/session@workspace:packages/session"],
 
     "@cua/surface": ["@cua/surface@workspace:packages/surface"],
+
+    "@effect/ai-openai": ["@effect/ai-openai@4.0.0-rc.112", "", { "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-j2X86xvgpAtNiusyESADHZn3PUzMVatE1zWXd0No2aybx/euKiVBVWZOtzq7ntJ5KvPHRBOFXTGPADdApQrwug=="],
 
     "@effect/vitest": ["@effect/vitest@4.0.0-rc.112", "", { "peerDependencies": { "effect": "^4.0.0-rc.112", "vitest": ">=4.1.0 <5.0.0" } }, "sha512-mEKh/FI64mt8JK1/v9mpOrJYdnp+UFZdRUBMEdZMiKz7klg6NPqVgg/oeAGH6wOOQc2iAPcfc2H9BbAv1KyzMQ=="],
 

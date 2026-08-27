@@ -161,16 +161,28 @@ it("a resolved input renders as a placeholder through every ordinary way out", (
 const withoutComments = (source: string): string =>
   source.replaceAll(/\/\*[\s\S]*?\*\//g, "").replaceAll(/\/\/.*$/gm, "")
 
-it("unwrapping is confined to two named call sites, and both are greppable", () => {
+it("unwrapping is confined to three named call sites, and all are greppable", () => {
   const sources = filesUnder("packages").filter((path) => extname(path) === ".ts")
   const unwrapping = sources.filter((path) =>
     withoutComments(readFileSync(path, "utf8")).includes("Redacted.value(")
   )
 
-  // Two, and exactly which two. A third is not forbidden — a future ticket may
-  // genuinely need one — but it cannot arrive unnoticed. This test fails, and
-  // whoever added it has to say in the diff why it is safe.
+  // Three, and exactly which three. A fourth is not forbidden — a future ticket
+  // may genuinely need one — but it cannot arrive unnoticed. This test fails, and
+  // whoever adds it has to say in the diff why it is safe.
+  //
+  // The third arrived with ticket 10 and this comment is that argument.
+  // Discovery cannot build its scrubber up front the way Replay does: its only
+  // input is a sentence, and which parameters exist is exactly what the run is
+  // there to find out. So the scrubber grows as the model tags values, and
+  // `packages/agent/src/redaction.ts` is where a discovered literal becomes a
+  // needle for it — the same unavoidable reason Replay's `redaction.ts` unwraps,
+  // for the same one purpose. It is also where the characters to type into a
+  // field come from, which is Replay's `checkpoint.ts` reason. Both uses are
+  // locals consumed immediately; nothing holds the plaintext, and what the
+  // Trajectory carries is the `Redacted` wrapper.
   expect(unwrapping.sort()).toEqual([
+    join("packages", "agent", "src", "redaction.ts"),
     join("packages", "replay", "src", "checkpoint.ts"),
     join("packages", "replay", "src", "redaction.ts")
   ])
