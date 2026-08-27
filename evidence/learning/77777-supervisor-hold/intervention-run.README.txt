@@ -10,6 +10,20 @@ events.jsonl and every accessibility snapshot in it pass a scrub at the single
 point where evidence is serialised. Values of these parameters were replaced:
   memberId
 
+Two further kinds of value are redacted, and neither was declared by anybody
+before the run started, because neither could be:
+
+  * fields a screen showed that Policy calls personal -- a member's name, a tax
+    id. These are nobody's parameter; they arrive as ordinary text off the
+    application. The list of captions is declared and argued for in
+    packages/policy/src/Sensitivity.ts, and it is a denylist: a personal field on
+    a screen nobody has looked at yet is not covered until somebody adds it.
+  * anything an Operator said they typed into the live application during an
+    Intervention. A supervisor id or an override code is a credential no
+    Capability declared, and the operator interface asks for it so that the
+    scrubber can be told. It is registered before the note that reports it, so
+    the note is redacted too.
+
 Two placeholders appear, and they mean different things:
 
   [redacted:<name>]   the literal value was found in text read off the screen

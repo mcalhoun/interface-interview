@@ -18,8 +18,14 @@
  * **`scrubber` is a required option** (ticket 08). Not defaulted to identity, and
  * not defaulted to anything else: a default is a decision made silently at every
  * construction site that forgets, and the whole point of this ticket is that
- * forgetting should not be possible. Switching redaction off is spelled
- * `noScrubbing`, which a reviewer can grep for and find every instance of.
+ * forgetting should not be possible. Declaring nothing up front is spelled
+ * `noSecrets()`, which a reviewer can grep for and find every instance of.
+ *
+ * It is a `SecretRegistry` rather than a bare function, and `Evidence` exposes
+ * `redact` on top of it, because a run meets sensitive text it was never told
+ * about: what a person types during an Intervention, and what the application
+ * renders back at it. Those register through the writer, which is the one
+ * service every part of the system that could learn such a value already has.
  *
  * *Validate* comes after scrubbing rather than before, so a scrubber that
  * corrupts an event is caught by the same check that catches a malformed one.
@@ -34,7 +40,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { Context, Effect, Layer, Result, Schema } from "effect"
 import { type EvidenceEvent, type EvidenceEventBody, EvidenceEvent as EvidenceEventSchema } from "./Event.ts"
-import type { Scrubber } from "./Scrub.ts"
+import type { Scrubber, SecretRegistry, SensitiveText } from "./Scrub.ts"
 
 /** Evidence could not be written. Evidence failing silently is worse than a run failing. */
 export class EvidenceUnwritable extends Schema.TaggedError<EvidenceUnwritable>()(
@@ -57,6 +63,32 @@ export class Evidence extends Context.Service<Evidence, {
   readonly attach: (name: string, bytes: Uint8Array) => Effect.Effect<void, EvidenceUnwritable>
   /** Everything recorded so far, for tests and for the run's own summary. */
   readonly written: Effect.Effect<ReadonlyArray<EvidenceEvent>>
+  /**
+   * Teach this run's scrubber a value it could not have known up front, so that
+   * every event written from here on redacts it.
+   *
+   * It lives on `Evidence` rather than on a service of its own for the same
+   * reason `scrubber` is a required option: so that it cannot be forgotten. The
+   * two places a run learns a secret mid-flight — the engine, when a screen
+   * renders a personal field, and `SessionControl`, when an Operator says what
+   * they typed — both already require `Evidence`, because neither can do its job
+   * without recording what happened. Registration therefore travels with the
+   * writer, and a future call site cannot obtain one without the other.
+   *
+   * Registering before the event that would first name the value is what makes
+   * that event redacted too. See `SecretRegistry`.
+   */
+  readonly redact: (values: Iterable<SensitiveText>) => Effect.Effect<void>
+  /**
+   * This run's live scrubber.
+   *
+   * Everything written to Evidence passes it already. This is here for the one
+   * thing that *leaves the building*: the text of an assisted-recovery
+   * consultation. What a run's log refuses to carry, its consultation refuses to
+   * send, and using the same function rather than a second definition of
+   * "sensitive" is what keeps the two from drifting.
+   */
+  readonly scrub: Scrubber
 }>()("cua/evidence/Evidence") {}
 
 export interface EvidenceOptions {
@@ -67,9 +99,15 @@ export interface EvidenceOptions {
   /**
    * Required, not optional. See the module header: a default here is a decision
    * made silently by every construction site that forgets to think about it.
-   * `noScrubbing` is the explicit way to say no.
+   * `noSecrets()` is the explicit way to say "nothing is declared up front".
+   *
+   * A `SecretRegistry` rather than a bare `Scrubber`, because a run learns
+   * sensitive values it could not have been told about in advance — what a
+   * person types during an Intervention, what a screen renders back. The writer
+   * holds the registry so that `Evidence.redact` exists wherever `Evidence`
+   * does, which is the whole of how that registration is kept unforgettable.
    */
-  readonly scrubber: Scrubber
+  readonly scrubber: SecretRegistry
   /**
    * The parameter *names* the scrubber was built from, for the note below.
    * Never the values. A reviewer opening the directory should be able to see
@@ -106,6 +144,20 @@ point where evidence is serialised. ${
       ? "This run declared no sensitive parameters."
       : `Values of these parameters were replaced:\n  ${redacting.join("\n  ")}`
   }
+
+Two further kinds of value are redacted, and neither was declared by anybody
+before the run started, because neither could be:
+
+  * fields a screen showed that Policy calls personal -- a member's name, a tax
+    id. These are nobody's parameter; they arrive as ordinary text off the
+    application. The list of captions is declared and argued for in
+    packages/policy/src/Sensitivity.ts, and it is a denylist: a personal field on
+    a screen nobody has looked at yet is not covered until somebody adds it.
+  * anything an Operator said they typed into the live application during an
+    Intervention. A supervisor id or an override code is a credential no
+    Capability declared, and the operator interface asks for it so that the
+    scrubber can be told. It is registered before the note that reports it, so
+    the note is redacted too.
 
 Two placeholders appear, and they mean different things:
 
@@ -167,7 +219,8 @@ export const layer = (options: EvidenceOptions): Layer.Layer<Evidence, EvidenceU
     Effect.gen(function* () {
       const directory = join(options.root, options.runId)
       const logPath = join(directory, "events.jsonl")
-      const scrubber = options.scrubber
+      const secrets = options.scrubber
+      const scrubber = secrets.scrub
 
       yield* Effect.try({
         try: () => {
@@ -223,6 +276,13 @@ export const layer = (options: EvidenceOptions): Layer.Layer<Evidence, EvidenceU
             new EvidenceUnwritable({ path: join(directory, name), reason: String(cause) })
         })
 
-      return { directory, record, attach, written: Effect.sync(() => [...written]) }
+      return {
+        directory,
+        record,
+        attach,
+        written: Effect.sync(() => [...written]),
+        redact: (values: Iterable<SensitiveText>) => Effect.sync(() => secrets.remember(values)),
+        scrub: scrubber
+      }
     })
   )

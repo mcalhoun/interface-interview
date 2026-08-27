@@ -17,7 +17,15 @@ const openCore = Effect.gen(function* () {
   const core = yield* serve({ port: 0 })
   const get = (path: string) =>
     Effect.promise(() => fetch(core.origin + path).then((response) => response.text()))
-  return { core, get } as const
+  /** What a browser sends when a form whose method is POST is submitted. */
+  const post = (path: string, fields: Readonly<Record<string, string>>) =>
+    Effect.promise(() =>
+      fetch(core.origin + path, {
+        method: "POST",
+        body: new URLSearchParams(fields)
+      }).then((response) => response.text())
+    )
+  return { core, get, post } as const
 })
 
 it.effect("Member Search offers a near-duplicate of the Member Number field", () =>
@@ -274,24 +282,86 @@ it.effect("a restricted account withholds the figures rather than erroring", () 
 
 it.effect("a supervisor override releases the hold, and a bad one does not", () =>
   Effect.gen(function* () {
-    const { get } = yield* openCore
-    const base = `/account/panel?memberNumber=77777&accountNumber=${HELD}`
+    const { get, post } = yield* openCore
+    const identifying = { memberNumber: "77777", accountNumber: HELD }
 
-    const released = yield* get(`${base}&supervisorId=SUP7&authorizationCode=4417`)
+    const released = yield* post("/account/panel", {
+      ...identifying,
+      supervisorId: "SUP7",
+      authorizationCode: "4417"
+    })
     expect(released).toContain("Available Balance")
     expect(released).toContain("$2,730.11")
     expect(released).toContain("Current Balance")
     expect(released).toContain("$2,905.60")
     expect(released).toContain("overridden by supervisor SUP7")
 
-    const rejected = yield* get(`${base}&supervisorId=SUP7&authorizationCode=nope`)
+    const rejected = yield* post("/account/panel", {
+      ...identifying,
+      supervisorId: "SUP7",
+      authorizationCode: "nope"
+    })
     expect(rejected).toContain("Authorization not accepted")
     expect(rejected).not.toContain("Available Balance")
 
-    // The override is on the panel's own query string, so the outer Account
-    // Detail page never moves while a person releases the hold in the frame.
+    // The POST answers with the panel itself, so releasing the hold is one page
+    // load inside the frame and the outer Account Detail page never moves.
     expect(yield* get(`/account?memberNumber=77777&accountNumber=${HELD}`)).not.toContain(
       "Available Balance"
     )
+  })
+)
+
+it.effect("a supervisor override cannot arrive on a query string at all", () =>
+  Effect.gen(function* () {
+    const { get } = yield* openCore
+    const base = `?memberNumber=77777&accountNumber=${HELD}`
+    const credentials = "&supervisorId=SUP7&authorizationCode=4417"
+
+    // The form is a POST and the route reads the credentials from the body only,
+    // so this URL -- the exact one the old GET form produced, and the one that
+    // ended up in `page.url()` and therefore in Evidence -- releases nothing. A
+    // credential that cannot be put in a URL cannot be read out of one later.
+    for (const route of ["/account/panel", "/account"]) {
+      const withCredentials = yield* get(`${route}${base}${credentials}`)
+      expect(withCredentials, `${route} honoured a query-string override`).not.toContain(
+        "Available Balance"
+      )
+    }
+    // The panel itself is still showing the refusal, so the assertion above is
+    // about the override being ignored rather than about the page being empty.
+    expect(yield* get(`/account/panel${base}${credentials}`)).toContain("ACCOUNT RESTRICTED")
+
+    // And the form a person is shown says so: a GET form is what serialises the
+    // typed value into the address bar, so the method is the fix.
+    const panel = yield* get(`/account/panel${base}`)
+    expect(panel).toContain('<form method="post" action="/account/panel">')
+    expect(panel).not.toMatch(/<form method="get"[^>]*>[\s\S]*?Authorization Code/)
+  })
+)
+
+it.effect("the sign-on password is read from the body, never from the URL", () =>
+  Effect.gen(function* () {
+    const { core, get } = yield* openCore
+
+    // Same class of defect, same fix: `operatorPassword` is a declared sensitive
+    // input, but "the scrubber will catch it" is a worse guarantee than the
+    // credential never being in an address bar in the first place.
+    expect(yield* get("/signon")).toContain('<form method="post" action="/signon">')
+
+    const viaUrl = yield* Effect.promise(() =>
+      fetch(`${core.origin}/signon?password=hunter2`, { redirect: "manual" })
+    )
+    expect(viaUrl.status).toBe(200)
+    expect(yield* Effect.promise(() => viaUrl.text())).toContain("Operator Sign On")
+
+    const viaBody = yield* Effect.promise(() =>
+      fetch(`${core.origin}/signon`, {
+        method: "POST",
+        body: new URLSearchParams({ password: "hunter2" }),
+        redirect: "manual"
+      })
+    )
+    expect(viaBody.status).toBe(302)
   })
 )

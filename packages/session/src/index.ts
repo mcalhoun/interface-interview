@@ -12,17 +12,19 @@
 export type {
   ControlReturn,
   ControlReturnClassification,
+  EnteredValue,
   Intervention,
   InterventionOutcome,
   InterventionRecord,
   InterventionRequest,
   NextTimeAnswer,
   OperatorAction,
+  OperatorNote,
   ProposalAnswer,
   TargetProposal
 } from "./Intervention.ts"
 
-export { THE_PROPOSAL_QUESTION } from "./Intervention.ts"
+export { THE_PROPOSAL_QUESTION, operatorFieldLabel } from "./Intervention.ts"
 
 export type { Learned } from "./Learning.ts"
 export { classify, THE_QUESTION } from "./Learning.ts"

@@ -83,10 +83,83 @@ export interface Intervention extends InterventionRequest {
   readonly raisedAt: string
 }
 
-/** One thing an Operator did while holding the Session, as they described it. */
+/**
+ * A value an Operator typed into the live application.
+ *
+ * ## Why this exists at all
+ *
+ * ADR-0008 makes every *declared parameter* sensitive and the Evidence scrubber
+ * is built from them, before a run starts. During an Intervention a person types
+ * things no parameter ever named: a supervisor id, an override code, whatever
+ * this particular screen is refusing without. Those are the same class of value
+ * -- arguably a worse one, because a credential is not merely identifying -- and
+ * until they are registered the scrubber cannot see them. Anything the
+ * application then renders back, echoes into a field, or puts in a URL is
+ * written into the log in the clear.
+ *
+ * ## Why the *value* travels, and where it stops
+ *
+ * `SessionControl.noteAction` registers these with `Evidence.redact` and keeps
+ * nothing: what survives on the record is `redacted`, the list of field names.
+ * The characters exist as an argument, become a needle, and are dropped. From
+ * that moment the run's log redacts them wherever they appear, including in the
+ * note the Operator is writing right now.
+ */
+export interface EnteredValue {
+  /** The field it was typed into, as the screen captions it: `Supervisor ID`. */
+  readonly field: string
+  /** The characters. Registered as a needle; never stored on the record. */
+  readonly value: string
+}
+
+/**
+ * What the placeholder for an entered value is called.
+ *
+ * A field is captioned for people (`Authorization Code`) and a placeholder is
+ * read in a log beside `[redacted:memberId]`, so the caption is folded into the
+ * same shape the declared parameters use. A field whose caption has nothing
+ * alphanumeric in it falls back to `operatorInput`, which is still a name rather
+ * than a blank.
+ */
+export const operatorFieldLabel = (field: string): string => {
+  const words = field.match(/[A-Za-z0-9]+/g) ?? []
+  if (words.length === 0) return "operatorInput"
+  return words
+    .map((word, position) =>
+      position === 0
+        ? word.toLowerCase()
+        : word[0]!.toUpperCase() + word.slice(1).toLowerCase()
+    )
+    .join("")
+}
+
+/**
+ * One thing an Operator did while holding the Session, as they described it.
+ *
+ * `redacted` names the fields they typed into, never what they typed. It is on
+ * the record so that an auditor can see that a credential was entered, and see
+ * that the system was told about it, without the record being the place the
+ * credential leaked.
+ */
 export interface OperatorAction {
   readonly at: string
   readonly detail: string
+  readonly redacted: ReadonlyArray<string>
+}
+
+/**
+ * What an Operator says they did, and what they typed while doing it.
+ *
+ * `entered` is **required**, and empty is a perfectly ordinary answer -- most
+ * things a person does to a screen involve no credential at all. It is required
+ * for the reason `EvidenceOptions.scrubber` is: a field that can be omitted is a
+ * field that gets omitted, and the omission is silent and permanent. Saying "I
+ * typed nothing secret" is one `[]`; forgetting to say it should not be
+ * spelled the same way.
+ */
+export interface OperatorNote {
+  readonly detail: string
+  readonly entered: ReadonlyArray<EnteredValue>
 }
 
 /**

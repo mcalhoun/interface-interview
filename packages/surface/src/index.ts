@@ -19,6 +19,7 @@ export {
 
 export type {
   AmbiguousTarget,
+  LabelledValue,
   ListDescription,
   ListItem,
   OfferedControl,
@@ -35,6 +36,7 @@ export {
   describeMatch,
   isTokenSubsetOf,
   labelOf,
+  labelledValuesIn,
   listItemsIn,
   readTextOf,
   regionOf,

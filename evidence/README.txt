@@ -37,8 +37,18 @@ Screenshots are NOT redacted
 ----------------------------
 
 Text evidence, meaning the accessibility snapshots and the event log, is scrubbed
-of this run's own sensitive parameter values at the single point where an event
-is serialised. Screenshots are stored as captured, so they render member numbers
+at the single point where an event is serialised. Three kinds of value go:
+
+  * this run's own declared sensitive parameters, known before it started;
+  * fields a screen showed that Policy calls personal -- a member's name, a tax
+    id. Nobody passed those in, so no declaration covers them; the captions are
+    declared in packages/policy/src/Sensitivity.ts, which also argues for why
+    that list is a short denylist rather than all screen text;
+  * anything an Operator said they typed into the live application while holding
+    the session. A supervisor override code is a credential no capability
+    declared, and the operator interface asks for it so the scrubber can be told.
+
+Screenshots are stored as captured, so they render member numbers, member names
 and balances in the clear. That is a stated limit rather than an oversight; see
 docs/adr/0010-evidence-screenshots-are-not-redacted.md. Everything here is
 synthetic data against a mock application.

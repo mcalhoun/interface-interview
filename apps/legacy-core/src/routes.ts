@@ -1,9 +1,29 @@
 /**
  * Heritage Core's routing table.
  *
- * Every route is a GET that returns a complete HTML document. There is no JSON
- * endpoint, no partial response and no way to reach the data except by rendering
- * a page, which is the point: this stands in for a system with no API.
+ * Every route returns a complete HTML document. There is no JSON endpoint, no
+ * partial response and no way to reach the data except by rendering a page,
+ * which is the point: this stands in for a system with no API.
+ *
+ * ## Reads are GETs; the two forms that carry a credential are POSTs
+ *
+ * Navigation, search and account lookup put their parameters on the query
+ * string, because that is what a screen of this vintage does and because a run
+ * has to be able to reach a screen by URL.
+ *
+ * The two forms that carry a **credential** -- the supervisor override on a
+ * restricted account, and the sign-on after a session times out -- are POSTs,
+ * and they read their fields from the request body only. A GET form serialises
+ * whatever was typed into the address bar, and the address bar is read by
+ * `page.url()`, written into Evidence, kept in browser history and sent on as a
+ * `Referer`. A supervisor id and an override code are exactly the values this
+ * system exists not to write down, and no amount of redaction downstream is as
+ * good as their never being in a URL.
+ *
+ * Answering the POST with the page itself, rather than redirecting, is what
+ * keeps the two properties the framed layout depends on: this server stores
+ * nothing, so replay stays order-independent, and the *outer* Account Detail
+ * page never navigates while somebody releases a hold inside the iframe.
  *
  * The router is built around a `TransientState` rather than being a bare
  * function, because three of the behaviours it has to reproduce are ones that
@@ -79,12 +99,32 @@ export const router = (
     // incidental requests cannot move the session-expiry toggle.
     if (pathname === "/favicon.ico") return new Response(null, { status: 204 })
 
+    /**
+     * Fields as submitted: the POST body when there is one, the query string
+     * otherwise.
+     *
+     * Read once per request, because a `Request` body is a stream and can only
+     * be consumed once. A GET has no body and the map is empty, which is what
+     * makes "a credential can only arrive in a body" true by construction on the
+     * two routes below rather than by everyone remembering.
+     */
+    const posted = request.method === "POST"
+      ? await request.formData().catch(() => new FormData())
+      : new FormData()
+    const submitted = (name: string): string =>
+      request.method === "POST"
+        ? String(posted.get(name) ?? "")
+        : url.searchParams.get(name) ?? ""
+
     if (pathname === "/signon") {
       // Any password will do — this is a mock and there is no credential store
       // behind it — but an *empty* one is refused, so an automation that could
       // not supply one stays signed out and its recovery genuinely runs out of
       // attempts instead of being waved through.
-      if ((url.searchParams.get("password") ?? "").trim() === "") {
+      //
+      // Read from the body only. A password on a query string is a password in
+      // the address bar, in `page.url()`, and therefore in Evidence.
+      if (String(posted.get("password") ?? "").trim() === "") {
         return html(signOnPage(tenant))
       }
       state.signOn()
@@ -134,11 +174,15 @@ export const router = (
 
       case "/account":
       case "/account/panel": {
-        const member = findMember(url.searchParams.get("memberNumber") ?? "")
+        // The account is identified the same way whichever verb arrived: on a
+        // GET from the query string, on the override POST from the hidden fields
+        // the form carries so that the response can be rendered without the
+        // server having remembered anything.
+        const member = findMember(submitted("memberNumber"))
         const account =
           member === undefined
             ? undefined
-            : findAccount(member, url.searchParams.get("accountNumber") ?? "")
+            : findAccount(member, submitted("accountNumber"))
         if (member === undefined || account === undefined) {
           return html(systemMessagePage("Account could not be retrieved.", tenant), 404)
         }
@@ -146,9 +190,14 @@ export const router = (
         // back to this route rather than to the panel document, so the
         // credentials are read here as well. On a framed tenant they are always
         // absent and the branch below is the one that reads them.
+        //
+        // **Body only.** Not `submitted`, which would still read a query string
+        // on a GET: a credential that can arrive in a URL is a credential that
+        // will end up in one, and the whole reason this form is a POST is that
+        // nothing should be able to put an override code in the address bar.
         const attempt = {
-          supervisorId: url.searchParams.get("supervisorId") ?? "",
-          authorizationCode: url.searchParams.get("authorizationCode") ?? ""
+          supervisorId: String(posted.get("supervisorId") ?? ""),
+          authorizationCode: String(posted.get("authorizationCode") ?? "")
         }
         if (pathname === "/account") {
           return html(accountDetailPage(member, account, tenant, attempt))

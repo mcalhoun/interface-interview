@@ -26,9 +26,9 @@
 +
 +      What that person said about it, in their own words: "released the supervisor hold on this account as an authorized supervisor. Nothing about the screen was wrong and nothing was waiting to load; the application was refusing, correctly, until somebody with the authority to override it said so"
 +    discoveredFrom: |-
-+      Learned from intervention session-supervisor-hold-intervention-1 (session session-supervisor-hold, run supervisor-hold, step open-account), raised at 2026-08-27T08:52:22.992Z.
++      Learned from intervention session-supervisor-hold-intervention-1 (session session-supervisor-hold, run supervisor-hold, step open-account), raised at 2026-08-27T12:28:46.448Z.
 +
-+      r.mensah took control at 2026-08-27T08:52:22.999Z, recorded 1 action(s) on the live session (entered supervisor override for SUP-HOLD-02), and returned it at 2026-08-27T08:52:23.039Z.
++      r.mensah took control at 2026-08-27T12:28:46.450Z, recorded 1 action(s) on the live session (entered supervisor override for SUP-HOLD-02), and returned it at 2026-08-27T12:28:46.517Z.
 +
 +      Asked "Next time automation meets this state, should it handle it itself?", they answered no: automation should always stop here. r.mensah resolved this by acting on the live session and confirmed that automation should always stop here rather than repeat what they did.
 +

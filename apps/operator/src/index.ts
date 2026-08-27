@@ -24,12 +24,53 @@
  * state of its own and enforces no rule of its own: taking control of a session
  * nobody paused is refused by the state machine, not by a disabled button. A
  * guard that lives in a form is a guard that anyone with `curl` walks around.
+ *
+ * ## What it does decide: who is allowed to ask
+ *
+ * That is a different question from what is allowed to happen, and it is the one
+ * thing this file must answer for itself, because there is nobody else to ask.
+ *
+ * The interface listens on a predictable loopback port. Until this ticket it had
+ * no authentication, no origin check and no CSRF token, which meant **any page
+ * open in the operator's browser could POST to it**: a form submission is not
+ * subject to the same-origin policy, and the attacker does not need to read the
+ * response to do damage. Return-of-control is what writes durable Capability
+ * amendments (ADR-0004) and tenant overrides (ADR-0006), carrying an operator's
+ * name and their answer to "should automation handle this next time". Forged
+ * metadata there feeds a one-way classification ratchet. "It is only localhost"
+ * is not a defence against the browser the operator is sitting in front of.
+ *
+ * Three things, and deliberately no more:
+ *
+ * 1. **A per-run token**, 32 random bytes, minted when the interface starts and
+ *    never written to Evidence. Every request carries it -- in the query string
+ *    of the URL the run prints, in a hidden field on every form, or in an
+ *    `x-operator-token` header for anything scripted. Compared in constant time.
+ * 2. **`Origin` and `Sec-Fetch-Site` are checked** on state-changing requests
+ *    and a cross-site one is refused. A token in a URL can leak by `Referer`, so
+ *    the token alone is not enough; the fetch metadata is what a cross-origin
+ *    form post cannot forge from a page.
+ * 3. **The token is required on `GET /` and `GET /state` too.** They are
+ *    read-only, and the argument for leaving them open does not survive contact
+ *    with what they contain: `GET /` renders the token into every form on the
+ *    page, so an open `/` hands the credential to anything that can guess the
+ *    port, and the other two measures then protect nothing. `/state` carries the
+ *    paused screen's accessibility tree -- the same banking screen content the
+ *    Evidence scrubber exists to keep out of files. A person following the
+ *    printed link is unaffected, because the link carries the token.
+ *
+ * What this is not: an auth system. There are no accounts, no sessions, no
+ * expiry and no revocation, and there should not be -- this is one person, one
+ * machine, one run. The bar it has to clear is that a random web page cannot
+ * drive it, and a per-run secret the page never sees clears it.
  */
 
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { Effect } from "effect"
 import type { Scope } from "effect/Scope"
 import {
   type ControlReturnClassification,
+  type EnteredValue,
   type HandoffSnapshot,
   type InterventionRecord,
   type NextTimeAnswer,
@@ -51,9 +92,22 @@ export interface OperatorInterfaceOptions {
 }
 
 export interface OperatorInterface {
-  /** e.g. `http://127.0.0.1:4180`, with no trailing slash. Printed on pause. */
+  /** e.g. `http://127.0.0.1:4180`, with no trailing slash. */
   readonly origin: string
   readonly port: number
+  /**
+   * This run's token. Required on every request.
+   *
+   * Minted here, held in memory, and never recorded: it is a credential for one
+   * process's lifetime, and an Evidence file that contained it would outlive the
+   * thing it protects. A scripted operator sends it as `x-operator-token`.
+   */
+  readonly token: string
+  /**
+   * The URL to give a person: the origin with the token on it. This is what the
+   * CLI prints and what `announce` says again at the moment of the pause.
+   */
+  readonly url: string
 }
 
 /**
@@ -70,22 +124,101 @@ export const serveOperator = (
   Effect.gen(function* () {
     const { control } = options
 
+    // 32 bytes from the OS. Minted per run, not per install: a token in a config
+    // file is a token that outlives the session it protects and gets committed.
+    const token = randomBytes(32).toString("base64url")
+
     const server = yield* Effect.acquireRelease(
-      Effect.sync(() =>
-        Bun.serve({
+      Effect.sync(() => {
+        // The handler needs the interface's own origin to check `Origin`
+        // against, and the origin is not known until `Bun.serve` has bound a
+        // port -- which is always, with `port: 0`. Reading it through a `let`
+        // rather than closing over the server keeps that dependency one-way and
+        // avoids naming Bun's generic server type.
+        let origin = ""
+        const running = Bun.serve({
           port: options.port ?? DEFAULT_OPERATOR_PORT,
           hostname: options.hostname ?? "127.0.0.1",
-          fetch: (request) => Effect.runPromise(route(control, request))
+          fetch: (request) => Effect.runPromise(route(control, request, token, origin))
         })
-      ),
+        origin = running.url.origin
+        return running
+      }),
       (running) => Effect.promise(() => running.stop(true))
     )
 
     const origin = server.url.origin
-    yield* Effect.acquireRelease(control.attach(origin), () => control.detach)
+    const url = `${origin}/?t=${token}`
+    // The *tokenised* URL is what gets attached, because it is the one an
+    // Operator can actually use: `announce` prints this at the moment of the
+    // pause and a bare origin would send them to a 401.
+    yield* Effect.acquireRelease(control.attach(url), () => control.detach)
 
-    return { origin, port: Number(server.url.port) }
+    return { origin, port: Number(server.url.port), token, url }
   })
+
+// ---------------------------------------------------------------------------
+// Who is allowed to ask
+// ---------------------------------------------------------------------------
+
+/**
+ * Constant-time equality over secrets of unequal length.
+ *
+ * `timingSafeEqual` throws on a length mismatch, and branching on the length
+ * first leaks it. Hashing both sides gives two 32-byte buffers whatever arrived,
+ * so the comparison is the same shape for every input.
+ */
+const sameSecret = (given: string, expected: string): boolean =>
+  timingSafeEqual(
+    createHash("sha256").update(given).digest(),
+    createHash("sha256").update(expected).digest()
+  )
+
+/** Where a token may arrive: the printed link, a form, or a scripted header. */
+const tokenOf = (request: Request, url: URL, form: FormData | undefined): string =>
+  request.headers.get("x-operator-token") ??
+  (form === undefined ? undefined : (form.get("token") as string | null)) ??
+  url.searchParams.get("t") ??
+  ""
+
+/**
+ * Why a request is being turned away, or `undefined` if it is not.
+ *
+ * Ordered so the cheap structural check comes first: a cross-site POST is
+ * refused before the token is even looked at, so a page that has somehow
+ * obtained the token by `Referer` still cannot drive the interface from an
+ * `<iframe>` or a hidden form.
+ */
+const refusalFor = (
+  request: Request,
+  url: URL,
+  form: FormData | undefined,
+  token: string,
+  origin: string
+): string | undefined => {
+  const changing = request.method !== "GET" && request.method !== "HEAD"
+
+  if (changing) {
+    // Set by the browser, not by the page. `cross-site` and `same-site` are both
+    // refused: nothing legitimate posts here except this interface's own forms.
+    const site = request.headers.get("sec-fetch-site")
+    if (site !== null && site !== "same-origin" && site !== "none") {
+      return `cross-site request refused (Sec-Fetch-Site: ${site})`
+    }
+    // A browser always sends `Origin` on a form POST, and cannot be made to lie
+    // about it. `curl` sends none, which is why the token is the other half.
+    const from = request.headers.get("origin")
+    if (from !== null && from !== origin) {
+      return `request from ${from} refused; this interface only accepts ${origin}`
+    }
+  }
+
+  const given = tokenOf(request, url, form)
+  if (given === "" || !sameSecret(given, token)) {
+    return "this operator interface needs the token from the URL the run printed"
+  }
+  return undefined
+}
 
 // ---------------------------------------------------------------------------
 // Routing
@@ -93,25 +226,41 @@ export const serveOperator = (
 
 const route = (
   control: SessionControl["Service"],
-  request: Request
+  request: Request,
+  token: string,
+  origin: string
 ): Effect.Effect<Response> =>
   Effect.gen(function* () {
     const url = new URL(request.url)
+    const posting = request.method === "POST"
+    // Read once: a `Request` body is a stream. The token may be in it, so this
+    // has to happen before the check rather than after it.
+    const form = posting
+      ? yield* Effect.promise(() => request.formData().catch(() => new FormData()))
+      : undefined
+
+    const refusal = refusalFor(request, url, form, token, origin)
+    if (refusal !== undefined) return unauthorised(refusal)
 
     if (url.pathname === "/state") {
       const snapshot = yield* control.snapshot
       return json(snapshot)
     }
 
-    if (request.method === "POST") {
-      const form = yield* Effect.promise(() => request.formData())
-      const field = (name: string): string => String(form.get(name) ?? "").trim()
+    if (posting) {
+      const field = (name: string): string => String(form?.get(name) ?? "").trim()
 
       const action =
         url.pathname === "/take"
           ? control.takeControl(field("operator") === "" ? "(unnamed)" : field("operator"))
           : url.pathname === "/note"
-            ? control.noteAction(field("detail") === "" ? "(no detail given)" : field("detail"))
+            ? control.noteAction({
+                detail: field("detail") === "" ? "(no detail given)" : field("detail"),
+                // What the Operator typed into the live application, so the run's
+                // scrubber learns it. See `EnteredValue`: the field names travel
+                // to Evidence, the characters become needles and stop here.
+                entered: enteredValuesIn(form)
+              })
             : url.pathname === "/return"
               ? control.returnControl({
                   operator: field("operator") === "" ? "(unnamed)" : field("operator"),
@@ -122,24 +271,46 @@ const route = (
                 })
               : undefined
 
-      if (action === undefined) return notFound(url.pathname)
+      if (action === undefined) return notFound(url.pathname, token)
 
       // A refused transition is shown, not swallowed. Someone who posts a
       // take-control form twice should be told the session is already theirs
       // rather than watching the page reload as if it worked.
       return yield* action.pipe(
-        Effect.as(seeOther("/")),
-        Effect.catch((problem) => Effect.succeed(refused(problem.message)))
+        Effect.as(seeOther(`/?t=${token}`)),
+        Effect.catch((problem) => Effect.succeed(refused(problem.message, token)))
       )
     }
 
     if (url.pathname === "/" || url.pathname === "/index.html") {
       const snapshot = yield* control.snapshot
-      return html(dashboard(snapshot))
+      return html(dashboard(snapshot, token))
     }
 
-    return notFound(url.pathname)
+    return notFound(url.pathname, token)
   })
+
+/**
+ * The value-and-field pairs on a note form, zipped in submission order.
+ *
+ * Repeated names rather than one row, because a person releasing a supervisor
+ * hold types two things and a form that only accepted one would leave the other
+ * unregistered -- which is exactly the failure this is here to prevent. A pair
+ * with a blank value is dropped: an empty needle would match everywhere.
+ */
+const enteredValuesIn = (form: FormData | undefined): ReadonlyArray<EnteredValue> => {
+  if (form === undefined) return []
+  const fields = form.getAll("enteredField").map((value) => String(value))
+  const values = form.getAll("enteredValue").map((value) => String(value))
+  const entered: Array<EnteredValue> = []
+  for (let position = 0; position < values.length; position += 1) {
+    const value = values[position] ?? ""
+    if (value === "") continue
+    const field = (fields[position] ?? "").trim()
+    entered.push({ field: field === "" ? "operator input" : field, value })
+  }
+  return entered
+}
 
 const classificationOf = (value: string): ControlReturnClassification =>
   value === "resolved" ? "resolved" : "unresolved"
@@ -208,17 +379,44 @@ const json = (value: unknown): Response =>
 const seeOther = (location: string): Response =>
   new Response(undefined, { status: 303, headers: { location } })
 
-const notFound = (pathname: string): Response =>
-  html(page("Not found", `<p>No operator route at ${escape(pathname)}.</p>`), 404)
-
-const refused = (message: string): Response =>
+const notFound = (pathname: string, token: string): Response =>
   html(
     page(
-      "Refused",
-      `<p class="refused">${escape(message)}</p><p><a href="/">Back to the session</a></p>`
+      "Not found",
+      `<p>No operator route at ${escape(pathname)}.</p>${backLink(token)}`
     ),
+    404
+  )
+
+const refused = (message: string, token: string): Response =>
+  html(
+    page("Refused", `<p class="refused">${escape(message)}</p>${backLink(token)}`),
     409
   )
+
+/**
+ * The 401, and it says how to get in rather than merely that you are not.
+ *
+ * Deliberately identical whether the token was wrong, missing, or the request
+ * was cross-site: a page probing the port learns nothing from the difference,
+ * and the person who mistyped a URL needs the same sentence either way. No token
+ * appears anywhere on it -- this is the response an unauthenticated caller gets,
+ * so it is the last place to put the credential.
+ */
+const unauthorised = (why: string): Response =>
+  html(
+    page(
+      "Not this session",
+      `<p class="refused">${escape(why)}</p>
+<p class="note">The run that owns this session printed a URL with a token on it, both when it
+  started and again at the moment it paused. Open that link. This interface belongs to one run
+  on this machine and has nothing to offer anybody else.</p>`
+    ),
+    401
+  )
+
+const backLink = (token: string): string =>
+  `<p><a href="/?t=${escape(token)}">Back to the session</a></p>`
 
 // ---------------------------------------------------------------------------
 // The page
@@ -250,12 +448,26 @@ input[type=text] { width: 24rem; padding: .3rem; }
 
 const page = (title: string, body: string): string => `<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>${escape(title)}</title><style>${STYLE}</style></head>
+<head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>${
+  escape(title)
+}</title><style>${STYLE}</style></head>
 <body>${body}</body>
 </html>
 `
 
-const dashboard = (snapshot: HandoffSnapshot): string => {
+/**
+ * The token, as a hidden field on every form.
+ *
+ * On the form rather than on the form's `action`, so that submitting does not
+ * put the credential in the address bar of the page that renders next -- the
+ * same argument that made Heritage Core's supervisor override a POST. The
+ * `no-referrer` meta above covers the one place it does appear, which is the
+ * address bar of the link the run printed.
+ */
+const tokenField = (token: string): string =>
+  `<input type="hidden" name="token" value="${escape(token)}">`
+
+const dashboard = (snapshot: HandoffSnapshot, token: string): string => {
   const heading = `<h1>Operator &mdash; session ${escape(snapshot.sessionId)}</h1>
 <p>Control owner: <span class="owner">${escape(snapshot.ownerLabel)}</span></p>`
 
@@ -263,7 +475,7 @@ const dashboard = (snapshot: HandoffSnapshot): string => {
     snapshot.pending === undefined
       ? `<p class="note">Nothing is paused. This page becomes useful when a run stops and
          raises an Intervention.</p>`
-      : pendingPanel(snapshot)
+      : pendingPanel(snapshot, token)
 
   return page(
     `Operator — ${snapshot.ownerLabel}`,
@@ -290,7 +502,7 @@ const trail = (history: ReadonlyArray<OwnerTransition>): string =>
       .join("")
   }</table>`
 
-const pendingPanel = (snapshot: HandoffSnapshot): string => {
+const pendingPanel = (snapshot: HandoffSnapshot, token: string): string => {
   const record = snapshot.pending!
   const it = record.intervention
   const held = snapshot.owner === "operator"
@@ -315,7 +527,16 @@ ${proposalPanel(record)}
     ? ""
     : `<h2>What has been done</h2><table>${
         record.actions
-          .map((action) => `<tr><th>${escape(action.at)}</th><td>${escape(action.detail)}</td></tr>`)
+          .map(
+            (action) =>
+              `<tr><th>${escape(action.at)}</th><td>${escape(action.detail)}${
+                action.redacted.length === 0
+                  ? ""
+                  : `<br><span class="note">values entered and now redacted from this run's evidence: ${
+                      escape(action.redacted.join(", "))
+                    }</span>`
+              }</td></tr>`
+          )
           .join("")
       }</table>`
 
@@ -325,10 +546,13 @@ ${proposalPanel(record)}
         escape(record.tookControlAt ?? "")
       }. The automation cannot act until you hand it back.</p>
 <form method="post" action="/note">
+${tokenField(token)}
 <label>Something you did <input type="text" name="detail" placeholder="entered supervisor override SUP-HOLD-02"></label>
+${enteredFields()}
 <button type="submit">Record it</button>
 </form>
 <form method="post" action="/return">
+${tokenField(token)}
 <input type="hidden" name="operator" value="${escape(record.operator ?? "")}">
 <label><input type="radio" name="classification" value="resolved" checked>
   Resolved &mdash; the screen is ready, resume the run from this step</label>
@@ -341,12 +565,46 @@ ${theProposalQuestion(record)}
 </form>`
     : `<h2>Take control</h2>
 <form method="post" action="/take">
+${tokenField(token)}
 <label>Your name <input type="text" name="operator" placeholder="j.okafor"></label>
 <button type="submit">Take control of this session</button>
 </form>`
 
   return facts + actions + controls
 }
+
+/**
+ * Where an Operator says what they typed into the live application.
+ *
+ * The reason it is on the page at all: the run's Evidence scrubber is built from
+ * the Capability's declared inputs, and nothing a person types during an
+ * Intervention is one of those. A supervisor id and an override code are the
+ * same class of value as a member number -- worse, since they are credentials --
+ * and until this field existed the system had no way to be told about them. It
+ * then wrote them down wherever the application echoed them back.
+ *
+ * Two rows, because releasing a supervisor hold takes two values and a form that
+ * accepted one would leave the other in the clear, which is the failure this is
+ * for. The value is never stored: `SessionControl.noteAction` turns it into a
+ * scrubber needle and keeps only the field name.
+ *
+ * Nothing is required. An Operator who fixed a screen by clicking something
+ * typed nothing, and `[]` is the honest answer for them.
+ */
+const enteredFields = (): string =>
+  `<fieldset>
+<legend>Anything you typed into the application</legend>
+<p class="note">Values entered here are redacted from this run's evidence from now on,
+  wherever they turn up &mdash; in a URL, in a field the screen echoes back, in the note
+  above. The value itself is not stored; only the name of the field is.</p>
+${[0, 1]
+    .map(
+      () =>
+        `<label>Field <input type="text" name="enteredField" placeholder="Authorization Code">
+  value <input type="text" name="enteredValue" autocomplete="off"></label>`
+    )
+    .join("\n")}
+</fieldset>`
 
 /**
  * The one question, and the only new thing on this page.

@@ -30,6 +30,13 @@ console.log(
     "again, loudly, at the moment it pauses. Member 77777's savings account is",
     "under a supervisor hold, so that run pauses at the last step and waits.",
     "",
+    "That URL carries a token, minted per run and required on every request. Open",
+    "the link the run printed; the bare origin answers 401 on purpose. The token is",
+    "there because a form POST is not subject to the same-origin policy, so without",
+    "one any page open in the operator's browser could take control of a paused",
+    "session and hand it back with an operator name and an answer nobody gave --",
+    "and that answer is what writes a durable amendment to a capability.",
+    "",
     "Anything the operator interface can do, it does to that run's session only."
   ].join("\n")
 )

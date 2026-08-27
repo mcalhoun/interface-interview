@@ -32,8 +32,14 @@
  */
 
 import type { ResolvedInputs } from "@cua/artifact"
-import type { Evidence, EvidenceUnwritable, Scrubber, SensitiveText } from "@cua/evidence"
-import { evidenceFiles, scrubbing } from "@cua/evidence"
+import type {
+  Evidence,
+  EvidenceUnwritable,
+  Scrubber,
+  SecretRegistry,
+  SensitiveText
+} from "@cua/evidence"
+import { evidenceFiles, scrubbing, secretRegistry } from "@cua/evidence"
 import { Redacted } from "effect"
 import type { Layer } from "effect/Layer"
 
@@ -42,18 +48,36 @@ export const sensitiveNames = (inputs: ResolvedInputs): ReadonlyArray<string> =>
   [...inputs.values()].filter((input) => input.sensitive).map((input) => input.name)
 
 /**
- * The scrubber for one run's inputs.
+ * The scrubber for one run's declared inputs, fixed at the moment it is built.
  *
- * UNWRAP SITE 1 OF 2. The plaintext lives in the `SensitiveText` list and in the
- * closure `scrubbing` builds over it, and goes nowhere else.
+ * The plaintext lives in the `SensitiveText` list `declaredSecrets` returns and
+ * in the closure `scrubbing` builds over it, and goes nowhere else.
  */
-export const scrubberFor = (inputs: ResolvedInputs): Scrubber => {
+export const scrubberFor = (inputs: ResolvedInputs): Scrubber => scrubbing(declaredSecrets(inputs))
+
+/**
+ * The same values, as a registry the run can add to.
+ *
+ * This is what the Evidence writer gets. `scrubberFor` above is the fixed
+ * snapshot, and it still has two callers that want exactly that — an Amendment
+ * and an Override are written *after* a run, from its declared inputs, and the
+ * question they ask ("does this text still contain a value this run typed") is
+ * about the document, not about the log.
+ *
+ * A run's Evidence wants the live one, because a run learns secrets: what an
+ * Operator types during an Intervention, and what a screen renders back.
+ */
+export const secretsFor = (inputs: ResolvedInputs): SecretRegistry =>
+  secretRegistry(declaredSecrets(inputs))
+
+/** UNWRAP SITE 1 OF 2. The plaintext goes into a `SensitiveText` and nowhere else. */
+const declaredSecrets = (inputs: ResolvedInputs): ReadonlyArray<SensitiveText> => {
   const values: Array<SensitiveText> = []
   for (const input of inputs.values()) {
     if (!input.sensitive) continue
     values.push({ label: input.name, text: Redacted.value(input.text) })
   }
-  return scrubbing(values)
+  return values
 }
 
 export interface RunEvidenceOptions {
@@ -83,7 +107,7 @@ export const evidenceForRun = (
     root: options.root,
     runId: options.runId,
     sessionId: options.sessionId,
-    scrubber: scrubberFor(options.inputs),
+    scrubber: secretsFor(options.inputs),
     redacting: sensitiveNames(options.inputs),
     ...(options.policy === undefined ? {} : { policy: options.policy })
   })

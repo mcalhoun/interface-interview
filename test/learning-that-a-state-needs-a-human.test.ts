@@ -90,7 +90,7 @@ const record = (over: Partial<InterventionRecord> = {}): InterventionRecord => (
   },
   operator: "r.mensah",
   tookControlAt: "2026-08-27T00:00:10.000Z",
-  actions: [{ at: "2026-08-27T00:00:15.000Z", detail: "entered supervisor override" }],
+  actions: [{ at: "2026-08-27T00:00:15.000Z", detail: "entered supervisor override", redacted: [] }],
   returnedAt: "2026-08-27T00:00:20.000Z",
   classification: "resolved",
   detail: "released the hold as an authorized supervisor",

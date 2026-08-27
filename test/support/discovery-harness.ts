@@ -81,7 +81,7 @@ export const runDiscovery = (
           root,
           runId,
           sessionId: runId,
-          scrubber: secrets.scrubber
+          scrubber: secrets.registry
         }),
         options.model
       )

@@ -25,7 +25,7 @@ import { it } from "@effect/vitest"
 import { Effect, Fiber, Layer } from "effect"
 import { expect } from "vitest"
 import { randomUUID } from "node:crypto"
-import { evidenceFiles, noScrubbing } from "@cua/evidence"
+import { evidenceFiles, noSecrets } from "@cua/evidence"
 import {
   HandoffRefused,
   SessionControl,
@@ -97,7 +97,7 @@ const bareControl = () =>
           sessionId: "session-bare",
           // Nothing sensitive is in play: this control has no run and no inputs.
           // Saying so is spelled out rather than defaulted (ticket 08).
-          scrubber: noScrubbing
+          scrubber: noSecrets()
         })
       )
     )
@@ -195,7 +195,13 @@ it.live("the machine walks AUTOMATION, PAUSED, HUMAN, RESUME_REQUESTED, AUTOMATI
     )
     expect(thrown).toContain("was attempted while control belonged to HUMAN")
 
-    yield* control.noteAction("entered supervisor override SUP-HOLD-02")
+    // `entered` is required and empty is an ordinary answer: this operator
+    // pressed something rather than typing a credential. The case where they do
+    // type one is `test/operator-interface-authentication.test.ts`.
+    yield* control.noteAction({
+      detail: "entered supervisor override SUP-HOLD-02",
+      entered: []
+    })
     yield* control.returnControl({
       operator: "j.okafor",
       classification: "resolved",
@@ -272,7 +278,7 @@ it.live("acting after handing the session back is refused", () =>
     const outcome = yield* Fiber.join(paused)
     expect(outcome.resumed).toBe(false)
 
-    const refusal = yield* Effect.flip(control.noteAction("one more thing"))
+    const refusal = yield* Effect.flip(control.noteAction({ detail: "one more thing", entered: [] }))
     if (!(refusal instanceof HandoffRefused)) throw new Error(String(refusal))
     expect(refusal.expected).toBe("operator")
   })

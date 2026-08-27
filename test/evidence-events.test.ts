@@ -20,17 +20,18 @@ import { Effect, Layer } from "effect"
 import { expect } from "vitest"
 import {
   type EvidenceEvent,
-  type Scrubber,
+  type SecretRegistry,
   Evidence,
   EvidenceEventSchema,
   KINDS_FORBIDDEN_IN_REPLAY,
   evidenceFiles,
-  noScrubbing
+  noSecrets,
+  secretRegistry
 } from "@cua/evidence"
 
 const withEvidence = <A, E>(
   body: (evidence: Evidence["Service"], directory: string) => Effect.Effect<A, E>,
-  scrubber: Scrubber = noScrubbing
+  scrubber: SecretRegistry = noSecrets()
 ) =>
   Effect.gen(function* () {
     const root = mkdtempSync(join(tmpdir(), "cua-evidence-test-"))
@@ -102,7 +103,7 @@ it.live("passes every string through the scrubber before it is written", () =>
         expect(written).not.toContain("12345")
         expect(written).toContain("[redacted:memberId]")
       }),
-    (text) => text.replaceAll("12345", "[redacted:memberId]")
+    secretRegistry([{ label: "memberId", text: "12345" }])
   )
 )
 
@@ -197,7 +198,7 @@ it.effect("a second writer on the same run is refused, rather than interleaving 
           inputs: []
         })
       }).pipe(
-        Effect.provide(evidenceFiles({ root, runId: "shared", sessionId, scrubber: noScrubbing }))
+        Effect.provide(evidenceFiles({ root, runId: "shared", sessionId, scrubber: noSecrets() }))
       )
 
     yield* open("session-one")

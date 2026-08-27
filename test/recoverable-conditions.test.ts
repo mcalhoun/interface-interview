@@ -136,6 +136,15 @@ it.live("turns every screen into Sign On once the expiry toggle fires, until som
     const core = yield* serve({ port: 0, expireSessionAfter: 1 })
     const get = (path: string) =>
       Effect.promise(() => fetch(core.origin + path).then((response) => response.text()))
+    // Sign-on is a POST: the password is a credential and a GET form would put
+    // it in the address bar, and therefore in `page.url()` and in Evidence.
+    const signOn = (password: string) =>
+      Effect.promise(() =>
+        fetch(`${core.origin}/signon`, {
+          method: "POST",
+          body: new URLSearchParams({ password })
+        }).then((response) => response.text())
+      )
 
     expect(yield* get("/")).toContain("Member Number Search")
 
@@ -150,11 +159,11 @@ it.live("turns every screen into Sign On once the expiry toggle fires, until som
 
     // An empty password is refused, so an automation that cannot supply one
     // genuinely stays stuck rather than being waved through.
-    expect(yield* get("/signon?password=")).toContain("Session Expired")
+    expect(yield* signOn("")).toContain("Session Expired")
 
     // Signing on returns the operator to Member Search — not to the screen they
     // were on. Losing your place is the point of this condition.
-    expect(yield* get(`/signon?password=${PASSWORD}`)).toContain("Member Number Search")
+    expect(yield* signOn(PASSWORD)).toContain("Member Number Search")
     expect(yield* get("/member?memberNumber=12345")).toContain("Member Detail")
   }).pipe(Effect.scoped)
 )

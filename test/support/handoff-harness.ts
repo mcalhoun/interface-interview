@@ -18,7 +18,7 @@ import { join } from "node:path"
 import { type LegacyCoreOptions, serve } from "@cua/legacy-core"
 import { type CapabilityArtifact, type ResolvedInputs, prepareInputs } from "@cua/artifact"
 import type { EvidenceEvent } from "@cua/evidence"
-import { serveOperator } from "@cua/operator"
+import { type OperatorInterface, serveOperator } from "@cua/operator"
 import { Policy, declassifierFor, policyFrom, sensitivityPolicy } from "@cua/policy"
 import {
   type HandoffSnapshot,
@@ -59,8 +59,10 @@ export interface OperatorDesk {
   readonly get: (path: string) => Effect.Effect<{ status: number; body: string }>
   readonly post: (
     path: string,
-    fields: Readonly<Record<string, string>>
+    fields: Readonly<Record<string, string | ReadonlyArray<string>>>
   ) => Effect.Effect<{ status: number; body: string }>
+  /** This run's operator token, for a test that wants to prove what refuses it. */
+  readonly token: string
   /** The snapshot as the interface serves it, not as the machine holds it. */
   readonly served: Effect.Effect<HandoffSnapshot>
   /**
@@ -178,7 +180,7 @@ export const attendedReplay = (
       )
 
       if (options.operate !== undefined && operator !== undefined) {
-        yield* options.operate(desk(operator.origin, control, surface, waitMillis, () => ({
+        yield* options.operate(desk(operator, control, surface, waitMillis, () => ({
           artifact: options.artifact,
           inputs: prepared.success,
           baseUrl: core.origin,
@@ -202,7 +204,7 @@ export const attendedReplay = (
 // ---------------------------------------------------------------------------
 
 const desk = (
-  origin: string,
+  operator: OperatorInterface,
   control: SessionControl["Service"],
   surface: SurfaceAdapterService,
   waitMillis: number,
@@ -213,12 +215,28 @@ const desk = (
     readonly root: string
   }
 ): OperatorDesk => {
+  const { origin, token } = operator
+
+  /**
+   * Every request carries this run's operator token, the way a person's browser
+   * does after they follow the URL the run printed.
+   *
+   * As a header rather than on the query string, because that is what a scripted
+   * operator is: it has the token because it was handed the interface, not
+   * because it read a link. Tests that want to prove an *unauthenticated* caller
+   * is refused build their own `fetch`, which is the point of not hiding this
+   * inside the harness.
+   */
   const request = (
     path: string,
     init?: RequestInit
   ): Effect.Effect<{ status: number; body: string }> =>
     Effect.promise(async () => {
-      const response = await fetch(origin + path, { redirect: "manual", ...init })
+      const response = await fetch(origin + path, {
+        redirect: "manual",
+        ...init,
+        headers: { ...(init?.headers ?? {}), "x-operator-token": token }
+      })
       return { status: response.status, body: await response.text() }
     })
 
@@ -244,8 +262,18 @@ const desk = (
     awaitPause: awaitOwner("paused"),
     awaitOwner,
     get: (path) => request(path),
-    post: (path, fields) =>
-      request(path, { method: "POST", body: new URLSearchParams(fields) }),
+    token,
+    post: (path, fields) => {
+      // Repeated names, so a note can carry more than one entered value: a
+      // supervisor hold takes two, and a form that could only say one would
+      // leave the other unregistered.
+      const body = new URLSearchParams()
+      for (const [name, value] of Object.entries(fields)) {
+        if (Array.isArray(value)) for (const one of value) body.append(name, one)
+        else body.append(name, value as string)
+      }
+      return request(path, { method: "POST", body })
+    },
     served: request("/state").pipe(
       Effect.map((response) => JSON.parse(response.body) as HandoffSnapshot)
     ),

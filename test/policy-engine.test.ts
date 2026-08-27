@@ -872,7 +872,11 @@ describe("repeating an action during a recovery", () => {
     expect(declared?.repeatable ?? "").not.toBe("")
   })
 
-  it("stops a run before it performs anything, rather than when the rule fires", () =>
+  // `it.live`, not `it`. An Effect is not a thenable, so a plain `it` returning
+  // one never runs the generator at all and the test passes having asserted
+  // nothing. It was the only case in this file not using `it.live`, and it drives
+  // a real browser through the harness like the others.
+  it.live("stops a run before it performs anything, rather than when the rule fires", () =>
     Effect.gen(function* () {
       const tally: Record<string, number> = {}
       const outcome = yield* replay({

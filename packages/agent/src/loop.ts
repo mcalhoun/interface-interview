@@ -50,9 +50,15 @@
 import type { EvidenceUnwritable } from "@cua/evidence"
 import { Evidence } from "@cua/evidence"
 import type { ActionRequest } from "@cua/policy"
-import { Policy } from "@cua/policy"
+import { Policy, personalCaptions, personalLabelFor } from "@cua/policy"
 import type { SurfaceState, Target, TargetFailure } from "@cua/surface"
-import { SurfaceAdapter, describeMatch, describeTarget, selectFromTree } from "@cua/surface"
+import {
+  SurfaceAdapter,
+  describeMatch,
+  describeTarget,
+  labelledValuesIn,
+  selectFromTree
+} from "@cua/surface"
 import { Effect } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import { checkProvenance } from "./Provenance.ts"
@@ -317,6 +323,21 @@ export const discover = (
       Effect.gen(function*() {
         const state = yield* surface.observe.pipe(
           Effect.mapError((failure) => new DiscoveryFailed(failure.reason))
+        )
+        /**
+         * Registered before the `observe` event that carries this very tree.
+         *
+         * Discovery's scrubber grows as the model tags the values it *types*.
+         * That covers nothing the screen renders back on its own: a member's
+         * name is nobody's parameter and no model ever proposes it. Same rule as
+         * Replay's, same declared captions, same reason -- see `personalFields`
+         * in packages/policy/src/Sensitivity.ts.
+         */
+        yield* evidence.redact(
+          labelledValuesIn(state.tree, personalCaptions).flatMap((found) => {
+            const label = personalLabelFor(found.caption)
+            return label === undefined ? [] : [{ label, text: found.text }]
+          })
         )
         yield* evidence.record({
           kind: "observe",

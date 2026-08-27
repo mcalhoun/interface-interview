@@ -225,8 +225,17 @@ bun run replay member.account-balance --memberId 77777 --version 1.1.0 --headed 
 
 It pauses, prints the operator interface URL, and leaves a visible browser on the
 screen it stopped at. Open the URL, take control, release the supervisor hold in
-that browser window, note what you did, and hand control back. The run finishes,
-cuts `member.account-balance@1.2.0` and prints the diff.
+that browser window, note what you did — including the supervisor id and override
+code you typed, so this run's evidence redacts them from here on — and hand
+control back. The run finishes, cuts `member.account-balance@1.2.0` and prints
+the diff.
+
+The printed URL carries a token minted for that run, and every request needs it.
+Open the link rather than the bare `http://127.0.0.1:4180`, which answers 401 on
+purpose: a cross-origin form POST is not blocked by the same-origin policy, so
+without a token any page open in your browser could take a paused session and
+hand it back with an answer you did not give — and that answer is what writes a
+durable amendment to a capability.
 
 `bun run replay ... --memberId 88888 --version 1.0.0 --headed --handoff` is the
 other direction: take control, change nothing, and answer yes. That cuts

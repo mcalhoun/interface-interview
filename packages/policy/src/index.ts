@@ -74,10 +74,13 @@ export {
   unsafeRepeats
 } from "./Repeatability.ts"
 
-export type { Declassification, SensitivityPolicy } from "./Sensitivity.ts"
+export type { Declassification, PersonalField, SensitivityPolicy } from "./Sensitivity.ts"
 export {
   declassifierFor,
   declassifying,
   nothingDeclassified,
+  personalCaptions,
+  personalFields,
+  personalLabelFor,
   sensitivityPolicy
 } from "./Sensitivity.ts"

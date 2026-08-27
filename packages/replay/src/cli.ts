@@ -583,7 +583,15 @@ const run = (
           control,
           port: Number(argv.options["operatorPort"] ?? DEFAULT_OPERATOR_PORT)
         })
-        yield* Console.log(`operator interface: ${operator.origin}`)
+        // The URL carries this run's token, and the token is the only way in.
+        // Printing the bare origin would print something that answers 401, and a
+        // person would reasonably read that as the interface being broken.
+        yield* Console.log(
+          [
+            `operator interface: ${operator.url}`,
+            "  the token in that link is this run's; nothing else on this machine can drive the session"
+          ].join("\n")
+        )
       }
 
       const result = yield* replayCapability({

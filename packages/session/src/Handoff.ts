@@ -46,6 +46,8 @@ import {
   type InterventionOutcome,
   type InterventionRecord,
   type InterventionRequest,
+  type OperatorNote,
+  operatorFieldLabel,
   raise
 } from "./Intervention.ts"
 import { type ControlOwner, ControlOwner as ControlOwnerSchema, Session, SessionNotOwned, describeOwner } from "./Session.ts"
@@ -130,9 +132,24 @@ export class SessionControl extends Context.Service<SessionControl, {
   readonly takeControl: (
     operator: string
   ) => Effect.Effect<InterventionRecord, HandoffRefused | EvidenceUnwritable>
-  /** Record one thing the Operator did while holding the Session. */
+  /**
+   * Record one thing the Operator did while holding the Session, and register
+   * anything they typed while doing it.
+   *
+   * The registration is the point, and it lives here rather than in the operator
+   * interface deliberately. What a person types during an Intervention is the
+   * one class of sensitive value no Artifact could have declared, and this is the
+   * single method through which an Operator tells the system what they did. Put
+   * the registration in the HTTP handler and the next interface -- a second
+   * page, a test harness, a CLI -- silently does not have it; put it here and
+   * every caller of `noteAction` gets it, because `SessionControl` cannot be
+   * constructed without the `Evidence` writer that performs it.
+   *
+   * `OperatorNote.entered` is required, and `[]` is the ordinary answer. See
+   * `EnteredValue` for why it is not optional.
+   */
   readonly noteAction: (
-    detail: string
+    note: OperatorNote
   ) => Effect.Effect<InterventionRecord, HandoffRefused | EvidenceUnwritable>
   /** `HUMAN → RESUME_REQUESTED`, and the signal the paused run is waiting on. */
   readonly returnControl: (
@@ -438,24 +455,55 @@ export const sessionControl = (
           )
         )
 
-      const noteAction = (detail: string) =>
-        transition("record an action", "operator", (waiting) => [
-          {
-            ...waiting.record,
-            actions: [...waiting.record.actions, { at: now(), detail }]
-          },
-          "operator",
-          "(no change of hands)"
-        ]).pipe(
-          Effect.tap((record) =>
-            evidence.record({
-              kind: "intervention.human_action",
-              stepId: record.intervention.stepId,
-              operator: record.operator ?? "(unnamed)",
-              detail
-            })
+      const noteAction = (note: OperatorNote) =>
+        Effect.gen(function* () {
+          /**
+           * Registered before the transition, and therefore before the
+           * `intervention.human_action` event this call is about to write.
+           *
+           * The ordering is the whole mechanism. `EvidenceWriter.record` scrubs
+           * on write, so a value registered first is redacted in the very note
+           * that reports it -- an Operator who writes "entered 4417 as the
+           * override" gets `entered [redacted:authorizationCode] as the
+           * override`, rather than having their own note be the leak. Everything
+           * the run writes afterwards is covered too, which is what closes the
+           * URL and the echoed-field-value cases.
+           *
+           * Nothing here keeps the characters: `redacted` on the record is the
+           * list of field names.
+           */
+          yield* evidence.redact(
+            note.entered.map((entry) => ({
+              label: operatorFieldLabel(entry.field),
+              text: entry.value
+            }))
           )
-        )
+          const redacted = note.entered.map((entry) => operatorFieldLabel(entry.field))
+
+          return yield* transition("record an action", "operator", (waiting) => [
+            {
+              ...waiting.record,
+              actions: [
+                ...waiting.record.actions,
+                { at: now(), detail: note.detail, redacted }
+              ]
+            },
+            "operator",
+            "(no change of hands)"
+          ]).pipe(
+            Effect.tap((record) =>
+              evidence.record({
+                kind: "intervention.human_action",
+                stepId: record.intervention.stepId,
+                operator: record.operator ?? "(unnamed)",
+                detail:
+                  redacted.length === 0
+                    ? note.detail
+                    : `${note.detail} (values entered: ${redacted.join(", ")})`
+              })
+            )
+          )
+        })
 
       const returnControl = (body: ControlReturn) =>
         transition("return control", "operator", (waiting) => [

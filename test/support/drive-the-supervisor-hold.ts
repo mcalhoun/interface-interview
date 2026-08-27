@@ -73,12 +73,23 @@ const program = Effect.gen(function* () {
 
         yield* desk.post("/take", { operator: "r.mensah" })
 
+        // Said *before* it is typed, and that ordering is the point rather than
+        // tidiness. A run's scrubber is built from the Capability's declared
+        // inputs, and a supervisor id and an override code are neither -- nobody
+        // declared them, because nobody knew a person would be involved. Telling
+        // the Session first means the needles exist before the application can
+        // echo either value back into a field, a URL or an accessibility tree.
+        yield* desk.post("/note", {
+          detail: "entered supervisor override for SUP-HOLD-02",
+          enteredField: ["Supervisor ID", "Authorization Code"],
+          enteredValue: ["SUP7", "4417"]
+        })
+
         // The authority. Three gestures in the automation's own browser window,
         // none of which a capability has any business performing by itself.
         yield* desk.surface.fill({ role: "textbox", name: "Supervisor ID" }, "SUP7")
         yield* desk.surface.fill({ role: "textbox", name: "Authorization Code" }, "4417")
         yield* desk.surface.click({ role: "button", name: "Authorize" })
-        yield* desk.post("/note", { detail: "entered supervisor override for SUP-HOLD-02" })
 
         // Two independent answers, and this is the pair that needs both fields:
         // the episode *is* resolved — the balances are on the screen now — and

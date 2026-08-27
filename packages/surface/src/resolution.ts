@@ -839,3 +839,60 @@ export const controlsOfferedIn = (
   }
   return controls
 }
+
+/** A value a screen showed under a caption somebody asked about. */
+export interface LabelledValue {
+  /** The caption as declared, not as rendered. What a policy entry names. */
+  readonly caption: string
+  /** What sat beside it, trimmed. */
+  readonly text: string
+}
+
+/**
+ * Every value on a screen that sits under one of the named captions.
+ *
+ * The same caption-reading rule `labelOf` gives a Target, run in the opposite
+ * direction: instead of asking "what is this control called", it asks "what is
+ * under the thing called *that*". Heritage Core writes a record as
+ * `<td>Member Name</td><td>MARGUERITE A ELLSWORTH</td>`, so the association is
+ * positional within the enclosing row and this is the one function in the
+ * workspace that computes it.
+ *
+ * It exists so that a caller can treat a *field* as sensitive rather than a
+ * value, which is the only way to be sensitive about text that is nobody's
+ * parameter. `packages/policy/src/Sensitivity.ts` declares which captions;
+ * nothing here decides.
+ *
+ * Matching is on the normalised caption, because a caption is rendered text and
+ * `Member Name` and `MEMBER NAME` are the same field. Values are deduplicated,
+ * because Chromium exposes a layout table's contents at every enclosing level
+ * and the same name is reachable a dozen times over.
+ */
+export const labelledValuesIn = (
+  tree: AccessibilityNode,
+  captions: ReadonlyArray<string>
+): ReadonlyArray<LabelledValue> => {
+  const wanted = new Map(captions.map((caption) => [normalise(caption), caption]))
+  if (wanted.size === 0) return []
+
+  const index = indexTree(tree)
+  const found: Array<LabelledValue> = []
+  const seen = new Set<string>()
+
+  for (const node of walk(tree)) {
+    const label = labelOf(index, node)
+    if (label === undefined) continue
+    const caption = wanted.get(normalise(label))
+    if (caption === undefined) continue
+    const text = readTextOf(node).trim()
+    // A value that *is* its own caption is the caption cell reading itself, which
+    // happens where a row repeats. Nothing to redact and redacting it would blank
+    // the field name out of the log.
+    if (text === "" || normalise(text) === normalise(label)) continue
+    const key = `${caption} ${text}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    found.push({ caption, text })
+  }
+  return found
+}

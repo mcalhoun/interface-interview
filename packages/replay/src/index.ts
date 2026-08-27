@@ -40,7 +40,7 @@ export type { AppliedOverride, ReplayRequest } from "./engine.ts"
 export { replayCapability } from "./engine.ts"
 
 export type { RunEvidenceOptions } from "./redaction.ts"
-export { evidenceForRun, scrubberFor, sensitiveNames } from "./redaction.ts"
+export { evidenceForRun, scrubberFor, secretsFor, sensitiveNames } from "./redaction.ts"
 
 export type {
   RecoveryBlocked,

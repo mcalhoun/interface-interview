@@ -101,7 +101,7 @@ it("derives what was learned from what the operator did, not from what they were
   // performed, which is a recovery rule rather than an outcome.
   const acted = classify(
     record({
-      actions: [{ at: "2026-08-27T00:00:15.000Z", detail: "entered supervisor override" }],
+      actions: [{ at: "2026-08-27T00:00:15.000Z", detail: "entered supervisor override", redacted: [] }],
       nextTime: "automation_handles_it"
     })
   )
@@ -113,7 +113,7 @@ it("derives what was learned from what the operator did, not from what they were
   // a rule nobody has tested.
   const privileged = classify(
     record({
-      actions: [{ at: "2026-08-27T00:00:15.000Z", detail: "authorised as supervisor" }],
+      actions: [{ at: "2026-08-27T00:00:15.000Z", detail: "authorised as supervisor", redacted: [] }],
       nextTime: "always_stop_here"
     })
   )
@@ -575,7 +575,7 @@ it("will not turn a checkpoint failure into a business outcome", () => {
   // What this test is for is unchanged: the state the operator had to *act* to
   // resolve does not become an answer this capability may return.
   const held = record({
-    actions: [{ at: "2026-08-27T00:00:15.000Z", detail: "entered supervisor override" }],
+    actions: [{ at: "2026-08-27T00:00:15.000Z", detail: "entered supervisor override", redacted: [] }],
     nextTime: "always_stop_here",
     classification: "resolved"
   })

@@ -138,7 +138,14 @@ import {
   toSurfaceTarget
 } from "@cua/artifact"
 import { Evidence, type EvidenceUnwritable } from "@cua/evidence"
-import { type ActionRequest, Policy, describeUnsafeRepeat, unsafeRepeats } from "@cua/policy"
+import {
+  type ActionRequest,
+  Policy,
+  describeUnsafeRepeat,
+  personalCaptions,
+  personalLabelFor,
+  unsafeRepeats
+} from "@cua/policy"
 import { type TargetProposal, Session } from "@cua/session"
 import {
   type SurfaceAdapterService,
@@ -148,7 +155,8 @@ import {
   SurfaceAdapter,
   controlsOfferedIn,
   describeMatch,
-  describeTarget
+  describeTarget,
+  labelledValuesIn
 } from "@cua/surface"
 import {
   type Advisor,
@@ -179,7 +187,6 @@ import {
 } from "./recovery.ts"
 import type { ReplayFailure, ReplayFailureBody, ReplayResult, StepRecord } from "./ReplayResult.ts"
 import { describeResult } from "./ReplayResult.ts"
-import { scrubberFor } from "./redaction.ts"
 
 export interface ReplayRequest {
   readonly artifact: CapabilityArtifact
@@ -269,10 +276,54 @@ export const replayCapability = (
      * consultation is the only text this engine sends anywhere else, and it is
      * put through the same function rather than a second definition of
      * "sensitive" that could drift from the first (ADR-0008, and ticket 13's
-     * argument for passing the run's own scrubber into an Amendment). No new
-     * `Redacted.value` call site: `scrubberFor` is the existing one.
+     * argument for passing the run's own scrubber into an Amendment).
+     *
+     * It is the writer's **live** scrubber rather than one built here from the
+     * declared inputs, and that is the point: a run learns sensitive values as it
+     * goes -- a member's name off a screen, an override code an Operator typed --
+     * and a consultation built on a snapshot taken before the run started would
+     * send exactly the values the log has since learned to redact.
      */
-    const scrub = scrubberFor(inputs)
+    const scrub = evidence.scrub
+
+    /**
+     * What a screen showed under a caption Policy calls personal, registered
+     * before anything that saw the screen is written down.
+     *
+     * The declared-input scrubber cannot reach this class of value: a member's
+     * name is nobody's parameter. `personalFields` in
+     * `packages/policy/src/Sensitivity.ts` declares the captions and argues for
+     * the rule; this is the one place a Replay run applies it, and it is applied
+     * to *every* observation the engine or a Checkpoint makes, because the screen
+     * that first renders a name is not always the one a Step was looking at.
+     *
+     * Ordering is the whole of why it works. `EvidenceWriter.record` scrubs on
+     * write, so registering here -- before the `observe` event carrying this very
+     * tree -- redacts that event too. `test/sensitive-data.test.ts` asserts the
+     * placeholder is present in the event that first showed the value, which is a
+     * stronger claim than the value being absent.
+     */
+    const witness = (state: SurfaceState): Effect.Effect<void> =>
+      evidence.redact(
+        labelledValuesIn(state.tree, personalCaptions).flatMap((found) => {
+          const label = personalLabelFor(found.caption)
+          return label === undefined ? [] : [{ label, text: found.text }]
+        })
+      )
+
+    /** Observation, with what it saw registered before anybody can write it down. */
+    const observing = surface.observe.pipe(Effect.tap(witness))
+
+    /**
+     * What a Checkpoint is allowed to touch, with the same registration on it.
+     *
+     * A Checkpoint polls a live screen, and the screen it is waiting for is
+     * routinely the first one to render a personal field -- the member detail
+     * page arrives in the Checkpoint of the search step, not in the observation
+     * before it. Handing evaluation the bare adapter would leave that first
+     * sighting unregistered.
+     */
+    const perception = { observe: observing, resolveTarget: surface.resolveTarget }
 
     /** The half of a result that is the same whatever class it turns out to be. */
     const common = {
@@ -448,7 +499,7 @@ export const replayCapability = (
         // What the Surface looked like going in. In Discovery this is the state a
         // model decided against; recording it in both modes is what lets the two
         // logs be read side by side.
-        const before = yield* surface.observe.pipe(
+        const before = yield* observing.pipe(
           Effect.catch((unavailable) =>
             Effect.fail(
               fail({
@@ -523,7 +574,7 @@ export const replayCapability = (
           Effect.gen(function* () {
             const readTarget = yield* authorisedReader(step, page, assertionsOf(step.checkpoint))
             return yield* evaluate(
-              { surface, inputs, readings, read: readTarget },
+              { surface: perception, inputs, readings, read: readTarget },
               step.checkpoint
             ).pipe(
               Effect.catch((unavailable) =>
@@ -674,7 +725,7 @@ export const replayCapability = (
                 // Where the person left the run. Observed rather than assumed:
                 // between the pause and here, the only thing that moved the Surface
                 // was a human being.
-                const resumedAt = yield* surface.observe.pipe(
+                const resumedAt = yield* observing.pipe(
                   Effect.catch((unavailable) =>
                     Effect.fail(
                       fail({
@@ -888,7 +939,7 @@ export const replayCapability = (
           return yield* Effect.fail<StepProblem>(handed.escalation ?? first.failure)
         }
 
-        const resumedAt = yield* surface.observe.pipe(
+        const resumedAt = yield* observing.pipe(
           Effect.catch((unavailable) =>
             Effect.fail(
               failing(step)({
@@ -1020,7 +1071,7 @@ export const replayCapability = (
           // The live screen, not the one the Step remembered. A remedy acts on
           // whatever is actually there — and a `selectFromList` remedy would
           // otherwise be matched against a list that is no longer displayed.
-          const at = yield* surface.observe
+          const at = yield* observing
           const performed = yield* performAction(step, action, at)
           // A remedy whose `selectFromList` reaches a declared outcome has not
           // remedied anything: the state it was supposed to clear is the state
@@ -1054,9 +1105,9 @@ export const replayCapability = (
         checkpoint: Checkpoint
       ): Effect.Effect<CheckpointOutcome, RecoveryBlocked> =>
         Effect.gen(function* () {
-          const at = yield* surface.observe
+          const at = yield* observing
           const readTarget = yield* authorisedReader(step, at.url, assertionsOf(checkpoint))
-          return yield* evaluate({ surface, inputs, readings, read: readTarget }, checkpoint)
+          return yield* evaluate({ surface: perception, inputs, readings, read: readTarget }, checkpoint)
         })
 
       return {
@@ -1235,6 +1286,39 @@ export const replayCapability = (
             ? []
             : controlsOfferedIn(missingTarget.state.tree, missingTarget.target.role ?? "")
 
+        /**
+         * The same list, scrubbed, and the way back from it.
+         *
+         * A control's name is text read off a live screen, and text read off a
+         * live screen is the class of thing this run redacts. Until now it was
+         * the one string in a consultation that went out untouched: everything
+         * else -- the stall, the url, the tree -- passes `scrub`, so a screen
+         * that labels a control with somebody's name would have had that name
+         * scrubbed out of the log and sent to a third party in the same breath.
+         * Policy authorising the consultation does not help, because Policy is
+         * asked before this is assembled.
+         *
+         * So the model is offered the scrubbed names, and the mapping back to
+         * the live ones is kept here. It has to be: the reply is checked for
+         * membership against what was offered, and the *Override* that a person
+         * may later confirm has to name the control the application actually
+         * has. A placeholder in an override file would be an override that never
+         * resolves.
+         *
+         * A name that scrubbing collapses onto another name is dropped rather
+         * than offered twice, because a `Schema.Literals` with a duplicate in it
+         * cannot be answered unambiguously and a proposal nobody can map back is
+         * worse than one control fewer on the list.
+         */
+        const offered: Array<AssistControl> = []
+        const liveNameOf = new Map<string, string>()
+        for (const control of controls) {
+          const name = scrub(control.name)
+          if (liveNameOf.has(name)) continue
+          liveNameOf.set(name, control.name)
+          offered.push({ ...control, name, region: scrub(control.region) })
+        }
+
         const proposal = yield* consultAssist(
           {
             advisor: request.assist,
@@ -1262,15 +1346,15 @@ export const replayCapability = (
             // One of two constants, chosen by the shape of the stall. Never a
             // sentence assembled here: the Evidence records the question, and it
             // has to be the question.
-            question: controls.length === 0 ? ASSIST_QUESTION : ASSIST_TARGET_QUESTION,
+            question: offered.length === 0 ? ASSIST_QUESTION : ASSIST_TARGET_QUESTION,
             url: scrub(said.url),
             accessibility: scrub(said.accessibility),
             candidates,
             // A Target's description comes from the Artifact, which carries no
-            // runtime data (ADR-0008), and a control's name comes from the same
-            // tree the line above has already scrubbed.
+            // runtime data (ADR-0008). The control names are scrubbed above,
+            // separately: scrubbing the tree does not scrub a list built from it.
             ...(missingTarget === undefined ? {} : { missing: missingTarget.described }),
-            controls
+            controls: offered
           }
         )
 
@@ -1299,7 +1383,13 @@ export const replayCapability = (
           proposal._tag === "TargetSuggested" && missingTarget !== undefined
             ? {
                 forTarget: missingTarget.described,
-                control: proposal.control,
+                // Back to the name the application actually uses. The model was
+                // shown the scrubbed list and answered from it; an Override
+                // written from a placeholder would never resolve. `??` cannot
+                // fire -- `consultAssist` already rejected anything that was not
+                // on the list -- and falling back to what was said is still the
+                // safer of the two wrong answers, because a person confirms it.
+                control: liveNameOf.get(proposal.control) ?? proposal.control,
                 confidence: proposal.confidence,
                 rationale: proposal.rationale,
                 proposalRef: proposal.proposalRef
@@ -1894,7 +1984,7 @@ export const replayCapability = (
       )
     )
 
-    yield* finalise(surface, evidence, result, startedAt)
+    yield* finalise(surface, evidence, result, startedAt, witness)
     return result
   })
 
@@ -2337,10 +2427,18 @@ const finalise = (
   surface: SurfaceAdapterService,
   evidence: Evidence["Service"],
   result: ReplayResult,
-  startedAt: number
+  startedAt: number,
+  /**
+   * Registers whatever personal fields the last screen shows, before the last
+   * `observe` event is written. The final observation is the one taken after an
+   * Operator has been at the keyboard, so it is the likeliest of all of them to
+   * be carrying something nobody declared.
+   */
+  witness: (state: SurfaceState) => Effect.Effect<void>
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
     yield* surface.captureEvidence.pipe(
+      Effect.tap((captured) => witness(captured.state)),
       Effect.flatMap((captured) =>
         evidence
           .record({

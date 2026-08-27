@@ -249,7 +249,7 @@ const program = Effect.gen(function*() {
       root: EVIDENCE_ROOT,
       runId,
       sessionId,
-      scrubber: secrets.scrubber,
+      scrubber: secrets.registry,
       policy: "Sensitivity policy: every discovered parameter is sensitive (ADR-0008)."
     }),
     providerFor({ provider, model })

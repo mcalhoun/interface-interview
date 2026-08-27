@@ -241,11 +241,20 @@ ${panel}
  * balance cell is present actually meets, and it is why the failure looks
  * nothing like an exception.
  *
- * The override form posts straight back here as a GET with the supervisor's
- * credentials on the query string, so releasing the hold is a full page load
- * inside the frame and Heritage Core keeps no server-side session state. The
- * parent Account Detail page never navigates, which is exactly what a person
- * clicking Authorize in the live window would produce.
+ * The override form posts straight back here, and the response is this panel
+ * again: releasing the hold is a full page load *inside the frame*, Heritage
+ * Core keeps no server-side session state, and the parent Account Detail page
+ * never navigates -- exactly what a person clicking Authorize in the live window
+ * would produce.
+ *
+ * It is a POST rather than a GET, and that is a correction rather than a
+ * preference. A GET form serialises what was typed into the address bar, so the
+ * supervisor id and the override code ended up in `page.url()`, in Evidence, in
+ * browser history and in any `Referer` the page went on to send. Answering the
+ * POST with the panel keeps both properties the GET was chosen for -- no server
+ * state, no navigation of the outer page -- and costs only that the panel can no
+ * longer be reached in its released state by pasting a URL, which was never
+ * something to want.
  */
 export const accountDetailPanel = (
   member: Member,
@@ -275,6 +284,10 @@ ${body}
  * between the two layouts for the obvious reason: a framed panel reloads itself,
  * and an inline one reloads the page it is part of. Everything a Capability
  * looks at is identical either way.
+ *
+ * Both are POSTs. On the inline layout that matters twice over: the form target
+ * *is* the top-level document, so a GET would have put a supervisor override
+ * code straight into the address bar of the page the run reads `page.url()` from.
  */
 const accountDetailBody = (
   member: Member,
@@ -345,7 +358,7 @@ const restrictionPanel = (
 <tr bgcolor="#ffffff"><td>${caption("Status")}</td><td>${caption(account.status)}</td></tr>
 </table>
 <br>
-<form method="get" action="${formAction}">
+<form method="post" action="${formAction}">
 <input type="hidden" name="memberNumber" value="${escape(member.memberNumber)}">
 <input type="hidden" name="accountNumber" value="${escape(account.accountNumber)}">
 <table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
@@ -482,7 +495,7 @@ export const signOnPage = (tenant: Tenant = HERITAGE_CORE): string =>
     )}</td></tr>
 </table>
 <br>
-<form method="get" action="/signon">
+<form method="post" action="/signon">
 <table width="100%" border="1" cellpadding="4" cellspacing="0" bordercolor="#808080">
 <tr bgcolor="#c0c0c0"><td colspan="3"><font face="Arial" size="2"><b>Operator Sign On</b></font></td></tr>
 <tr bgcolor="#ffffff">
