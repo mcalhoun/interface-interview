@@ -32,13 +32,15 @@
  *
  * A Recoverable Condition can carry a `detect` because somebody wrote one: the
  * "System Busy" interstitial announces itself. A requires-human state is learned
- * from an episode in which a person acted in the live browser window, and the
- * system has no structural record of *what they did* — a real Operator clicks in
- * Chromium, not through an API. Inventing a `detect` from the accessibility tree
- * the run happened to capture would be the automation deciding what a screen
- * means, which is precisely what ADR-0004 refuses. So the recognition rule is the
- * one thing the document already knows for certain: which Step's Checkpoint
- * reached it.
+ * from an episode in which a person acted in the live browser window, and what
+ * the system holds about that is thin: their own sentence, and the fields it
+ * watched them type into (`packages/session/src/Watching.ts`, which exists
+ * because a credential has to be redacted whether or not anybody describes it).
+ * Neither is a rule for recognising a screen. Inventing a `detect` from the
+ * accessibility tree the run happened to capture would be the automation
+ * deciding what a screen means, which is precisely what ADR-0004 refuses. So the
+ * recognition rule is the one thing the document already knows for certain:
+ * which Step's Checkpoint reached it.
  *
  * The cost is stated rather than hidden. A different unrecognised state at the
  * same Step is reported under this entry's code too. That is the correct answer

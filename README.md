@@ -224,11 +224,20 @@ bun run replay member.account-balance --memberId 77777 --version 1.1.0 --headed 
 ```
 
 It pauses, prints the operator interface URL, and leaves a visible browser on the
-screen it stopped at. Open the URL, take control, release the supervisor hold in
-that browser window, note what you did — including the supervisor id and override
-code you typed, so this run's evidence redacts them from here on — and hand
-control back. The run finishes, cuts `member.account-balance@1.2.0` and prints
+screen it stopped at. That browser is a separate application called **Google
+Chrome for Testing**, with its own icon in the Dock, which is where the work
+happens; the operator page names it too. Open the URL, give your name, take
+control, release the supervisor hold in that window, note what you did, and hand
+control back. You do not have to retype the supervisor id or the override code:
+the paused session watches the screen and redacts what it sees you type from this
+run's evidence. The run finishes, cuts `member.account-balance@1.2.0` and prints
 the diff.
+
+If you cannot do it, say so instead: the screen is not the one described, or
+there is no supervisor on the floor. "I could not do this" is a third answer at
+return of control. The run ends as `intervention_required` and nothing is
+learned from it, because somebody who could not act has not demonstrated anything
+about the state.
 
 The printed URL carries a token minted for that run, and every request needs it.
 Open the link rather than the bare `http://127.0.0.1:4180`, which answers 401 on

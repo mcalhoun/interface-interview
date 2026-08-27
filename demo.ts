@@ -439,7 +439,8 @@ const main = async (): Promise<void> => {
           const paused = yield* desk.awaitPause
           say(`  PAUSED at step ${paused.pending?.intervention.stepId}`)
           say(`    ${paused.pending?.intervention.reason}`)
-          say(`    the live browser window is on the screen the run stopped at`)
+          say("    the live browser window is on the screen the run stopped at, in the")
+          say("    separate Google Chrome for Testing application Playwright opens")
           say()
           say("  r.mensah takes control")
           yield* desk.post("/take", { operator: "r.mensah" })
@@ -447,23 +448,31 @@ const main = async (): Promise<void> => {
           say("    replay against this session fails with control_lost rather than racing")
           say()
           say("  r.mensah acts, in the automation's own browser window")
-          // Said before it is typed, and the ordering is the point rather than
-          // tidiness. A run's scrubber is built from the capability's declared
-          // inputs, and a supervisor id and an override code are neither: nobody
-          // declared them, because nobody knew a person would be involved.
-          // Telling the session first means the needles exist before the
-          // application can echo either value back into a field, a URL or an
-          // accessibility tree. Without this the demo's own evidence renders the
-          // supervisor id in the clear, which is how it was found.
-          yield* desk.post("/note", {
-            detail: "entered supervisor override for SUP-HOLD-02",
-            enteredField: ["Supervisor ID", "Authorization Code"],
-            enteredValue: ["SUP7", "4417"]
-          })
+          // Nothing is said about the two values before they are typed, and that
+          // is the fix a real handoff run forced. A run's scrubber is built from
+          // the capability's declared inputs, and a supervisor id and an override
+          // code are neither: nobody declared them, because nobody knew a person
+          // would be involved. The paused session watches the screen it handed
+          // over, so both become needles as they appear -- in the control while
+          // it holds them, and in the address the submitted form produces. The
+          // first version of this asked the operator to retype them into a form,
+          // and the first real person to meet it did not.
           yield* desk.surface.fill({ role: "textbox", name: "Supervisor ID" }, "SUP7")
           yield* desk.surface.fill({ role: "textbox", name: "Authorization Code" }, "4417")
+          // The pause a person has between typing a credential and pressing the
+          // button. The script waits for the fact rather than for a duration:
+          // both values are needles before the form clears itself.
+          yield* desk.awaitObserved("supervisorId")
+          yield* desk.awaitObserved("authorizationCode")
           yield* desk.surface.click({ role: "button", name: "Authorize" })
           say("    filled Supervisor ID, filled Authorization Code, pressed Authorize")
+          say("    the session saw both values as they were typed and redacted them")
+          // What observation cannot infer. This is also what makes the episode
+          // teach anything: ADR-0004 reads what the operator *did*, and what they
+          // did is what they said they did.
+          yield* desk.post("/note", {
+            detail: "entered supervisor override for SUP-HOLD-02"
+          })
           say()
           say("  r.mensah hands control back, and answers the one question")
           say("    \"Next time automation meets this state, should it handle it itself?\"")
@@ -770,9 +779,9 @@ const main = async (): Promise<void> => {
   )
   say()
   // The credentials a person typed into the live window during act 5. No
-  // capability declared them, because nobody knew a person would be involved;
-  // the operator interface asks for them so the scrubber can be told, and the
-  // note carrying them is posted before the fields are filled.
+  // capability declared them, because nobody knew a person would be involved,
+  // and nobody transcribed them either: the paused session watched the screen it
+  // handed over and registered both as they appeared.
   report(
     "what the operator typed into the live session, in the run they held:",
     join(DEMO_ROOT, "05-handoff"),

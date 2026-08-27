@@ -11,7 +11,9 @@
  *
  *   1. **What a person types during an Intervention.** A supervisor id and an
  *      override code are credentials, and no Capability declared them, because
- *      no Capability knew a person would be involved.
+ *      no Capability knew a person would be involved. Nobody transcribes these:
+ *      the paused Session watches the screen it handed over, so the test below
+ *      types into the live window and tells the system nothing.
  *   2. **What the application renders back.** A member's *name* is nobody's
  *      parameter. It comes off a screen as ordinary text, and it is the single
  *      most identifying string in the log.
@@ -33,8 +35,13 @@ import { Effect } from "effect"
 import { expect } from "vitest"
 import { secretRegistry } from "@cua/evidence"
 import { personalCaptions, personalFields } from "@cua/policy"
-import { operatorFieldLabel } from "@cua/session"
-import { labelledValuesIn, parseAccessibilityTree } from "@cua/surface"
+import { beganWith, operatorFieldLabel, sawEntries } from "@cua/session"
+import {
+  entryValuesIn,
+  labelledValuesIn,
+  parseAccessibilityTree,
+  queryValuesIn
+} from "@cua/surface"
 import { attendedReplay } from "./support/handoff-harness.ts"
 import { replay, shippedArtifact } from "./support/replay-harness.ts"
 import { describeAppearances, scanForSecrets } from "./support/secret-scan.ts"
@@ -144,8 +151,78 @@ it.live("a member's name is not written into the evidence of an ordinary run", (
 // 1. What a person typed
 // ---------------------------------------------------------------------------
 
+it("reads what is in a screen's entry controls, and only those", () => {
+  const tree = parseAccessibilityTree(
+    [
+      "- table:",
+      "  - rowgroup:",
+      "    - row:",
+      `      - cell "Supervisor ID"`,
+      "      - cell:",
+      `        - textbox "Supervisor ID": ${SUPERVISOR_ID}`,
+      "    - row:",
+      `      - cell "Authorization Code"`,
+      "      - cell:",
+      `        - textbox "Authorization Code"`,
+      "    - row:",
+      `      - cell "Available Balance"`,
+      `      - cell "$4,182.55"`
+    ].join("\n")
+  )
+
+  // The premise of the whole capture: a filled control carries its value in the
+  // tree beside its name, exactly as a balance cell carries its figure.
+  expect(entryValuesIn(tree)).toEqual([{ field: "Supervisor ID", value: SUPERVISOR_ID }])
+
+  // An empty control has nothing in it, and an empty needle would match between
+  // every pair of characters in the log. A cell is the application talking, not
+  // a person typing, and redacting the balance would empty out the evidence.
+})
+
+it("reads what a submitted form put in an address, by parameter", () => {
+  expect(
+    queryValuesIn("http://core.invalid/member?memberNumber=12345&branch=")
+  ).toEqual([{ field: "memberNumber", value: "12345" }])
+  // Not a URL at all is an empty answer rather than a throw: this runs against
+  // whatever the browser reports while somebody is driving it.
+  expect(queryValuesIn("about:blank")).toEqual([])
+})
+
+it("registers what changed while a person held the session, and nothing that was already there", () => {
+  // What automation put there before anybody arrived. Registering these would
+  // say a person typed something they did not, and the run's own scrubber
+  // already covers them.
+  const start = beganWith([{ field: "Member Number", value: "77777" }])
+
+  const typed = sawEntries(start, [
+    { field: "Member Number", value: "77777" },
+    { field: "Supervisor ID", value: SUPERVISOR_ID }
+  ])
+  expect(typed.register).toEqual([{ field: "Supervisor ID", value: SUPERVISOR_ID }])
+
+  // Seen once, registered once: the same value on the next look is not new.
+  const again = sawEntries(typed.state, [{ field: "Supervisor ID", value: SUPERVISOR_ID }])
+  expect(again.register).toEqual([])
+
+  // A value is registered the first time it is seen rather than once it stops
+  // changing, so somebody who types a code and presses the button in the same
+  // second is still covered. The cost is a half-typed needle, which is the trade
+  // this system makes everywhere: illegible evidence is recoverable, a leaked
+  // credential is not.
+  const corrected = sawEntries(again.state, [{ field: "Supervisor ID", value: "SUP8" }])
+  expect(corrected.register).toEqual([{ field: "Supervisor ID", value: "SUP8" }])
+
+  // Three controls captioned the same way are three fields, because the value in
+  // each of them is a different value.
+  const duplicates = sawEntries(beganWith([]), [
+    { field: "Amount", value: "150.00" },
+    { field: "Amount", value: "12.50" }
+  ])
+  expect(duplicates.register).toHaveLength(2)
+})
+
 it.live(
-  "a credential an operator types is redacted from every text file the run writes",
+  "a credential an operator types is redacted although nobody declared it",
   () =>
     Effect.gen(function* () {
       const outcome = yield* attendedReplay({
@@ -157,19 +234,22 @@ it.live(
             yield* desk.awaitPause
             yield* desk.post("/take", { operator: "r.mensah" })
 
-            // Said before it is typed. The needles have to exist before the
-            // application can echo either value back at us.
-            yield* desk.post("/note", {
-              detail: `entered ${SUPERVISOR_ID} / ${OVERRIDE_CODE} on the override panel`,
-              enteredField: ["Supervisor ID", "Authorization Code"],
-              enteredValue: [SUPERVISOR_ID, OVERRIDE_CODE]
-            })
-
+            // Nobody says anything first. This is the whole test: the operator
+            // types into the live window the way a person does, and the only
+            // record of what they typed is the screen itself.
             yield* desk.surface.fill({ role: "textbox", name: "Supervisor ID" }, SUPERVISOR_ID)
             yield* desk.surface.fill(
               { role: "textbox", name: "Authorization Code" },
               OVERRIDE_CODE
             )
+
+            // And then they quote both values in their own note, which is the
+            // ordering that matters: the note is written after the values are on
+            // the screen, so the capture has to have happened before the event
+            // reporting it, or the note itself is the leak.
+            yield* desk.post("/note", {
+              detail: `entered ${SUPERVISOR_ID} / ${OVERRIDE_CODE} on the override panel`
+            })
 
             // Deliberately *not* pressing Authorize. The fields keep the values
             // they were given, so the observation the run takes when it resumes
@@ -192,9 +272,17 @@ it.live(
       expect(log).toContain("[redacted:supervisorId]")
       expect(log).toContain("[redacted:authorizationCode]")
 
+      // The capture is in the log under its own kind, naming the fields and
+      // never the characters. It is not an `intervention.human_action`: an
+      // observation is not something the operator reported doing, and anybody
+      // re-deriving ADR-0004's table from this file counts those.
+      const captured = outcome.events.filter((event) => event.kind === "intervention.observed")
+      expect(
+        captured.flatMap((event) => (event.kind === "intervention.observed" ? event.fields : []))
+      ).toEqual(["supervisorId", "authorizationCode"])
+
       // The Operator's own note quoted both values. That note is redacted too,
-      // because registration happens before the event that reports it.
-      // The last of them: the first is `took control`, which quotes nothing.
+      // because registration happened when they typed them, not when they said so.
       const noted = outcome.events
         .filter((event) => event.kind === "intervention.human_action")
         .at(-1)
@@ -204,10 +292,83 @@ it.live(
 
       // What the record keeps is the field names, never the characters.
       const closed = outcome.snapshot.resolved[0]
-      expect(closed?.actions.flatMap((action) => action.redacted)).toEqual([
-        "supervisorId",
-        "authorizationCode"
+      expect(closed?.observed).toEqual(["supervisorId", "authorizationCode"])
+
+      const appearances = scanForSecrets(outcome.evidenceDirectory, [
+        SUPERVISOR_ID,
+        OVERRIDE_CODE
       ])
+      expect(appearances, describeAppearances(appearances)).toEqual([])
+    }),
+  60_000
+)
+
+it.live(
+  "a credential the operator submits away is still redacted, and so is the echo",
+  () =>
+    Effect.gen(function* () {
+      /**
+       * The case the watching half exists for, and the shape of the leak that was
+       * found in a real run.
+       *
+       * A supervisor releases the hold and presses Authorize. The controls clear,
+       * the panel re-renders, and Heritage Core's released panel says "overridden
+       * by supervisor SUP7" on the screen the run then observes, so by the time
+       * anybody could be asked what they typed, the value is somewhere nothing
+       * can attribute it from. The only chance to see it is while it is in the
+       * control, which is what the paused Session's watch is for.
+       */
+      const outcome = yield* attendedReplay({
+        artifact: shippedArtifact("member.account-balance", "1.1.0"),
+        inputs: { memberId: RESTRICTED },
+        runId: "operator-submitted-values",
+        operate: (desk) =>
+          Effect.gen(function* () {
+            yield* desk.awaitPause
+            yield* desk.post("/take", { operator: "r.mensah" })
+            yield* desk.surface.fill({ role: "textbox", name: "Supervisor ID" }, SUPERVISOR_ID)
+            yield* desk.surface.fill(
+              { role: "textbox", name: "Authorization Code" },
+              OVERRIDE_CODE
+            )
+
+            // A person takes a second between typing a code and pressing the
+            // button. Waiting on the fact rather than on a duration is what makes
+            // this deterministic, and it fails loudly rather than quietly proving
+            // something else if the capture stops happening.
+            yield* desk.awaitObserved("supervisorId")
+            yield* desk.awaitObserved("authorizationCode")
+
+            yield* desk.surface.click({ role: "button", name: "Authorize" })
+
+            // Both values are gone from the controls now, and the screen the run
+            // is about to observe quotes one of them straight back at it. The
+            // adapter does not scrub -- redaction happens where evidence is
+            // serialised -- so this is the leak as it arrives.
+            const after = yield* desk.surface.observe
+            expect(after.accessibility).toContain(`supervisor ${SUPERVISOR_ID}`)
+
+            yield* desk.post("/return", {
+              operator: "r.mensah",
+              classification: "resolved",
+              detail: "released the hold as an authorized supervisor",
+              nextTime: "not_asked"
+            })
+          })
+      })
+
+      expect(outcome.result.result).toBe("success")
+
+      // The strong direction: the placeholder is *present*, so the value
+      // demonstrably reached the writer and was taken out. Only the supervisor id
+      // is echoed by the released panel; the authorization code is registered
+      // just as early and simply never appears again, which is why the scan below
+      // is over both and this assertion is over one.
+      const log = readFileSync(join(outcome.evidenceDirectory, "events.jsonl"), "utf8")
+      expect(log).toContain("[redacted:supervisorId]")
+
+      const closed = outcome.snapshot.resolved[0]
+      expect(closed?.observed).toEqual(["supervisorId", "authorizationCode"])
 
       const appearances = scanForSecrets(outcome.evidenceDirectory, [
         SUPERVISOR_ID,

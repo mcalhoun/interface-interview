@@ -91,7 +91,11 @@ const record = (over: Partial<InterventionRecord> = {}): InterventionRecord => (
   },
   operator: "r.mensah",
   tookControlAt: "2026-08-27T00:00:10.000Z",
-  actions: [{ at: "2026-08-27T00:00:15.000Z", detail: "entered supervisor override", redacted: [] }],
+  actions: [{ at: "2026-08-27T00:00:15.000Z", detail: "entered supervisor override" }],
+  // What the session saw them type, by field name. Nothing in this file reads
+  // it: what a person *did* is what they said they did, and the capture is a
+  // redaction mechanism rather than an input to ADR-0004's table.
+  observed: ["supervisorId", "authorizationCode"],
   returnedAt: "2026-08-27T00:00:20.000Z",
   classification: "resolved",
   detail: "released the hold as an authorized supervisor",
@@ -502,8 +506,14 @@ it.live(
 
             // The authority, in the automation's own browser window. Three
             // gestures no capability has any business performing by itself.
+            // The wait between typing and pressing is what a person has and a
+            // script does not: the paused Session watches the screen, and both
+            // credentials become scrubber needles while they are still in the
+            // controls that hold them.
             yield* desk.surface.fill({ role: "textbox", name: "Supervisor ID" }, "SUP7")
             yield* desk.surface.fill({ role: "textbox", name: "Authorization Code" }, "4417")
+            yield* desk.awaitObserved("supervisorId")
+            yield* desk.awaitObserved("authorizationCode")
             yield* desk.surface.click({ role: "button", name: "Authorize" })
             yield* desk.post("/note", { detail: "entered supervisor override for SUP-HOLD-02" })
 
@@ -645,12 +655,23 @@ it.live("at the learned version it still escalates to a person, and they can sti
           // wrote, rather than an expected/observed pair to interpret.
           const raised = paused.pending!.intervention
           expect(raised.reason).toBe(afterLearning().requiresHuman?.[CODE]?.title)
-          expect(raised.detail).toContain("permissions problem")
+          // Two things, reported as two things. What happened in this run is the
+          // detail; what somebody wrote about the state before it is background,
+          // and an operator reading the second as instructions for the first is
+          // the mistake the operator interface used to invite.
           expect(raised.detail).toContain("The checkpoint that reached it")
+          expect(raised.background).toContain("permissions problem")
+
+          // And on the page they are two blocks, the second labelled with when
+          // it was written and by implication by whom.
+          const shown = (yield* desk.get("/")).body
+          expect(shown).toContain("Background on this state, written before this run")
+          expect(shown).toContain("Context, not instructions")
 
           yield* desk.post("/take", { operator: "r.mensah" })
           yield* desk.surface.fill({ role: "textbox", name: "Supervisor ID" }, "SUP7")
           yield* desk.surface.fill({ role: "textbox", name: "Authorization Code" }, "4417")
+          yield* desk.awaitObserved("supervisorId")
           yield* desk.surface.click({ role: "button", name: "Authorize" })
           yield* desk.post("/note", { detail: "entered supervisor override again" })
           yield* desk.post("/return", {

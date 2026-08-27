@@ -809,6 +809,7 @@ const confirmedRecord = (confirmProposal: "confirmed" | "rejected" | "not_asked"
   operator: "a.reyes",
   tookControlAt: "2026-08-27T00:00:10.000Z",
   actions: [],
+  observed: [],
   returnedAt: "2026-08-27T00:00:20.000Z",
   classification: "unresolved" as const,
   detail: "this installation labels the submit control Find",

@@ -62,7 +62,7 @@ import {
   writeOverride
 } from "@cua/artifact"
 import type { EvidenceUnwritable } from "@cua/evidence"
-import { DEFAULT_OPERATOR_PORT, serveOperator } from "@cua/operator"
+import { BROWSER_APPLICATION, DEFAULT_OPERATOR_PORT, serveOperator } from "@cua/operator"
 import {
   type CompiledPolicy,
   DEFAULT_POLICY,
@@ -117,8 +117,9 @@ const usage = (): string =>
     "  --json            print the whole ReplayResult rather than a summary",
     "  --handoff         attend the run: start the operator interface, and pause",
     "                    for a person instead of failing when a checkpoint will",
-    "                    not hold. Use with --headed; the operator works in that",
-    "                    window. Without it the run is unattended and a stuck",
+    "                    not hold. Use with --headed; the operator works in the",
+    `                    window of the ${BROWSER_APPLICATION} application`,
+    "                    Playwright opens. Without it the run is unattended and a stuck",
     "                    checkpoint is a hard failure, because nobody is watching",
     "  --assist          allow one bounded consultation of a model when a step",
     "                    cannot be resolved, before anybody is woken. The model",
@@ -556,8 +557,20 @@ const run = (
           [
             "",
             `PAUSED at step ${intervention.stepId}: ${intervention.reason}`,
-            `  the live browser window is on ${intervention.url}`,
             `  take control at ${operatorUrl}`,
+            // Where the work happens, named. Playwright drives its own Chromium
+            // build, which on macOS is a separate application with its own Dock
+            // icon; "the browser window" sent the first person who met this
+            // looking at the browser they already had open. Headless has no
+            // window at all, and saying so beats leaving somebody hunting for
+            // one.
+            argv.switches.has("headed")
+              ? `  the window to work in belongs to the application ${
+                  BROWSER_APPLICATION
+                }, and is showing ${intervention.url}`
+              : `  this run is headless, so there is no window to work in: the screen is at ${
+                  intervention.url
+                }. Re-run with --headed to be able to act on it`,
             ""
           ].join("\n")
         )

@@ -7,9 +7,26 @@
  * Server-rendered HTML, form posts, no client-side anything. The interface is
  * not the interesting part of this ticket and pretending otherwise would hide
  * what is: an Operator does the actual work in the browser window the automation
- * was already driving, not in here. This page tells them where to look, what
- * stopped, and gives them the two buttons that move the Control Owner state
- * machine. That is the whole job.
+ * was already driving, not in here. This page tells them where that window is,
+ * what stopped, what order to do things in, and gives them the buttons that move
+ * the Control Owner state machine. That is the whole job.
+ *
+ * ## What the first real person needed and did not get
+ *
+ * They could not find the application. Playwright opens a separate macOS
+ * application called **Google Chrome for Testing**, and this page said only that
+ * "the live browser window for this session is already on that screen". It names
+ * the application now, and says where to look for it, because nothing here can
+ * raise a window: the browser is behind the `SurfaceAdapter` seam, which by
+ * ADR-0001 has eight methods and none of them is "focus yourself", and shelling
+ * out to activate an application by name can just as easily launch a second copy
+ * of it in front of the one that matters.
+ *
+ * They also had no way to say they were stuck, and the page led with a wall of
+ * machine-written prose that quoted a previous operator's words in a way that
+ * read as instructions for this run. Both are fixed below: `blocked` is a real
+ * answer, and everything written before this run is behind a heading that says
+ * so.
  *
  * ## Why it lives in the same process
  *
@@ -70,7 +87,6 @@ import { Effect } from "effect"
 import type { Scope } from "effect/Scope"
 import {
   type ControlReturnClassification,
-  type EnteredValue,
   type HandoffSnapshot,
   type InterventionRecord,
   type NextTimeAnswer,
@@ -205,10 +221,23 @@ const refusalFor = (
     if (site !== null && site !== "same-origin" && site !== "none") {
       return `cross-site request refused (Sec-Fetch-Site: ${site})`
     }
-    // A browser always sends `Origin` on a form POST, and cannot be made to lie
-    // about it. `curl` sends none, which is why the token is the other half.
+    // `Origin` on a form POST is set by the browser, not the page. Two values are
+    // legitimate here and neither is forgeable by another site.
+    //
+    // The first is this interface's own origin. The second is the literal string
+    // "null", which is what a browser sends when the document's referrer policy
+    // is `no-referrer` -- which every page here sets, deliberately, so the token
+    // in the address bar cannot leak by `Referer`. An opaque origin is only
+    // trustworthy alongside `Sec-Fetch-Site`, checked above and unforgeable by a
+    // page, so "null" is accepted only when fetch metadata already said the
+    // request came from here. A cross-site post carries `cross-site` and was
+    // refused before reaching this line.
+    //
+    // This cost a real operator a working handoff: the referrer policy and the
+    // origin check were each correct and together refused every form on the page.
     const from = request.headers.get("origin")
-    if (from !== null && from !== origin) {
+    const opaqueFromHere = from === "null" && (site === "same-origin" || site === "none")
+    if (from !== null && from !== origin && !opaqueFromHere) {
       return `request from ${from} refused; this interface only accepts ${origin}`
     }
   }
@@ -250,22 +279,23 @@ const route = (
     if (posting) {
       const field = (name: string): string => String(form?.get(name) ?? "").trim()
 
+      // The name is passed through exactly as typed, blanks included. An empty
+      // one used to become "(unnamed)" here, which is how a run driven by a real
+      // person came to record a privileged decision attributed to nobody. The
+      // state machine refuses it now, and this interface's job is to ask the
+      // question and report the refusal, not to invent an answer.
       const action =
         url.pathname === "/take"
-          ? control.takeControl(field("operator") === "" ? "(unnamed)" : field("operator"))
+          ? control.takeControl(field("operator"))
           : url.pathname === "/note"
             ? control.noteAction({
-                detail: field("detail") === "" ? "(no detail given)" : field("detail"),
-                // What the Operator typed into the live application, so the run's
-                // scrubber learns it. See `EnteredValue`: the field names travel
-                // to Evidence, the characters become needles and stop here.
-                entered: enteredValuesIn(form)
+                detail: field("detail") === "" ? "(no detail given)" : field("detail")
               })
             : url.pathname === "/return"
               ? control.returnControl({
-                  operator: field("operator") === "" ? "(unnamed)" : field("operator"),
+                  operator: field("operator"),
                   classification: classificationOf(field("classification")),
-                  detail: field("detail") === "" ? "(no detail given)" : field("detail"),
+                  detail: field("detail"),
                   nextTime: nextTimeOf(field("nextTime")),
                   confirmProposal: confirmProposalOf(field("confirmProposal"))
                 })
@@ -291,29 +321,15 @@ const route = (
   })
 
 /**
- * The value-and-field pairs on a note form, zipped in submission order.
+ * What the Operator said about whether the run can carry on.
  *
- * Repeated names rather than one row, because a person releasing a supervisor
- * hold types two things and a form that only accepted one would leave the other
- * unregistered -- which is exactly the failure this is here to prevent. A pair
- * with a blank value is dropped: an empty needle would match everywhere.
+ * Three answers now. `blocked` is the honest one that had no spelling until a
+ * real person needed it: the request made no sense, the screen was not the one
+ * described, they could not do it. Anything unrecognised is `unresolved`, which
+ * is the careful direction: a malformed post must never read as "carry on".
  */
-const enteredValuesIn = (form: FormData | undefined): ReadonlyArray<EnteredValue> => {
-  if (form === undefined) return []
-  const fields = form.getAll("enteredField").map((value) => String(value))
-  const values = form.getAll("enteredValue").map((value) => String(value))
-  const entered: Array<EnteredValue> = []
-  for (let position = 0; position < values.length; position += 1) {
-    const value = values[position] ?? ""
-    if (value === "") continue
-    const field = (fields[position] ?? "").trim()
-    entered.push({ field: field === "" ? "operator input" : field, value })
-  }
-  return entered
-}
-
 const classificationOf = (value: string): ControlReturnClassification =>
-  value === "resolved" ? "resolved" : "unresolved"
+  value === "resolved" ? "resolved" : value === "blocked" ? "blocked" : "unresolved"
 
 /**
  * The one question's answer, read off the form.
@@ -444,6 +460,14 @@ label { display: block; margin: .5rem 0; }
 input[type=text] { width: 24rem; padding: .3rem; }
 .refused { color: #900; font-weight: bold; }
 .note { color: #555; }
+.reason { font-size: 1.05rem; font-weight: bold; margin: .6rem 0; }
+.where { border: 2px solid #333; padding: .2rem 1rem 1rem; margin: 1.5rem 0; background: #fbfbf6; }
+.where h2 { margin-top: 1rem; }
+ol { padding-left: 1.4rem; } ol li { margin: .4rem 0; }
+li.done { color: #777; text-decoration: line-through; }
+details { margin: 1rem 0; }
+summary { cursor: pointer; font-weight: bold; }
+code { word-break: break-all; }
 `
 
 const page = (title: string, body: string): string => `<!doctype html>
@@ -474,7 +498,8 @@ const dashboard = (snapshot: HandoffSnapshot, token: string): string => {
   const body =
     snapshot.pending === undefined
       ? `<p class="note">Nothing is paused. This page becomes useful when a run stops and
-         raises an Intervention.</p>`
+         raises an Intervention: it is where you take the live browser session, and where
+         you hand it back.</p>`
       : pendingPanel(snapshot, token)
 
   return page(
@@ -502,109 +527,174 @@ const trail = (history: ReadonlyArray<OwnerTransition>): string =>
       .join("")
   }</table>`
 
+/**
+ * The name of the application the live browser window belongs to.
+ *
+ * Not "your browser" and not "that screen". Playwright drives its own Chromium
+ * build, which on macOS is a separate application in the Dock called exactly
+ * this, so a person who has been told to look at "the browser" looks at the one
+ * they already had open and finds nothing. It is a constant rather than prose so
+ * that the page, the terminal and this comment cannot drift apart.
+ */
+export const BROWSER_APPLICATION = "Google Chrome for Testing"
+
+/** Where to work, said plainly, above everything else on the page. */
+const whereToWork = (url: string): string =>
+  `<div class="where">
+<h2>Where the application is</h2>
+<p>Not in this page. This page moves the session between you and the automation;
+  the work happens in the browser window the automation was driving.</p>
+<p>That window belongs to a separate application called
+  <b>${escape(BROWSER_APPLICATION)}</b>. It is its own icon in the Dock and its own
+  entry in the application switcher, next to your ordinary browser rather than
+  inside it. Bring it to the front and you will find it showing:</p>
+<p><code>${escape(url)}</code></p>
+<p class="note">This page cannot raise that window for you. It talks to the
+  session, not to the browser.</p>
+</div>`
+
+/** The order to do things in, which was nowhere on the page before. */
+const theOrder = (held: boolean): string =>
+  `<h2>What to do, in order</h2>
+<ol>
+<li${held ? ' class="done"' : ""}>Take control of the session. Until you do, the
+  automation still owns it and may act on it.</li>
+<li>Do the work in ${escape(BROWSER_APPLICATION)}. Nothing you do there needs to be
+  typed in here: the session watches the screen, and any value you type into it is
+  redacted from this run's evidence from the moment it appears.</li>
+<li>Write down anything the screen does not show &mdash; why the state happened, what
+  you would tell the next person. That is what the note is for.</li>
+<li>Hand control back, and say whether the run can carry on.</li>
+</ol>`
+
 const pendingPanel = (snapshot: HandoffSnapshot, token: string): string => {
   const record = snapshot.pending!
   const it = record.intervention
   const held = snapshot.owner === "operator"
 
   const facts = `<h2>Why the run stopped</h2>
+<p class="reason">${escape(it.reason)}</p>
+${paragraphs(it.detail)
+    .map((part) => `<p>${escape(part)}</p>`)
+    .join("\n")}
 <table>
 <tr><th>Capability</th><td>${escape(it.capability)}@${escape(it.version)}</td></tr>
 <tr><th>Step</th><td><code>${escape(it.stepId)}</code> &mdash; ${escape(it.stepIntent)}</td></tr>
-<tr><th>Reason</th><td>${escape(it.reason)}</td></tr>
-<tr><th>Detail</th><td>${escape(it.detail)}</td></tr>
 <tr><th>Screen</th><td>${escape(it.url)}</td></tr>
 <tr><th>Raised</th><td>${escape(it.raisedAt)}</td></tr>
 <tr><th>Run</th><td><code>${escape(it.runId)}</code></td></tr>
-</table>
-<p class="note">The live browser window for this session is already on that screen.
-Work in it directly &mdash; this page does not drive the browser.</p>
-${proposalPanel(record)}
-<h2>What the automation could see</h2>
-<pre>${escape(it.accessibility)}</pre>`
+</table>`
 
-  const actions = record.actions.length === 0
-    ? ""
-    : `<h2>What has been done</h2><table>${
-        record.actions
-          .map(
-            (action) =>
-              `<tr><th>${escape(action.at)}</th><td>${escape(action.detail)}${
-                action.redacted.length === 0
-                  ? ""
-                  : `<br><span class="note">values entered and now redacted from this run's evidence: ${
-                      escape(action.redacted.join(", "))
-                    }</span>`
-              }</td></tr>`
-          )
-          .join("")
-      }</table>`
+  return (
+    facts +
+    whereToWork(it.url) +
+    theOrder(held) +
+    proposalPanel(record) +
+    (held ? holdingControls(record, token) : takeControls(token)) +
+    doneSoFar(record) +
+    background(it.background) +
+    `<details><summary>What the automation could see</summary>
+<pre>${escape(it.accessibility)}</pre></details>`
+  )
+}
 
-  const controls = held
-    ? `<h2>You hold this session</h2>
-<p class="note">Taken by ${escape(record.operator ?? "(unnamed)")} at ${
-        escape(record.tookControlAt ?? "")
-      }. The automation cannot act until you hand it back.</p>
+/** Prose arrives with blank lines in it, and a table cell turned them into a wall. */
+const paragraphs = (text: string): ReadonlyArray<string> =>
+  text
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter((part) => part !== "")
+
+/**
+ * Everything written about this state before this run started.
+ *
+ * Behind a heading that says so, and that is the whole change. A Step whose state
+ * an earlier episode classified carries the summary somebody wrote at the time,
+ * quoting what *that* operator said they did. Rendered as the detail of the thing
+ * that just stopped, it reads as a set of instructions for the person now on
+ * shift, which is exactly wrong: it is context about the state, written by
+ * somebody who is not here, and they may have met a different screen under the
+ * same code. Most interventions have none of this and the block is simply absent.
+ */
+const background = (written: string | undefined): string => {
+  const parts = written === undefined ? [] : paragraphs(written)
+  if (parts.length === 0) return ""
+  return `<details><summary>Background on this state, written before this run</summary>
+<p class="note">Context, not instructions. This was written by whoever met this
+  state before, and the screen in front of you now may not be the one they saw.</p>
+${parts.map((part) => `<p>${escape(part)}</p>`).join("\n")}
+</details>`
+}
+
+/** What the Operator said they did, and what the session saw them type. */
+const doneSoFar = (record: InterventionRecord): string => {
+  const actions =
+    record.actions.length === 0
+      ? ""
+      : `<table>${
+          record.actions
+            .map(
+              (action) => `<tr><th>${escape(action.at)}</th><td>${escape(action.detail)}</td></tr>`
+            )
+            .join("")
+        }</table>`
+  const observed =
+    record.observed.length === 0
+      ? ""
+      : `<p class="note">This session saw you type into ${
+          escape(record.observed.join(", "))
+        }. Those values are redacted from this run's evidence from the moment they
+        appeared, wherever they turn up afterwards &mdash; in a URL, in a field the
+        screen echoes back, in your own note. Nothing kept the characters; only the
+        field names are on the record.</p>`
+  if (actions === "" && observed === "") return ""
+  return `<h2>What has been done</h2>${actions}${observed}`
+}
+
+const takeControls = (token: string): string =>
+  `<h2>Take control</h2>
+<form method="post" action="/take">
+${tokenField(token)}
+<label>Your name
+  <input type="text" name="operator" placeholder="j.okafor" required autofocus></label>
+<p class="note">Required, and a real one. What is decided here is written into this
+  capability's record with the name on it, and a decision attributed to nobody is
+  worse than no decision at all.</p>
+<button type="submit">Take control of this session</button>
+</form>`
+
+const holdingControls = (record: InterventionRecord, token: string): string =>
+  `<h2>You hold this session</h2>
+<p class="note">Taken by ${escape(record.operator ?? "")} at ${
+    escape(record.tookControlAt ?? "")
+  }. The automation cannot act until you hand it back.</p>
 <form method="post" action="/note">
 ${tokenField(token)}
-<label>Something you did <input type="text" name="detail" placeholder="entered supervisor override SUP-HOLD-02"></label>
-${enteredFields()}
+<label>Something you did, or something the screen would not tell the next person
+  <input type="text" name="detail" placeholder="the hold was on the account, not the member"></label>
+<p class="note">Your words. You do not have to list what you typed: the session is
+  watching the screen and registers those itself.</p>
 <button type="submit">Record it</button>
 </form>
 <form method="post" action="/return">
 ${tokenField(token)}
 <input type="hidden" name="operator" value="${escape(record.operator ?? "")}">
+<fieldset>
+<legend>Can the run carry on?</legend>
 <label><input type="radio" name="classification" value="resolved" checked>
-  Resolved &mdash; the screen is ready, resume the run from this step</label>
+  Yes &mdash; the screen is ready, resume the run from this step</label>
 <label><input type="radio" name="classification" value="unresolved">
-  Not resolved &mdash; end the run and report that a person is needed</label>
-<label>What you did <input type="text" name="detail" placeholder="authorized the account as supervisor SUP7"></label>
+  No &mdash; this needs a person, and the run should say so and stop</label>
+<label><input type="radio" name="classification" value="blocked">
+  I could not do this &mdash; the request made no sense, the screen was not what it
+  says here, or it is beyond me. Say what stopped you below</label>
+</fieldset>
+<label>What you did, or what stopped you
+  <input type="text" name="detail" placeholder="released the hold as an authorized supervisor"></label>
 ${theQuestion(record)}
 ${theProposalQuestion(record)}
 <button type="submit">Return control</button>
 </form>`
-    : `<h2>Take control</h2>
-<form method="post" action="/take">
-${tokenField(token)}
-<label>Your name <input type="text" name="operator" placeholder="j.okafor"></label>
-<button type="submit">Take control of this session</button>
-</form>`
-
-  return facts + actions + controls
-}
-
-/**
- * Where an Operator says what they typed into the live application.
- *
- * The reason it is on the page at all: the run's Evidence scrubber is built from
- * the Capability's declared inputs, and nothing a person types during an
- * Intervention is one of those. A supervisor id and an override code are the
- * same class of value as a member number -- worse, since they are credentials --
- * and until this field existed the system had no way to be told about them. It
- * then wrote them down wherever the application echoed them back.
- *
- * Two rows, because releasing a supervisor hold takes two values and a form that
- * accepted one would leave the other in the clear, which is the failure this is
- * for. The value is never stored: `SessionControl.noteAction` turns it into a
- * scrubber needle and keeps only the field name.
- *
- * Nothing is required. An Operator who fixed a screen by clicking something
- * typed nothing, and `[]` is the honest answer for them.
- */
-const enteredFields = (): string =>
-  `<fieldset>
-<legend>Anything you typed into the application</legend>
-<p class="note">Values entered here are redacted from this run's evidence from now on,
-  wherever they turn up &mdash; in a URL, in a field the screen echoes back, in the note
-  above. The value itself is not stored; only the name of the field is.</p>
-${[0, 1]
-    .map(
-      () =>
-        `<label>Field <input type="text" name="enteredField" placeholder="Authorization Code">
-  value <input type="text" name="enteredValue" autocomplete="off"></label>`
-    )
-    .join("\n")}
-</fieldset>`
 
 /**
  * The one question, and the only new thing on this page.
@@ -632,15 +722,23 @@ ${[0, 1]
  * reading — into a durable change to a Capability's contract.
  */
 const theQuestion = (record: InterventionRecord): string => {
-  const observed =
+  const done =
     record.actions.length === 0
       ? "You have not recorded doing anything to this session."
       : `You have recorded ${record.actions.length} action(s) on this session.`
+  const seen =
+    record.observed.length === 0
+      ? ""
+      : ` The session also saw you type into ${
+          escape(record.observed.join(", "))
+        }, which it redacted but does not count as an action: what you did is what you say
+      you did.`
 
   return `<fieldset>
 <legend>${escape(THE_QUESTION)}</legend>
-<p class="note">${escape(observed)} That, and your answer, are together what decide
-  whether this state can be declared in the capability itself.</p>
+<p class="note">${escape(done)}${seen} That, and your answer, are together what decide
+  whether this state can be declared in the capability itself. If you fixed something
+  by hand and have not said so above, say so before answering.</p>
 <label><input type="radio" name="nextTime" value="automation_handles_it">
   Yes &mdash; automation should handle this state itself next time</label>
 <label><input type="radio" name="nextTime" value="always_stop_here">

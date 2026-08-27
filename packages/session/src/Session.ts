@@ -46,6 +46,7 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import type { EvidenceUnwritable } from "@cua/evidence"
 import type { InterventionOutcome, InterventionRequest } from "./Intervention.ts"
+import type { ScreenWatch } from "./Watching.ts"
 
 export const ControlOwner = Schema.Literals([
   "automation",
@@ -111,9 +112,17 @@ export class Session extends Context.Service<Session, {
    * something the engine has to report rather than something it has to catch.
    * It fails only if the episode could not be recorded, since an Intervention
    * nobody can audit is the one outcome worse than not pausing.
+   *
+   * The `ScreenWatch` is how the parked Session sees what the person does to the
+   * screen while it is asleep, so that a value they type is registered with the
+   * scrubber before anything can write it down. It is a parameter rather than a
+   * service because the engine is the one expression that holds both a live
+   * Surface and a Session, and it is required so that no run can park somebody
+   * in front of a screen it has no way of watching. See `Watching.ts`.
    */
   readonly pause: (
-    request: InterventionRequest
+    request: InterventionRequest,
+    watch: ScreenWatch
   ) => Effect.Effect<InterventionOutcome, EvidenceUnwritable>
 }>()("cua/session/Session") {}
 

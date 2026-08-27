@@ -146,7 +146,7 @@ import {
   personalLabelFor,
   unsafeRepeats
 } from "@cua/policy"
-import { type TargetProposal, Session } from "@cua/session"
+import { type ScreenWatch, type TargetProposal, Session } from "@cua/session"
 import {
   type SurfaceAdapterService,
   type SurfaceState,
@@ -156,7 +156,9 @@ import {
   controlsOfferedIn,
   describeMatch,
   describeTarget,
-  labelledValuesIn
+  entryValuesIn,
+  labelledValuesIn,
+  queryValuesIn
 } from "@cua/surface"
 import {
   type Advisor,
@@ -313,6 +315,40 @@ export const replayCapability = (
 
     /** Observation, with what it saw registered before anybody can write it down. */
     const observing = surface.observe.pipe(Effect.tap(witness))
+
+    /**
+     * How a paused Session sees what a person types into the window it handed
+     * them.
+     *
+     * The engine builds it because the engine is the one expression that holds
+     * both a live Surface and a Session, and `Session.pause` requires it so that
+     * no run can park somebody in front of a screen it cannot watch. Two
+     * channels, because a value lives in two places over its life: in the control
+     * it was typed into, and -- once a GET form is submitted -- in the address the
+     * submission produced. Heritage Core's supervisor override is exactly that
+     * shape, and a capture that read only controls would watch both values appear
+     * and then lose them at the moment they became durable.
+     *
+     * Every frame's address, not only the page's. That override submits *inside*
+     * the iframe, so the outer page never navigates and the two credentials are
+     * in a document a caller is not otherwise supposed to have to know about
+     * (ADR-0001). The one place in this system that has to know is this one.
+     *
+     * It cannot fail: a snapshot taken while a page is navigating is an empty
+     * answer for that moment, not a reason to end an episode a person is in the
+     * middle of. It also goes through `observing`, so a personal field first
+     * rendered during an Intervention is registered like any other.
+     */
+    const watchTheScreen: ScreenWatch = {
+      entries: observing.pipe(
+        Effect.map((state) => [
+          ...entryValuesIn(state.tree),
+          ...queryValuesIn(state.url),
+          ...state.frames.flatMap((frame) => queryValuesIn(frame.url))
+        ]),
+        Effect.orElseSucceed(() => [])
+      )
+    }
 
     /**
      * What a Checkpoint is allowed to touch, with the same registration on it.
@@ -1501,30 +1537,34 @@ export const replayCapability = (
             : { resumed: false, escalation: undefined }
         }
 
-        const episode = yield* session.pause({
-          capability: artifact.capability,
-          version: artifact.version,
-          runId,
-          stepId: step.id,
-          stepIntent: step.intent,
-          reason: said.reason,
-          // What the rung above tried, when it was enabled. An Operator who has
-          // been woken deserves to know the system asked first and what it was
-          // told, not least because "the model was not sure" and "the model was
-          // sure and this deployment does not permit it to be listened to" send
-          // them to very different places.
-          detail:
-            why === undefined
-              ? said.detail
-              : `${said.detail} Assisted recovery did not settle it: ${why}.`,
-          url: said.url,
-          accessibility: said.accessibility,
-          // Carried, not acted on. `handOff` is the only reader of this field in
-          // the engine and all it does is hand it to a person.
-          ...(forPerson._tag === "Unassisted" && forPerson.suggestion !== undefined
-            ? { proposal: forPerson.suggestion }
-            : {})
-        })
+        const episode = yield* session.pause(
+          {
+            capability: artifact.capability,
+            version: artifact.version,
+            runId,
+            stepId: step.id,
+            stepIntent: step.intent,
+            reason: said.reason,
+            // What the rung above tried, when it was enabled. An Operator who has
+            // been woken deserves to know the system asked first and what it was
+            // told, not least because "the model was not sure" and "the model was
+            // sure and this deployment does not permit it to be listened to" send
+            // them to very different places.
+            detail:
+              why === undefined
+                ? said.detail
+                : `${said.detail} Assisted recovery did not settle it: ${why}.`,
+            url: said.url,
+            accessibility: said.accessibility,
+            ...(said.background === undefined ? {} : { background: said.background }),
+            // Carried, not acted on. `handOff` is the only reader of this field in
+            // the engine and all it does is hand it to a person.
+            ...(forPerson._tag === "Unassisted" && forPerson.suggestion !== undefined
+              ? { proposal: forPerson.suggestion }
+              : {})
+          },
+          watchTheScreen
+        )
 
         return episode.resumed
           ? { resumed: true, escalation: undefined }
@@ -1555,6 +1595,8 @@ export const replayCapability = (
     ): {
       readonly reason: string
       readonly detail: string
+      /** Only where an earlier episode wrote something down. See `Intervention`. */
+      readonly background?: string
       readonly url: string
       readonly accessibility: string
     } => {
@@ -1567,10 +1609,14 @@ export const replayCapability = (
         const outcome = stalled.outcome
         return {
           reason: stalled.declaration.title,
-          detail:
-            `${stalled.declaration.summary}\n\n` +
-            `The checkpoint that reached it: expected ${outcome.expected}; observed ` +
-            `${outcome.observed}.`,
+          // What happened in *this* run, and what was written about the state
+          // before it, reported as two things. They used to be one paragraph, and
+          // an operator meeting it read a previous operator's account of what
+          // they did as a set of instructions for what to do now.
+          detail: `The checkpoint that reached it: expected ${outcome.expected}; observed ${
+            outcome.observed
+          }.`,
+          background: stalled.declaration.summary,
           url: outcome.state.url,
           accessibility: outcome.state.accessibility
         }

@@ -56,6 +56,18 @@ export interface OperatorDesk {
   /** Blocks until the run pauses. Fails the test rather than hanging forever. */
   readonly awaitPause: Effect.Effect<HandoffSnapshot>
   readonly awaitOwner: (owner: HandoffSnapshot["owner"]) => Effect.Effect<HandoffSnapshot>
+  /**
+   * Blocks until the Session has seen a value typed into the named field and
+   * registered it for redaction.
+   *
+   * A real Operator types over seconds and the watch catches them mid-episode; a
+   * scripted one fills two controls and presses a button inside a hundred
+   * milliseconds, which is not a person and would make what the watch caught a
+   * matter of scheduling. Waiting on the fact instead makes a driver
+   * deterministic *and* makes it fail loudly if the capture ever stops
+   * happening, rather than quietly proving something else.
+   */
+  readonly awaitObserved: (field: string) => Effect.Effect<HandoffSnapshot>
   readonly get: (path: string) => Effect.Effect<{ status: number; body: string }>
   readonly post: (
     path: string,
@@ -255,12 +267,28 @@ const desk = (
       }
     })
 
+  const awaitObserved = (field: string): Effect.Effect<HandoffSnapshot> =>
+    Effect.gen(function* () {
+      const deadline = Date.now() + waitMillis
+      while (true) {
+        const snapshot = yield* control.snapshot
+        if (snapshot.pending?.observed.includes(field) === true) return snapshot
+        if (Date.now() > deadline) {
+          return yield* Effect.die(
+            new Error(`the session never saw a value typed into ${field}`)
+          )
+        }
+        yield* Effect.sleep(25)
+      }
+    })
+
   return {
     origin,
     control,
     surface,
     awaitPause: awaitOwner("paused"),
     awaitOwner,
+    awaitObserved,
     get: (path) => request(path),
     token,
     post: (path, fields) => {

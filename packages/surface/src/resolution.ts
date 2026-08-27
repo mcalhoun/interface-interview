@@ -1381,3 +1381,88 @@ export const labelledValuesIn = (
   }
   return found
 }
+
+// ---------------------------------------------------------------------------
+// What a person typed, read off the screen
+// ---------------------------------------------------------------------------
+
+/** A value a field on the screen is holding, with the name of the field. */
+export interface ScreenValue {
+  /** The field, as the screen captions it: `Supervisor ID`. */
+  readonly field: string
+  /** What is in it. */
+  readonly value: string
+}
+
+/**
+ * The roles a person types into.
+ *
+ * Read controls only. A cell holds a value too, but a cell is the application
+ * talking; these four are the ones a person can put characters into, and this
+ * function exists to find out what a person put where.
+ */
+const ENTRY_ROLES = new Set(["textbox", "searchbox", "combobox", "spinbutton"])
+
+/**
+ * Every value currently sitting in an entry control on a screen.
+ *
+ * A filled textbox carries its value in the accessibility tree next to its
+ * accessible name -- `textbox "Supervisor ID": SUP7` -- so what a person typed
+ * is observable in exactly the channel ADR-0001 already restricts this system
+ * to. Nothing else needs to be asked for and nobody needs to retype it.
+ *
+ * Unnamed controls are dropped: a needle with no field name to call it by would
+ * be a placeholder that tells a reader nothing about what did not leak. Empty
+ * controls are dropped because an empty needle matches between every pair of
+ * characters in the log. Repeats of the same field and value are dropped
+ * because Chromium exposes a layout table's contents at every enclosing level.
+ */
+export const entryValuesIn = (tree: AccessibilityNode): ReadonlyArray<ScreenValue> => {
+  const found: Array<ScreenValue> = []
+  const seen = new Set<string>()
+  for (const node of walk(tree)) {
+    if (!ENTRY_ROLES.has(node.role)) continue
+    const field = (node.name ?? "").trim()
+    const value = (node.value ?? "").trim()
+    if (field === "" || value === "") continue
+    const key = JSON.stringify([field, value])
+    if (seen.has(key)) continue
+    seen.add(key)
+    found.push({ field, value })
+  }
+  return found
+}
+
+/**
+ * Every value in a URL's query string, named by its parameter.
+ *
+ * The other half of what a screen can be seen to have been given, and the half
+ * that survives a form submission. Heritage Core's supervisor override is a GET
+ * form: press Authorize and the fields empty, the panel navigates, and the two
+ * values that were in the controls a moment ago are now in the address. A
+ * capture that only read controls would see them typed and then lose them at
+ * exactly the moment they became durable.
+ *
+ * It reports every parameter, and the caller decides which are new. A parameter
+ * the automation itself put there is not something a person typed, and the way
+ * to know that is to have looked before they started.
+ */
+export const queryValuesIn = (url: string): ReadonlyArray<ScreenValue> => {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return []
+  }
+  const found: Array<ScreenValue> = []
+  const seen = new Set<string>()
+  for (const [field, value] of parsed.searchParams) {
+    const text = value.trim()
+    if (field === "" || text === "") continue
+    const key = JSON.stringify([field, text])
+    if (seen.has(key)) continue
+    seen.add(key)
+    found.push({ field, value: text })
+  }
+  return found
+}

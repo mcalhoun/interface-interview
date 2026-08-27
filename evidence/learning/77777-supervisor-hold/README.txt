@@ -27,11 +27,21 @@ intervention-run.events.jsonl
         labelled Available Balance; observed nothing matched". That is the whole
         of what the system could tell the operator before it had met this state:
         a diagnosis to perform.
+      - `intervention.observed` - the two fields the session watched r.mensah
+        type into, by name and never by value. Nobody typed those names into a
+        form: the paused run watches the screen it handed over, so a supervisor
+        id becomes a scrubber needle while it is still in the control holding it.
+        Everything written after this line has it taken out, which is why the
+        note below reads as it does and why grepping this directory for the
+        credential finds nothing.
       - two `intervention.human_action` events. The first is r.mensah taking
         control. The second is what they *did* — "entered supervisor override
         for SUP-HOLD-02" — and it is the second one that carries the meaning.
         Ticket 13's episode has no equivalent, because that operator changed
         nothing, and that difference is the entire classification (ADR-0004).
+        An observation is deliberately not one of these: what the system saw is
+        not what the person reported, and ADR-0004's table is derived from what
+        they reported.
       - `intervention.resolve` — control handed back with two separate answers:
         `classification: "resolved"` (this run CAN carry on, because a person
         acted) and `nextTime: "always_stop_here"` (the answer to the one

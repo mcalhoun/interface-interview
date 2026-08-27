@@ -99,7 +99,7 @@ A single, bounded consultation of a model when Replay cannot proceed. It may pro
 _Avoid_: fallback, self-healing, auto-repair
 
 **Intervention**:
-The episode in which automation stops, a person takes the live Session, resolves the state, and returns control. Includes the record of what they did.
+The episode in which automation stops, a person takes the live Session, resolves the state, and returns control. Includes the record of what they did, and what the Session observed them type. An Operator who cannot proceed closes the episode as blocked, which is a report about the episode and teaches nothing about the state.
 _Avoid_: escalation, handoff, manual override, human-in-the-loop
 
 **Operator**:

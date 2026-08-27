@@ -32,10 +32,20 @@
  * ## Evidence is written as it happens, not reconstructed afterwards
  *
  * `intervention.raise` when automation stops, `intervention.human_action` when a
- * person takes control and for every action they report, `intervention.resolve`
- * when they hand it back. These are written by the fiber doing the thing, which
- * matters: the paused run cannot record what the Operator did, because it is
- * asleep while they do it.
+ * person takes control and for every action they report, `intervention.observed`
+ * for every value the Session saw them type, `intervention.resolve` when they
+ * hand it back.
+ *
+ * ## The parked run keeps its eyes open
+ *
+ * The fiber that pauses does not only wait. It watches the screen it handed over
+ * (`Watching.ts`), so that a supervisor id typed into the live window becomes a
+ * scrubber needle without anybody being asked to retype it. That is the one
+ * thing an Operator cannot reasonably be made to do by hand, and the first real
+ * person to be asked to did not: a credential went into that run's log three
+ * times. Registration happens before the event that would first quote the value,
+ * every time, which is why the capture is also taken synchronously at the two
+ * moments an Operator writes something down.
  *
  * ## A transition that could not be recorded did not happen
  *
@@ -60,7 +70,7 @@
  * moved on, the failure is reported and the state is left alone.
  */
 
-import { Context, Deferred, Effect, Layer, Ref, Schema } from "effect"
+import { Context, Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect"
 import { Evidence, type EvidenceUnwritable } from "@cua/evidence"
 import {
   type ControlReturn,
@@ -72,6 +82,7 @@ import {
   operatorFieldLabel,
   raise
 } from "./Intervention.ts"
+import { type ScreenWatch, type WatchState, beganWith, sawEntries } from "./Watching.ts"
 import { type ControlOwner, ControlOwner as ControlOwnerSchema, Session, SessionNotOwned, describeOwner } from "./Session.ts"
 
 /**
@@ -91,6 +102,39 @@ export class HandoffRefused extends Schema.TaggedError<HandoffRefused>()("Handof
     return `cannot ${this.attempted}: control is ${describeOwner(this.owner)}, not ${
       describeOwner(this.expected)
     }`
+  }
+}
+
+/**
+ * A transition was attempted without something it cannot be recorded without.
+ *
+ * Two things, and both were found by the first person to use this for real.
+ *
+ * **A name.** It used to be optional, and the run a real operator drove records
+ * `operator: "(unnamed)"` on both the take and the return. A privileged decision
+ * attributed to nobody is worse than useless in a system whose whole argument is
+ * that a person's judgement is what makes a classification legitimate: the
+ * Amendment derived from that episode names them in its provenance, and
+ * "(unnamed)" there is a document nobody can stand behind.
+ *
+ * **A reason, when somebody reports they are stuck.** `blocked` says the request
+ * made no sense or the screen was wrong, and an episode that says so without
+ * saying how is a dead end for whoever picks it up.
+ *
+ * Refused here rather than in the form, for the reason every other rule is: a
+ * guard that lives in a page is a guard anyone with `curl` walks around.
+ */
+export class HandoffIncomplete extends Schema.TaggedError<HandoffIncomplete>()(
+  "HandoffIncomplete",
+  {
+    sessionId: Schema.String,
+    attempted: Schema.String,
+    /** What is missing, in the words the person is about to read. */
+    missing: Schema.String
+  }
+) {
+  override get message(): string {
+    return `cannot ${this.attempted}: ${this.missing}`
   }
 }
 
@@ -142,7 +186,8 @@ export class SessionControl extends Context.Service<SessionControl, {
   readonly claim: (attempted: string) => Effect.Effect<void, SessionNotOwned>
   /** The automation half of the pause. See `Session.pause`. */
   readonly pause: (
-    request: InterventionRequest
+    request: InterventionRequest,
+    watch: ScreenWatch
   ) => Effect.Effect<InterventionOutcome, EvidenceUnwritable>
   /**
    * Register an operator interface as reachable. Until one is, a run has nobody
@@ -150,33 +195,36 @@ export class SessionControl extends Context.Service<SessionControl, {
    */
   readonly attach: (operatorUrl: string) => Effect.Effect<void>
   readonly detach: Effect.Effect<void>
-  /** `PAUSED → HUMAN`. */
+  /** `PAUSED → HUMAN`. Refused without a name to attribute it to. */
   readonly takeControl: (
     operator: string
-  ) => Effect.Effect<InterventionRecord, HandoffRefused | EvidenceUnwritable>
+  ) => Effect.Effect<InterventionRecord, HandoffRefused | HandoffIncomplete | EvidenceUnwritable>
   /**
-   * Record one thing the Operator did while holding the Session, and register
-   * anything they typed while doing it.
+   * Record one thing the Operator did while holding the Session, in their own
+   * words.
    *
-   * The registration is the point, and it lives here rather than in the operator
-   * interface deliberately. What a person types during an Intervention is the
-   * one class of sensitive value no Artifact could have declared, and this is the
-   * single method through which an Operator tells the system what they did. Put
-   * the registration in the HTTP handler and the next interface -- a second
-   * page, a test harness, a CLI -- silently does not have it; put it here and
-   * every caller of `noteAction` gets it, because `SessionControl` cannot be
-   * constructed without the `Evidence` writer that performs it.
+   * It used to carry a list of what they had typed as well, because that was the
+   * only way the Evidence scrubber could learn a value no Artifact declared. The
+   * Session observes those now (`Watching.ts`), and this call takes a look at the
+   * screen before it writes anything, so a note that quotes a code the person
+   * typed is redacted in the very event that reports it.
    *
-   * `OperatorNote.entered` is required, and `[]` is the ordinary answer. See
-   * `EnteredValue` for why it is not optional.
+   * What is left is the half observation cannot infer: why they did it, what the
+   * screen was actually refusing, what the next person should know.
    */
   readonly noteAction: (
     note: OperatorNote
-  ) => Effect.Effect<InterventionRecord, HandoffRefused | EvidenceUnwritable>
-  /** `HUMAN → RESUME_REQUESTED`, and the signal the paused run is waiting on. */
+  ) => Effect.Effect<InterventionRecord, HandoffRefused | HandoffIncomplete | EvidenceUnwritable>
+  /**
+   * `HUMAN → RESUME_REQUESTED`, and the signal the paused run is waiting on.
+   *
+   * Refused without a name, and refused without a reason when the Operator is
+   * reporting that they could not act. Takes a last look at the screen first, so
+   * the resolution event cannot be the place a credential lands.
+   */
   readonly returnControl: (
     body: ControlReturn
-  ) => Effect.Effect<InterventionRecord, HandoffRefused | EvidenceUnwritable>
+  ) => Effect.Effect<InterventionRecord, HandoffRefused | HandoffIncomplete | EvidenceUnwritable>
 }>()("cua/session/SessionControl") {}
 
 export interface SessionControlOptions {
@@ -208,10 +256,33 @@ export interface SessionControlOptions {
 
 export const DEFAULT_HANDOFF_WAIT_MILLIS = 600_000
 
+/**
+ * How often the parked run looks at the screen it handed over.
+ *
+ * Short enough that a value typed into a control is seen while it is still in
+ * it, which is the only chance there is for a form that clears itself on
+ * submission. Long enough that it is a few accessibility snapshots a second
+ * rather than a busy loop, and nothing else is contending for the browser: the
+ * run is asleep and the person is reading.
+ *
+ * The synchronous captures on `noteAction` and `returnControl` are the other
+ * half and they race nobody, but they can only see what is still on the screen
+ * when they run. Between the two, a person typing at human speed is caught while
+ * they type, and anything still visible when they write something down is caught
+ * again.
+ */
+export const SCREEN_WATCH_INTERVAL_MILLIS = 250
+
 interface Waiting {
   readonly record: InterventionRecord
   /** Completed by `returnControl`, awaited by `pause`. The whole transfer. */
   readonly deferred: Deferred.Deferred<ControlReturn>
+}
+
+/** The screen a paused Session is watching, and what it has seen on it. */
+interface Watched {
+  readonly watch: ScreenWatch
+  readonly seen: WatchState
 }
 
 interface State {
@@ -268,6 +339,86 @@ export const sessionControl = (
       const read = Ref.get(state)
 
       /**
+       * The screen this Session is currently watching, if it is paused.
+       *
+       * Set by `pause`, cleared when the episode settles. Held apart from
+       * `State` on purpose: it is not part of the machine an auditor reads, and
+       * putting it there would make every capture a change to the state the
+       * transition rollback compares against.
+       */
+      const screen = yield* Ref.make<Watched | undefined>(undefined)
+
+      /**
+       * Look at the screen, register anything new on it, and say which fields it
+       * came from.
+       *
+       * The whole capture mechanism, in one expression that three callers share:
+       * the watching fiber, `noteAction`, and `returnControl`. The two
+       * synchronous callers are what make the ordering a guarantee rather than a
+       * race -- registration happens before the event that could quote the value,
+       * because it happens in the same statement that writes it.
+       *
+       * Never fails. An observation that could not be taken is an empty answer,
+       * because a person mid-episode must not be blocked by a snapshot that
+       * arrived while the page was navigating.
+       */
+      const capture: Effect.Effect<ReadonlyArray<string>> = Effect.gen(function* () {
+        const watching = yield* Ref.get(screen)
+        if (watching === undefined) return []
+        const entries = yield* watching.watch.entries
+        const { register, state: seen } = sawEntries(watching.seen, entries)
+        yield* Ref.update(screen, (current) =>
+          current === watching ? { ...current, seen } : current
+        )
+        if (register.length === 0) return []
+        // Before anything else. `EvidenceWriter.record` scrubs on write, so a
+        // value registered here is redacted in every event written after this
+        // line -- including the one immediately below, and including the note an
+        // Operator is in the middle of writing.
+        yield* evidence.redact(
+          register.map((entry) => ({
+            label: operatorFieldLabel(entry.field),
+            text: entry.value
+          }))
+        )
+        return [...new Set(register.map((entry) => operatorFieldLabel(entry.field)))]
+      })
+
+      /**
+       * Put what was captured on the record, and in the log.
+       *
+       * No rollback, unlike every other write here, and the difference is real:
+       * this appends to a set of field names rather than to a list `classify`
+       * counts, so a write that fails and is retried adds nothing twice. The
+       * redaction has already happened and is not undone by anything -- a needle
+       * the log no longer needs is harmless, and one it needed and lost is not.
+       */
+      const noteCapture = (fields: ReadonlyArray<string>): Effect.Effect<void> =>
+        Effect.gen(function* () {
+          if (fields.length === 0) return
+          const held = yield* Ref.modify(
+            state,
+            (current): [InterventionRecord | undefined, State] => {
+              if (current.pending === undefined) return [undefined, current]
+              const record: InterventionRecord = {
+                ...current.pending.record,
+                observed: [...new Set([...current.pending.record.observed, ...fields])]
+              }
+              return [record, { ...current, pending: { ...current.pending, record } }]
+            }
+          )
+          if (held === undefined) return
+          yield* evidence.record({
+            kind: "intervention.observed",
+            stepId: held.intervention.stepId,
+            fields
+          }).pipe(Effect.ignore)
+        })
+
+      /** Both halves, in the order that makes the ordering a guarantee. */
+      const captureScreen: Effect.Effect<void> = capture.pipe(Effect.flatMap(noteCapture))
+
+      /**
        * Undo a transition whose Evidence event could not be written.
        *
        * Conditional on the state still being the one that transition committed.
@@ -309,7 +460,8 @@ export const sessionControl = (
       // -------------------------------------------------------------------
 
       const pause = (
-        request: InterventionRequest
+        request: InterventionRequest,
+        watch: ScreenWatch
       ): Effect.Effect<InterventionOutcome, EvidenceUnwritable> =>
         Effect.gen(function* () {
           const deferred = yield* Deferred.make<ControlReturn>()
@@ -373,9 +525,30 @@ export const sessionControl = (
             detail: request.detail
           }).pipe(Effect.onError(() => rollBack(started.previous, started.committed)))
 
+          // What was on the screen before anybody touched it. Never registered:
+          // these are the values automation put there, the run's own scrubber
+          // already covers them, and calling them operator input would say a
+          // person typed something they did not.
+          yield* Ref.set(screen, { watch, seen: beganWith(yield* watch.entries) })
+
           if (options.announce !== undefined) {
             yield* options.announce(started.record.intervention, started.operatorUrl)
           }
+
+          // The parked fiber keeps its eyes open. A person can type a code into
+          // the live window and press the button that clears it in the same
+          // second, and Heritage Core's override form posts: after that the
+          // characters are nowhere on the screen and nowhere in the address, and
+          // the panel quotes the supervisor id back in prose that nothing can
+          // attribute. Looking while they work is the only chance there is. A
+          // child fiber, so it is interrupted with the run and cannot outlive the
+          // episode it belongs to.
+          const watching = yield* Effect.forkChild(
+            captureScreen.pipe(
+              Effect.andThen(Effect.sleep(SCREEN_WATCH_INTERVAL_MILLIS)),
+              Effect.forever
+            )
+          )
 
           // The pause itself. This fiber holds every reading the run has taken
           // and stays exactly where it is; resuming is the next statement, not a
@@ -386,6 +559,8 @@ export const sessionControl = (
           // control a millisecond before the bound expired is not reported as a
           // timeout on the strength of which fiber the scheduler ran first.
           yield* Deferred.await(deferred).pipe(Effect.timeoutOption(waitMillis))
+          yield* Fiber.interrupt(watching)
+          yield* Ref.set(screen, undefined)
 
           // RESUME_REQUESTED -> AUTOMATION, and it happens here or nowhere.
           const settled = yield* Ref.modify(state, (current): [Settled, State] => {
@@ -437,15 +612,26 @@ export const sessionControl = (
             }
           }
 
-          return settled.closed.classification === "resolved"
-            ? { resumed: true, record: settled.closed }
-            : {
-                resumed: false,
-                reason: `the operator returned control without resolving the state: ${
-                  settled.closed.detail ?? "no detail given"
-                }`,
-                record: settled.closed
-              }
+          if (settled.closed.classification === "resolved") {
+            return { resumed: true, record: settled.closed }
+          }
+          // Two ways not to resume, and they are worth telling apart in the
+          // sentence a caller is handed. "I looked and this needs a person" is a
+          // judgement about the state; "I could not act on this" is a report
+          // about the episode, and whoever reads the run has to know that
+          // nobody has actually assessed the screen yet.
+          return {
+            resumed: false,
+            reason:
+              settled.closed.classification === "blocked"
+                ? `the operator could not act on this state: ${
+                    settled.closed.detail ?? "no reason given"
+                  }`
+                : `the operator returned control without resolving the state: ${
+                    settled.closed.detail ?? "no detail given"
+                  }`,
+            record: settled.closed
+          }
         })
 
       // -------------------------------------------------------------------
@@ -500,7 +686,27 @@ export const sessionControl = (
           )
         )
 
+      /** The name is the attribution. An episode nobody signed teaches nothing. */
+      const named = (
+        operator: string,
+        attempted: string
+      ): Effect.Effect<string, HandoffIncomplete> => {
+        const name = operator.trim()
+        return name === ""
+          ? Effect.fail(
+              new HandoffIncomplete({
+                sessionId,
+                attempted,
+                missing: "say who you are; this session records a person, not a role"
+              })
+            )
+          : Effect.succeed(name)
+      }
+
       const takeControl = (operator: string) =>
+        named(operator, "take control").pipe(Effect.flatMap((name) => takeAs(name)))
+
+      const takeAs = (operator: string) =>
         transition(
           "take control",
           "paused",
@@ -521,27 +727,18 @@ export const sessionControl = (
       const noteAction = (note: OperatorNote) =>
         Effect.gen(function* () {
           /**
-           * Registered before the transition, and therefore before the
-           * `intervention.human_action` event this call is about to write.
+           * A look at the screen before anything is written, and the ordering is
+           * the whole mechanism.
            *
-           * The ordering is the whole mechanism. `EvidenceWriter.record` scrubs
-           * on write, so a value registered first is redacted in the very note
-           * that reports it -- an Operator who writes "entered 4417 as the
-           * override" gets `entered [redacted:authorizationCode] as the
-           * override`, rather than having their own note be the leak. Everything
-           * the run writes afterwards is covered too, which is what closes the
-           * URL and the echoed-field-value cases.
-           *
-           * Nothing here keeps the characters: `redacted` on the record is the
-           * list of field names.
+           * `EvidenceWriter.record` scrubs on write, so a value registered first
+           * is redacted in the very note that reports it -- an Operator who
+           * writes "entered 4417 as the override" gets `entered
+           * [redacted:authorizationCode] as the override` rather than having
+           * their own note be the leak. It used to work because they were asked
+           * to type the value into a second box; it works now because the
+           * Session can see the box they already typed it into.
            */
-          yield* evidence.redact(
-            note.entered.map((entry) => ({
-              label: operatorFieldLabel(entry.field),
-              text: entry.value
-            }))
-          )
-          const redacted = note.entered.map((entry) => operatorFieldLabel(entry.field))
+          yield* captureScreen
 
           // The appended action and its event stand or fall together. A write
           // that failed after the append would leave the action on the record
@@ -556,10 +753,7 @@ export const sessionControl = (
             (waiting) => [
               {
                 ...waiting.record,
-                actions: [
-                  ...waiting.record.actions,
-                  { at: now(), detail: note.detail, redacted }
-                ]
+                actions: [...waiting.record.actions, { at: now(), detail: note.detail }]
               },
               "operator",
               "(no change of hands)"
@@ -569,15 +763,46 @@ export const sessionControl = (
                 kind: "intervention.human_action",
                 stepId: record.intervention.stepId,
                 operator: record.operator ?? "(unnamed)",
-                detail:
-                  redacted.length === 0
-                    ? note.detail
-                    : `${note.detail} (values entered: ${redacted.join(", ")})`
+                detail: note.detail
               })
           )
         })
 
+      /**
+       * The stuck path has to say what it was stuck on.
+       *
+       * `blocked` is the only classification whose whole content is the
+       * sentence: a resolved episode is evidenced by the screen and an
+       * unresolved one by the state it was left in, and this one is evidenced by
+       * nothing but what the person says. An empty box there is a dead end for
+       * whoever picks the run up.
+       */
+      const reasoned = (body: ControlReturn): Effect.Effect<void, HandoffIncomplete> =>
+        body.classification === "blocked" && body.detail.trim() === ""
+          ? Effect.fail(
+              new HandoffIncomplete({
+                sessionId,
+                attempted: "return control",
+                missing:
+                  "say what stopped you; a run that could not be done is only useful " +
+                  "to the next person if it says why"
+              })
+            )
+          : Effect.void
+
       const returnControl = (body: ControlReturn) =>
+        Effect.gen(function* () {
+          const operator = yield* named(body.operator, "return control")
+          yield* reasoned(body)
+          // The last look, and the one that catches what a submitted form left
+          // in the address bar rather than in the control it came from. Before
+          // the resolution event, which carries the Operator's own words and is
+          // therefore the last place a credential could land.
+          yield* captureScreen
+          return yield* returnAs({ ...body, operator })
+        })
+
+      const returnAs = (body: ControlReturn) =>
         transition(
           "return control",
           "operator",

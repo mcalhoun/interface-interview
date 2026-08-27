@@ -87,6 +87,21 @@ export const classify = (record: InterventionRecord): Learned => {
       why: "nobody took control before the wait expired, so nothing was demonstrated"
     }
   }
+  if (record.classification === "blocked") {
+    // The honest stuck path, and it teaches nothing on purpose. ADR-0004 derives
+    // a state's class from what an Operator "actually had to do to resolve it";
+    // somebody who reported that they could not act has not resolved anything,
+    // so whatever they answered about next time is a guess about a state nobody
+    // has been through. Refused here rather than downstream, so that no
+    // Amendment, and no ratchet entry, can be built from an episode where the
+    // person was as stuck as the automation.
+    return {
+      _tag: "NothingLearned",
+      why:
+        "the operator reported they could not act on this state, so nothing was " +
+        "demonstrated about how automation should treat it"
+    }
+  }
 
   const operator = record.operator ?? "(unnamed)"
   const touched = record.actions.length > 0

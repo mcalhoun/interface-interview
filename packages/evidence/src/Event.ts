@@ -296,6 +296,28 @@ const InterventionHumanAction = event("intervention.human_action", {
   detail: Schema.String
 })
 
+/**
+ * A value the system saw a person type into the live screen, by field name.
+ *
+ * Written the moment the value is registered with the scrubber, which is what
+ * makes the ordering auditable: everything after this line in the log has the
+ * value taken out of it, and this line names the field it came from. The value
+ * itself is never here. See `packages/session/src/Watching.ts`.
+ *
+ * A separate kind rather than another `intervention.human_action`, and that is
+ * load-bearing rather than tidy. `human_action` is what an Operator *reported*
+ * doing, and `InterventionResolve` below says out loud that an auditor can
+ * re-derive ADR-0004's classification from those events plus the one question.
+ * Observations are not reports: counting them as actions would turn "the
+ * operator changed nothing" into "the operator acted" for anybody re-deriving
+ * from the log, which is exactly the row of that table a Business Outcome
+ * depends on.
+ */
+const InterventionObserved = event("intervention.observed", {
+  /** The fields, as the placeholders in this log name them. Never the values. */
+  fields: Schema.Array(Schema.String)
+})
+
 const InterventionResolve = event("intervention.resolve", {
   operator: Schema.String,
   /** Whether the run can carry on from here. About this episode. */
@@ -391,6 +413,7 @@ export const EvidenceEvent = Schema.Union([
   AssistDeclined,
   InterventionRaise,
   InterventionHumanAction,
+  InterventionObserved,
   InterventionResolve,
   RunEnd
 ])

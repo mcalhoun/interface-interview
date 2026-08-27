@@ -153,11 +153,14 @@ before the run started, because neither could be:
     application. The list of captions is declared and argued for in
     packages/policy/src/Sensitivity.ts, and it is a denylist: a personal field on
     a screen nobody has looked at yet is not covered until somebody adds it.
-  * anything an Operator said they typed into the live application during an
-    Intervention. A supervisor id or an override code is a credential no
-    Capability declared, and the operator interface asks for it so that the
-    scrubber can be told. It is registered before the note that reports it, so
-    the note is redacted too.
+  * anything a person typed into the live application during an Intervention. A
+    supervisor id or an override code is a credential no Capability declared.
+    Nobody is asked to retype these: the paused session watches the screen it
+    handed over -- the value a control is holding, and the query string a
+    submitted form produced -- and registers what changed. Registration happens
+    before the event that would first quote the value, so the note an operator
+    writes about what they did is redacted too. The intervention.observed events
+    in events.jsonl name the fields this happened for.
 
 Two placeholders appear, and they mean different things:
 

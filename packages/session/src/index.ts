@@ -42,7 +42,12 @@ export type { HandoffSnapshot, OwnerTransition, SessionControlOptions } from "./
 export {
   DEFAULT_HANDOFF_WAIT_MILLIS,
   handoffSession,
+  HandoffIncomplete,
   HandoffRefused,
+  SCREEN_WATCH_INTERVAL_MILLIS,
   SessionControl,
   sessionControl
 } from "./Handoff.ts"
+
+export type { ScreenWatch, WatchState } from "./Watching.ts"
+export { beganWith, sawEntries, watchesNothing } from "./Watching.ts"

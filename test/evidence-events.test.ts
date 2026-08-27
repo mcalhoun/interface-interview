@@ -145,7 +145,7 @@ it("defines every event kind SPEC lists, including the ones replay may never emi
   // contains no decide event" to be a claim worth testing.
   expect(KINDS_FORBIDDEN_IN_REPLAY).toEqual(["decide"])
 
-  // Six additions to SPEC's list, and every group is added for the reason SPEC
+  // Seven additions to SPEC's list, and every group is added for the reason SPEC
   // itself gives for `assist.*` having its own kinds rather than reusing
   // `decide`.
   //
@@ -157,6 +157,15 @@ it("defines every event kind SPEC lists, including the ones replay may never emi
   // rung whose answer was dropped on the floor look identical in the log, and
   // "every assisted-recovery decision recorded as evidence" would hold only for
   // the decisions that went well.
+  //
+  // `intervention.observed`: a value the system *saw* a person type into the
+  // live screen, registered for redaction and named by its field. Not an
+  // `intervention.human_action`, and the difference is load-bearing rather than
+  // tidy: `intervention.resolve` says out loud that an auditor can re-derive
+  // ADR-0004's classification from the human_action events plus the one
+  // question, and an observation is not something the operator reported doing.
+  // Counting one as an action would turn "the operator changed nothing" into
+  // "the operator acted" for exactly the row a Business Outcome depends on.
   //
   // `assist.target_proposal` (ticket 16): a proposed *outcome* is something the
   // run may act on and a proposed *control* is something only a person may act
@@ -174,8 +183,15 @@ it("defines every event kind SPEC lists, including the ones replay may never emi
   const RECOVERY_KINDS = ["recovery.detected", "recovery.attempt", "recovery.resolved"]
   const ASSIST_KINDS = ["assist.declined", "assist.target_proposal"]
   const TENANT_KINDS = ["override.applied"]
+  const CAPTURE_KINDS = ["intervention.observed"]
   expect(kinds).toEqual(
-    new Set([...SPEC_KINDS, ...RECOVERY_KINDS, ...ASSIST_KINDS, ...TENANT_KINDS])
+    new Set([
+      ...SPEC_KINDS,
+      ...RECOVERY_KINDS,
+      ...ASSIST_KINDS,
+      ...TENANT_KINDS,
+      ...CAPTURE_KINDS
+    ])
   )
 })
 

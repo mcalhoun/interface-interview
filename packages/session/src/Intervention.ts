@@ -60,6 +60,17 @@ export interface InterventionRequest {
   readonly reason: string
   /** The longer form: what was expected, and what was there instead. */
   readonly detail: string
+  /**
+   * What this capability already knew about this state, written before this run.
+   *
+   * Present only where an earlier episode taught the document something about
+   * the Step that stopped: the summary somebody wrote at the time, quoting what
+   * *they* did. Kept apart from `detail` because they are different things and a
+   * page that renders them as one paragraph is a page that reads as instructions
+   * for the person now on shift. `detail` is what happened just now; this is
+   * background, and it may describe a different screen under the same code.
+   */
+  readonly background?: string | undefined
   readonly url: string
   /** The accessibility tree at the moment it stopped. */
   readonly accessibility: string
@@ -84,9 +95,9 @@ export interface Intervention extends InterventionRequest {
 }
 
 /**
- * A value an Operator typed into the live application.
+ * A value seen in a field on the live screen, with the name of the field.
  *
- * ## Why this exists at all
+ * ## Why this exists
  *
  * ADR-0008 makes every *declared parameter* sensitive and the Evidence scrubber
  * is built from them, before a run starts. During an Intervention a person types
@@ -97,16 +108,24 @@ export interface Intervention extends InterventionRequest {
  * application then renders back, echoes into a field, or puts in a URL is
  * written into the log in the clear.
  *
+ * ## Where these come from
+ *
+ * Observation, not transcription. The system owns the browser, a filled control
+ * carries its value in the accessibility tree, and a submitted GET form carries
+ * it in the address; the Session watches both while a person holds it. See
+ * `Watching.ts`. Asking the Operator to retype what they had just typed was the
+ * first design, and the first real person to meet it did not do it.
+ *
  * ## Why the *value* travels, and where it stops
  *
- * `SessionControl.noteAction` registers these with `Evidence.redact` and keeps
- * nothing: what survives on the record is `redacted`, the list of field names.
- * The characters exist as an argument, become a needle, and are dropped. From
- * that moment the run's log redacts them wherever they appear, including in the
- * note the Operator is writing right now.
+ * The Session registers these with `Evidence.redact` and keeps nothing: what
+ * survives on the record is `observed`, the list of field names. The characters
+ * exist as an argument, become a needle, and are dropped. From that moment the
+ * run's log redacts them wherever they appear, including in the note the
+ * Operator is writing right now.
  */
 export interface EnteredValue {
-  /** The field it was typed into, as the screen captions it: `Supervisor ID`. */
+  /** The field it sits in, as the screen captions it: `Supervisor ID`. */
   readonly field: string
   /** The characters. Registered as a needle; never stored on the record. */
   readonly value: string
@@ -136,30 +155,27 @@ export const operatorFieldLabel = (field: string): string => {
 /**
  * One thing an Operator did while holding the Session, as they described it.
  *
- * `redacted` names the fields they typed into, never what they typed. It is on
- * the record so that an auditor can see that a credential was entered, and see
- * that the system was told about it, without the record being the place the
- * credential leaked.
+ * Their words, and only their words. What they typed is not here and never was:
+ * the Session watches the screen for that (`Watching.ts`), and what it saw is
+ * on the record as `observed` -- field names, never characters.
  */
 export interface OperatorAction {
   readonly at: string
   readonly detail: string
-  readonly redacted: ReadonlyArray<string>
 }
 
 /**
- * What an Operator says they did, and what they typed while doing it.
+ * What an Operator says they did.
  *
- * `entered` is **required**, and empty is a perfectly ordinary answer -- most
- * things a person does to a screen involve no credential at all. It is required
- * for the reason `EvidenceOptions.scrubber` is: a field that can be omitted is a
- * field that gets omitted, and the omission is silent and permanent. Saying "I
- * typed nothing secret" is one `[]`; forgetting to say it should not be
- * spelled the same way.
+ * Free text, and deliberately nothing else. It used to carry a list of the
+ * values they had typed, because that was the only way the scrubber could learn
+ * them; the Session observes those now, so a note is for the half observation
+ * cannot infer -- why they did it, what the screen was actually refusing, what
+ * they would tell the next person. Requiring somebody to answer that before
+ * they hand control back is fair. Requiring them to do the machine's job is not.
  */
 export interface OperatorNote {
   readonly detail: string
-  readonly entered: ReadonlyArray<EnteredValue>
 }
 
 /**
@@ -167,14 +183,24 @@ export interface OperatorNote {
  *
  * `resolved` means the screen is now in a state automation can carry on from,
  * and the run resumes. `unresolved` means it is not, and the run ends as
- * `intervention_required` — which is an honest answer rather than a failure,
+ * `intervention_required` -- which is an honest answer rather than a failure,
  * because the automation is not broken and there is nothing to page anyone about.
+ *
+ * `blocked` is the third thing that happens to people and had no spelling until
+ * a real one needed it: the request made no sense, the screen was not the one
+ * described, or they could not do it. It is not a resolution and it is not a
+ * judgement about the state either, because somebody who could not act has not
+ * seen what acting would have shown. So it ends the run the way `unresolved`
+ * does and it teaches nothing: `classify` returns `NothingLearned` for it
+ * whatever else the form said, which is what keeps it out of ADR-0004's ratchet.
+ * A system that models a person as a first-class execution state should be able
+ * to record the case where the person is stuck too.
  *
  * ## Two axes, kept apart
  *
  * This field answers one question only: **can the run carry on from here?** It
- * is about *this episode*. `nextTime` below answers a different one — what
- * should automation do when it meets this state again — which is about the
+ * is about *this episode*. `nextTime` below answers a different one -- what
+ * should automation do when it meets this state again -- which is about the
  * *state*, and outlives the run entirely.
  *
  * Ticket 13 deliberately did not widen this union with `business_outcome`.
@@ -183,9 +209,10 @@ export interface OperatorNote {
  * `88888` is a perfectly good Business Outcome *and* an unresolvable episode,
  * because there is no savings account for anybody to conjure into existence. A
  * union that could not express that would have forced a lie into one field or
- * the other.
+ * the other. `blocked` is not that widening either: it says nothing about the
+ * state and it is refused as an input to learning.
  */
-export type ControlReturnClassification = "resolved" | "unresolved"
+export type ControlReturnClassification = "resolved" | "unresolved" | "blocked"
 
 /**
  * The one question, asked once, at return-of-control.
@@ -267,6 +294,15 @@ export interface InterventionRecord {
   readonly operator: string | undefined
   readonly tookControlAt: string | undefined
   readonly actions: ReadonlyArray<OperatorAction>
+  /**
+   * The fields the Session saw a value typed into while a person held it.
+   *
+   * Names only, never characters. On the record so an auditor can see that a
+   * credential was entered and that the scrubber was told about it, without the
+   * record being the place the credential leaked. Nobody transcribes this: it
+   * is what `Watching.ts` observed, and it is the evidence that the capture ran.
+   */
+  readonly observed: ReadonlyArray<string>
   readonly returnedAt: string | undefined
   /**
    * `unattended` is the machine's own answer when nobody arrived before the
@@ -313,6 +349,7 @@ export const raise = (intervention: Intervention): InterventionRecord => ({
   operator: undefined,
   tookControlAt: undefined,
   actions: [],
+  observed: [],
   returnedAt: undefined,
   classification: undefined,
   detail: undefined,

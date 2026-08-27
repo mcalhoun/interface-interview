@@ -30,17 +30,22 @@ import {
   Evidence,
   EvidenceUnwritable,
   evidenceFiles,
+  noScrubbing,
   noSecrets
 } from "@cua/evidence"
+import { proposeAmendment } from "@cua/replay"
 import {
+  HandoffIncomplete,
   HandoffRefused,
   SessionControl,
   SessionNotOwned,
+  classify,
   describeOwner,
-  sessionControl
+  sessionControl,
+  watchesNothing
 } from "@cua/session"
 import { shippedArtifact } from "./support/replay-harness.ts"
-import { attendedReplay } from "./support/handoff-harness.ts"
+import { type OperatorDesk, attendedReplay } from "./support/handoff-harness.ts"
 
 const RESTRICTED = "77777"
 // Ticket 09 renamed this step when the hard-coded click on "Primary Savings"
@@ -64,16 +69,21 @@ const HELD_STEP = "open-account"
  */
 const BEFORE_LEARNING = "1.1.0"
 
-/** What a supervisor does at the live browser window to release the hold. */
-const releaseTheHold = (desk: {
-  surface: {
-    fill: (target: object, value: string) => Effect.Effect<unknown, unknown>
-    click: (target: object) => Effect.Effect<unknown, unknown>
-  }
-}) =>
+/**
+ * What a supervisor does at the live browser window to release the hold.
+ *
+ * With a wait between typing and pressing, because a person has one and this
+ * script does not. The paused Session watches the screen it handed over, so both
+ * credentials become scrubber needles while they are still in the controls;
+ * pressing Authorize inside the same hundred milliseconds would make what the
+ * watch caught a matter of scheduling rather than of mechanism.
+ */
+const releaseTheHold = (desk: OperatorDesk) =>
   Effect.gen(function* () {
     yield* desk.surface.fill({ role: "textbox", name: "Supervisor ID" }, "SUP7")
     yield* desk.surface.fill({ role: "textbox", name: "Authorization Code" }, "4417")
+    yield* desk.awaitObserved("supervisorId")
+    yield* desk.awaitObserved("authorizationCode")
     yield* desk.surface.click({ role: "button", name: "Authorize" })
   })
 
@@ -180,7 +190,7 @@ it.live("a resolution that could not be recorded does not resume the run", () =>
     const { control } = yield* brittleControl("intervention.resolve", 300)
     yield* control.attach("http://127.0.0.1:0")
 
-    const paused = yield* Effect.forkChild(control.pause(HELD))
+    const paused = yield* Effect.forkChild(control.pause(HELD, watchesNothing))
     while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
     yield* control.takeControl("j.okafor")
 
@@ -215,7 +225,7 @@ it.live("and the operator can simply try again", () =>
     const { control, written } = yield* brittleControl("intervention.resolve", 10_000)
     yield* control.attach("http://127.0.0.1:0")
 
-    const paused = yield* Effect.forkChild(control.pause(HELD))
+    const paused = yield* Effect.forkChild(control.pause(HELD, watchesNothing))
     while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
     yield* control.takeControl("j.okafor")
 
@@ -255,7 +265,7 @@ it.live("an action that could not be recorded is not left on the record", () =>
     const { control } = yield* brittleControl("intervention.human_action", 10_000)
     yield* control.attach("http://127.0.0.1:0")
 
-    const paused = yield* Effect.forkChild(control.pause(HELD))
+    const paused = yield* Effect.forkChild(control.pause(HELD, watchesNothing))
     while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
 
     // The first `intervention.human_action` is the one `takeControl` writes, so
@@ -265,7 +275,7 @@ it.live("an action that could not be recorded is not left on the record", () =>
 
     // And the retry finds a session it can still take.
     yield* control.takeControl("j.okafor")
-    const note = { detail: "pressed Authorize", entered: [] }
+    const note = { detail: "pressed Authorize" }
     yield* control.noteAction(note)
     yield* control.noteAction(note)
 
@@ -315,17 +325,23 @@ it.live("taking control of a session nobody paused is refused, not ignored", () 
 it.live("an unattended session refuses to pause, because nobody is listening", () =>
   Effect.gen(function* () {
     const control = yield* bareControl()
-    const outcome = yield* control.pause({
-      capability: "member.account-balance",
-      version: "1.0.0",
-      runId: "machine",
-      stepId: HELD_STEP,
-      stepIntent: "open the savings account",
-      reason: "a checkpoint did not hold",
-      detail: "expected a balance cell",
-      url: "http://example.invalid/account",
-      accessibility: "- table:"
-    })
+    const outcome = yield* control.pause(
+      {
+        capability: "member.account-balance",
+        version: "1.0.0",
+        runId: "machine",
+        stepId: HELD_STEP,
+        stepIntent: "open the savings account",
+        reason: "a checkpoint did not hold",
+        detail: "expected a balance cell",
+        url: "http://example.invalid/account",
+        accessibility: "- table:"
+      },
+      // No browser behind this Session, so there is no screen to watch. Spelled
+      // out rather than defaulted: `pause` requires a watch so that a real run
+      // cannot park a person in front of a screen it is not looking at.
+      watchesNothing
+    )
 
     expect(outcome.resumed).toBe(false)
     expect(outcome.record).toBeUndefined()
@@ -339,17 +355,20 @@ it.live("the machine walks AUTOMATION, PAUSED, HUMAN, RESUME_REQUESTED, AUTOMATI
     yield* control.attach("http://127.0.0.1:0")
 
     const paused = yield* Effect.forkChild(
-      control.pause({
-        capability: "member.account-balance",
-        version: "1.0.0",
-        runId: "machine",
-        stepId: HELD_STEP,
-        stepIntent: "open the savings account",
-        reason: "a checkpoint did not hold",
-        detail: "expected a balance cell",
-        url: "http://example.invalid/account",
-        accessibility: "- table:"
-      })
+      control.pause(
+        {
+          capability: "member.account-balance",
+          version: "1.0.0",
+          runId: "machine",
+          stepId: HELD_STEP,
+          stepIntent: "open the savings account",
+          reason: "a checkpoint did not hold",
+          detail: "expected a balance cell",
+          url: "http://example.invalid/account",
+          accessibility: "- table:"
+        },
+        watchesNothing
+      )
     )
 
     while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
@@ -376,10 +395,7 @@ it.live("the machine walks AUTOMATION, PAUSED, HUMAN, RESUME_REQUESTED, AUTOMATI
     // `entered` is required and empty is an ordinary answer: this operator
     // pressed something rather than typing a credential. The case where they do
     // type one is `test/operator-interface-authentication.test.ts`.
-    yield* control.noteAction({
-      detail: "entered supervisor override SUP-HOLD-02",
-      entered: []
-    })
+    yield* control.noteAction({ detail: "entered supervisor override SUP-HOLD-02" })
     yield* control.returnControl({
       operator: "j.okafor",
       classification: "resolved",
@@ -432,17 +448,20 @@ it.live("acting after handing the session back is refused", () =>
     yield* control.attach("http://127.0.0.1:0")
 
     const paused = yield* Effect.forkChild(
-      control.pause({
-        capability: "member.account-balance",
-        version: "1.0.0",
-        runId: "machine",
-        stepId: HELD_STEP,
-        stepIntent: "open the savings account",
-        reason: "a checkpoint did not hold",
-        detail: "expected a balance cell",
-        url: "http://example.invalid/account",
-        accessibility: "- table:"
-      })
+      control.pause(
+        {
+          capability: "member.account-balance",
+          version: "1.0.0",
+          runId: "machine",
+          stepId: HELD_STEP,
+          stepIntent: "open the savings account",
+          reason: "a checkpoint did not hold",
+          detail: "expected a balance cell",
+          url: "http://example.invalid/account",
+          accessibility: "- table:"
+        },
+        watchesNothing
+      )
     )
     while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
 
@@ -456,10 +475,210 @@ it.live("acting after handing the session back is refused", () =>
     const outcome = yield* Fiber.join(paused)
     expect(outcome.resumed).toBe(false)
 
-    const refusal = yield* Effect.flip(control.noteAction({ detail: "one more thing", entered: [] }))
+    const refusal = yield* Effect.flip(control.noteAction({ detail: "one more thing" }))
     if (!(refusal instanceof HandoffRefused)) throw new Error(String(refusal))
     expect(refusal.expected).toBe("operator")
   })
+)
+
+// ---------------------------------------------------------------------------
+// Who did it, and what happens when they cannot
+// ---------------------------------------------------------------------------
+
+/**
+ * The defect a real handoff run left in the record.
+ *
+ * The name was optional and the interface filled the blank with "(unnamed)", so
+ * the committed run records a privileged decision attributed to nobody -- on
+ * both the take and the return. Refused by the machine rather than by the form,
+ * because a rule that lives in a page is a rule `curl` walks around, and it is
+ * the machine's record that an Amendment quotes.
+ */
+it.live("a session will not change hands without a name to attribute it to", () =>
+  Effect.gen(function* () {
+    const control = yield* bareControl()
+    yield* control.attach("http://127.0.0.1:0")
+
+    const paused = yield* Effect.forkChild(control.pause(HELD, watchesNothing))
+    while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
+
+    const anonymous = yield* Effect.flip(control.takeControl("   "))
+    if (!(anonymous instanceof HandoffIncomplete)) throw new Error(String(anonymous))
+    expect(anonymous.message).toContain("say who you are")
+    // And the refusal changed nothing: the session is still there to be taken.
+    expect((yield* control.snapshot).owner).toBe("paused")
+
+    yield* control.takeControl("  j.okafor  ")
+    // Trimmed, because a name with a stray space is the same person and the
+    // record is read by people.
+    expect((yield* control.snapshot).pending?.operator).toBe("j.okafor")
+
+    const unsigned = yield* Effect.flip(
+      control.returnControl({
+        operator: "",
+        classification: "resolved",
+        detail: "authorized the account",
+        nextTime: "not_asked"
+      })
+    )
+    if (!(unsigned instanceof HandoffIncomplete)) throw new Error(String(unsigned))
+    expect((yield* control.snapshot).owner).toBe("operator")
+
+    yield* control.returnControl({
+      operator: "j.okafor",
+      classification: "resolved",
+      detail: "authorized the account",
+      nextTime: "not_asked"
+    })
+    expect((yield* Fiber.join(paused)).resumed).toBe(true)
+  })
+)
+
+/**
+ * The other thing a real person needed and could not say.
+ *
+ * "Took control" and "returned control" were the only exits. There was no way to
+ * record that the request made no sense, that the screen was not the one
+ * described, or that they simply could not do it -- which in a system that
+ * models a person as an execution state is the most informative case of all.
+ *
+ * What it produces: not a resolution, and not a judgement about the state
+ * either. The run ends the way an unresolved episode does, and `classify`
+ * returns `NothingLearned` whatever else was on the form, so an episode where
+ * the person was as stuck as the automation can never feed ADR-0004's ratchet.
+ */
+it.live("an operator can say they are stuck, and it teaches nothing", () =>
+  Effect.gen(function* () {
+    const control = yield* bareControl()
+    yield* control.attach("http://127.0.0.1:0")
+
+    const paused = yield* Effect.forkChild(control.pause(HELD, watchesNothing))
+    while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
+    yield* control.takeControl("j.okafor")
+
+    // A dead end has to say what it was. This is the one classification whose
+    // whole content is the sentence.
+    const silent = yield* Effect.flip(
+      control.returnControl({
+        operator: "j.okafor",
+        classification: "blocked",
+        detail: "   ",
+        nextTime: "not_asked"
+      })
+    )
+    if (!(silent instanceof HandoffIncomplete)) throw new Error(String(silent))
+    expect(silent.message).toContain("say what stopped you")
+
+    yield* control.returnControl({
+      operator: "j.okafor",
+      classification: "blocked",
+      detail: "this screen is not the one described and I have no supervisor code",
+      // Even the answer that would otherwise be a finding.
+      nextTime: "always_stop_here"
+    })
+
+    const outcome = yield* Fiber.join(paused)
+    expect(outcome.resumed).toBe(false)
+    if (outcome.resumed) throw new Error("unreachable")
+    expect(outcome.reason).toContain("could not act")
+
+    const closed = (yield* control.snapshot).resolved[0]!
+    expect(closed.classification).toBe("blocked")
+
+    // The whole point of the classification, and it holds against the answer
+    // that would have taught a requires-human entry from any other episode.
+    const learned = classify(closed)
+    expect(learned._tag).toBe("NothingLearned")
+    if (learned._tag !== "NothingLearned") throw new Error("unreachable")
+    expect(learned.why).toContain("could not act")
+
+    // And nothing downstream can read it as a resolution: the amendment
+    // mechanism, over the same record, writes nothing.
+    const proposal = proposeAmendment({
+      artifact: shippedArtifact(undefined, BEFORE_LEARNING),
+      record: closed,
+      scrub: noScrubbing
+    })
+    expect(proposal._tag).toBe("Unchanged")
+  })
+)
+
+// ---------------------------------------------------------------------------
+// The page a person actually reads
+// ---------------------------------------------------------------------------
+
+it.live(
+  "the page says where the application is, what order to do things in, and refuses to be signed by nobody",
+  () =>
+    Effect.gen(function* () {
+      const outcome = yield* attendedReplay({
+        artifact: shippedArtifact(undefined, BEFORE_LEARNING),
+        inputs: { memberId: RESTRICTED },
+        runId: "operator-page",
+        operate: (desk) =>
+          Effect.gen(function* () {
+            yield* desk.awaitPause
+            const paused = (yield* desk.get("/")).body
+
+            // The defect that cost a real person their handoff: Playwright opens
+            // a separate macOS application, and "the live browser window" sent
+            // them looking inside the browser they already had open.
+            expect(paused).toContain("Google Chrome for Testing")
+            expect(paused).toContain("Where the application is")
+            // And the order, which was nowhere on the page before.
+            expect(paused).toContain("What to do, in order")
+            expect(paused.indexOf("Take control")).toBeLessThan(
+              paused.indexOf("What the automation could see")
+            )
+            // At this version nothing has been written about this state yet, so
+            // there is no background block to mistake for instructions: what the
+            // page shows is what happened in this run.
+            expect(paused).not.toContain("written before this run")
+            expect(paused).toContain("expected exactly one cell")
+
+            const anonymous = yield* desk.post("/take", { operator: "  " })
+            expect(anonymous.status).toBe(409)
+            expect(anonymous.body).toContain("say who you are")
+            expect((yield* desk.served).ownerLabel).toBe("PAUSED")
+
+            yield* desk.post("/take", { operator: "j.okafor" })
+
+            // The stuck path, over HTTP, as the form posts it.
+            const silent = yield* desk.post("/return", {
+              operator: "j.okafor",
+              classification: "blocked",
+              detail: "",
+              nextTime: "not_asked"
+            })
+            expect(silent.status).toBe(409)
+            expect(silent.body).toContain("say what stopped you")
+
+            const stuck = yield* desk.post("/return", {
+              operator: "j.okafor",
+              classification: "blocked",
+              detail: "no supervisor on the floor and this screen is not the one described",
+              nextTime: "always_stop_here"
+            })
+            expect(stuck.status).toBe(303)
+          })
+      })
+
+      // Not a resolution: the run stops and reports that a person is required.
+      expect(outcome.result.result).toBe("intervention_required")
+      const closed = outcome.snapshot.resolved[0]!
+      expect(closed.classification).toBe("blocked")
+      expect(closed.operator).toBe("j.okafor")
+
+      // In the log under its own classification, so an auditor can tell an
+      // episode nobody could do from one somebody assessed.
+      const resolved = outcome.events.find((event) => event.kind === "intervention.resolve")
+      if (resolved?.kind !== "intervention.resolve") throw new Error("no resolve event")
+      expect(resolved.classification).toBe("blocked")
+
+      // And it teaches nothing, whatever else was on the form.
+      expect(classify(closed)._tag).toBe("NothingLearned")
+    }),
+  60_000
 )
 
 // ---------------------------------------------------------------------------
@@ -618,8 +837,21 @@ it.live(
       const acted = outcome.events.filter((event) => event.kind === "intervention.human_action")
       expect(acted.map((event) => (event.kind === "intervention.human_action" ? event.operator : "")))
         .toEqual(["r.mensah", "r.mensah"])
+      // The operator's own note quoted the override code, and the Session had
+      // already seen them type it, so the note that reports it is redacted.
       expect(acted.map((event) => (event.kind === "intervention.human_action" ? event.detail : "")))
-        .toEqual(["took control of the live session", "entered supervisor override 4417"])
+        .toEqual([
+          "took control of the live session",
+          "entered supervisor override [redacted:authorizationCode]"
+        ])
+
+      // What the Session saw, by field name and never by value. How many looks it
+      // took to see both is scheduling, so the fields are asserted as a set and
+      // the kind is left out of the sequence below.
+      const observed = outcome.events.flatMap((event) =>
+        event.kind === "intervention.observed" ? event.fields : []
+      )
+      expect(new Set(observed)).toEqual(new Set(["supervisorId", "authorizationCode"]))
 
       const resolved = outcome.events.find((event) => event.kind === "intervention.resolve")
       expect(resolved).toBeDefined()
@@ -631,7 +863,10 @@ it.live(
       // In order, and joined to the run and the session by the envelope every
       // event carries, so an auditor reads one file and sees the whole episode.
       const order = outcome.events
-        .filter((event) => event.kind.startsWith("intervention."))
+        .filter(
+          (event) =>
+            event.kind.startsWith("intervention.") && event.kind !== "intervention.observed"
+        )
         .map((event) => event.kind)
       expect(order).toEqual([
         "intervention.raise",
