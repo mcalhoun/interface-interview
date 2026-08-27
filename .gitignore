@@ -12,4 +12,5 @@ bun.lockb
 # so day-to-day runs stay out of the tree. Ticket 18 commits a curated set of
 # genuine discovery and replay runs as a deliverable; those are added with
 # `git add -f`.
-evidence/
+/evidence/
+.claude/worktrees/
