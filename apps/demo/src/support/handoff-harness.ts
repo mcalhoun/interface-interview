@@ -32,6 +32,8 @@ import { type SurfaceAdapterService, SurfaceAdapter, playwrightSurface } from "@
 import {
   type Advisor,
   type ReplayResult,
+  type RunLearning,
+  learningForIntervention,
   evidenceForRun,
   replayCapability
 } from "@cua/replay"
@@ -93,6 +95,7 @@ export interface AttendedOutcome {
   readonly events: ReadonlyArray<EvidenceEvent>
   readonly evidenceDirectory: string
   readonly snapshot: HandoffSnapshot
+  readonly learning: ReadonlyArray<RunLearning>
 }
 
 export interface AttendedOptions {
@@ -174,7 +177,7 @@ export const attendedReplay = (
       )
     )
 
-    const { result, snapshot } = yield* Effect.gen(function* () {
+    const { result, snapshot, learning } = yield* Effect.gen(function* () {
       const control = yield* SessionControl
       const surface = yield* SurfaceAdapter
 
@@ -203,7 +206,10 @@ export const attendedReplay = (
       }
 
       const finished = yield* Fiber.join(running)
-      return { result: finished, snapshot: yield* control.snapshot }
+      const snapshot = yield* control.snapshot
+      const learning = yield* Effect.forEach(snapshot.resolved, (record) =>
+        learningForIntervention({ artifact: options.artifact, record }))
+      return { result: finished, snapshot, learning }
     }).pipe(Effect.provide(services))
 
     const evidenceDirectory = join(root, runId)
@@ -212,7 +218,7 @@ export const attendedReplay = (
       .filter((line) => line.length > 0)
       .map((line) => JSON.parse(line) as EvidenceEvent)
 
-    return { result, events, evidenceDirectory, snapshot }
+    return { result, events, evidenceDirectory, snapshot, learning }
   }).pipe(Effect.scoped)
 
 // ---------------------------------------------------------------------------

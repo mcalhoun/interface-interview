@@ -67,3 +67,6 @@ export {
   ReplayResult as ReplayResultSchema,
   StepRecord as StepRecordSchema
 } from "./ReplayResult.ts"
+
+export type { LearnedAmendment, LearnedOverride, RunLearning } from "./learning.ts"
+export { learningForIntervention } from "./learning.ts"

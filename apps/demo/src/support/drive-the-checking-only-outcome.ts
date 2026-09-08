@@ -41,12 +41,8 @@ import { join } from "node:path"
 import {
   ARTIFACTS_DIRECTORY,
   diffArtifacts,
-  loadArtifact,
-  prepareInputs,
-  writeArtifact
+  loadArtifact
 } from "@cua/artifact"
-import { declassifierFor, sensitivityPolicy } from "@cua/policy"
-import { proposeAmendment, scrubberFor } from "@cua/replay"
 import { Effect, Result } from "effect"
 import { attendedReplay } from "./handoff-harness.ts"
 import { replay, shippedArtifact } from "./replay-harness.ts"
@@ -117,32 +113,18 @@ const program = Effect.gen(function* () {
   // -----------------------------------------------------------------------
   // 2. What the episode classifies as, and the version it would cut.
   // -----------------------------------------------------------------------
-  const prepared = prepareInputs(
-    before.capability,
-    before.inputs,
-    { memberId: CHECKING_ONLY },
-    declassifierFor(sensitivityPolicy, before.capability)
-  )
-  if (Result.isFailure(prepared)) throw new Error(prepared.failure.message)
-
-  const proposal = proposeAmendment({
-    artifact: before,
-    record: closed,
-    scrub: scrubberFor(prepared.success),
-    version: TO
-  })
+  const learning = episode.learning[0]
+  if (learning === undefined) throw new Error("no captured learning")
+  const saved = learning.amendment({ directory: ARTIFACTS_DIRECTORY, version: TO })
+  const proposal = saved._tag === "NotStored" ? saved.proposal : saved
   if (proposal._tag !== "Amended") {
     throw new Error(`expected an amendment, got ${proposal._tag}: ${JSON.stringify(proposal)}`)
   }
   say(`  LEARNED ${proposal.amended.capability}@${proposal.amended.version} (${proposal.learnedClass})`)
   say(`    ${proposal.because}`)
 
-  const stored = writeArtifact(ARTIFACTS_DIRECTORY, proposal.amended)
-  say(
-    Result.isSuccess(stored)
-      ? `  written to ${stored.success}`
-      : `  not stored: ${stored.failure.message}`
-  )
+  say(saved._tag === "Amended" ? `  written to ${saved.path}`
+    : saved._tag === "NotStored" ? `  not stored: ${saved.failure.message}` : "  nothing stored")
 
   // The diff of the two documents that are actually on disk. See the module
   // note: the shipped 1.1.0 was cut by an earlier episode and cannot be

@@ -46,11 +46,10 @@ import {
   ARTIFACTS_DIRECTORY,
   OVERRIDES_DIRECTORY,
   describeOutputValue,
-  formatArtifact,
-  prepareInputs
+  formatArtifact
 } from "@cua/artifact"
-import { declassifierFor, heritagePublicGoalTerms, sensitivityPolicy } from "@cua/policy"
-import { type Advisor, type ReplayResult, proposeAmendment, scrubberFor } from "@cua/replay"
+import { heritagePublicGoalTerms } from "@cua/policy"
+import { type Advisor, type ReplayResult } from "@cua/replay"
 import { Effect, Result } from "effect"
 import { runDiscovery } from "./apps/demo/src/support/discovery-harness.ts"
 import { GOAL, readsTheScreen } from "./apps/demo/src/support/discovery-script.ts"
@@ -483,35 +482,21 @@ const main = async (): Promise<void> => {
 
   const record = episode.snapshot.resolved[0]
   if (record === undefined) throw new Error("the demo's intervention closed without a record")
-  const prepared = prepareInputs(
-    before.capability,
-    before.inputs,
-    { memberId: "77777" },
-    declassifierFor(sensitivityPolicy, before.capability)
-  )
-  if (Result.isFailure(prepared)) throw new Error(prepared.failure.message)
-
-  const amendment = proposeAmendment({
-    artifact: before,
-    record,
-    scrub: scrubberFor(prepared.success),
-    version: "1.2.0"
-  })
+  const learning = episode.learning[0]
+  if (learning === undefined) throw new Error("the demo's intervention has no captured learning")
+  const amendment = learning.amendment({ directory: join(episodeEvidence, "artifacts"), version: "1.2.0" })
+  if (amendment._tag !== "Amended") throw new Error(`The learned version was not stored: ${amendment._tag}`)
   say()
-  if (amendment._tag === "Amended") {
-    say(`  LEARNED  ${amendment.amended.capability}@${amendment.amended.version} (${amendment.learnedClass})`)
-    say(`    ${amendment.because}`)
-    writeFileSync(join(episodeEvidence, "proposed-1.1.0-to-1.2.0.diff"), `${amendment.diff}\n`)
-    say(`    diff written to ${join(episodeEvidence, "proposed-1.1.0-to-1.2.0.diff")}`)
-  } else {
-    say(`  the episode taught nothing storable: ${amendment._tag}`)
-  }
+  say(`  LEARNED  ${amendment.amended.capability}@${amendment.amended.version} (${amendment.learnedClass})`)
+  say(`    ${amendment.because}`)
+  say(`    written to ${amendment.path}`)
+  writeFileSync(join(episodeEvidence, "proposed-1.1.0-to-1.2.0.diff"), `${amendment.diff}\n`)
+  say(`    diff written to ${join(episodeEvidence, "proposed-1.1.0-to-1.2.0.diff")}`)
   say()
   note([
-    "The demo stops one step short of storing it. artifacts/ already holds 1.2.0,",
-    "cut by exactly this episode when the repository was built, and the store is",
-    "append-only: writing it again is refused rather than replaced. Act 5 shows the",
-    "committed version and the diff a reviewer approves."
+    "This run saved its learned version under its own evidence directory.",
+    "artifacts/ already holds 1.2.0 from the earlier intervention. Act 5 shows",
+    "that committed version and the diff a reviewer approves."
   ])
 
   // -------------------------------------------------------------------------

@@ -58,11 +58,9 @@ import {
   listTenants,
   loadArtifact,
   loadOverride,
-  prepareInputs,
-  writeArtifact,
-  writeOverride
+  prepareInputs
 } from "@cua/artifact"
-import { Evidence, type EvidenceUnwritable } from "@cua/evidence"
+import type { EvidenceUnwritable } from "@cua/evidence"
 import { BROWSER_APPLICATION, DEFAULT_OPERATOR_PORT, serveOperator } from "@cua/operator"
 import {
   type CompiledPolicy,
@@ -77,7 +75,6 @@ import {
   unsafeRepeats
 } from "@cua/policy"
 import {
-  type InterventionRecord,
   DEFAULT_HANDOFF_WAIT_MILLIS,
   SessionControl,
   handoffSession,
@@ -90,8 +87,8 @@ import {
   type AppliedOverride,
   type ReplayResult,
   evidenceForRun,
-  proposeAmendment,
-  proposeOverride,
+  type RunLearning,
+  learningForIntervention,
   replayCapability,
   scrubberFor
 } from "@cua/replay"
@@ -304,19 +301,15 @@ const report = (
  * and does not want a version cut, not as a safety catch.
  */
 const amend = (
-  artifact: CapabilityArtifact,
-  episodes: ReadonlyArray<InterventionRecord>,
-  scrub: (text: string) => string,
+  episodes: ReadonlyArray<RunLearning>,
   argv: Argv
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
     if (argv.switches.has("noAmend")) return
 
-    for (const record of episodes) {
-      const proposal = proposeAmendment({
-        artifact,
-        record,
-        scrub,
+    for (const learning of episodes) {
+      const proposal = learning.amendment({
+        directory: ARTIFACTS_DIRECTORY,
         ...(argv.options["amendTo"] === undefined
           ? {}
           : { version: argv.options["amendTo"] })
@@ -336,10 +329,9 @@ const amend = (
         continue
       }
 
-      const stored = writeArtifact(ARTIFACTS_DIRECTORY, proposal.amended)
-      if (Result.isFailure(stored)) {
+      if (proposal._tag === "NotStored") {
         yield* Console.error("")
-        yield* Console.error(`AMENDMENT NOT STORED  ${stored.failure.message}`)
+        yield* Console.error(`AMENDMENT NOT STORED  ${proposal.failure.message}`)
         continue
       }
 
@@ -349,7 +341,7 @@ const amend = (
           `(${proposal.learnedClass})`
       )
       yield* Console.error(`  ${proposal.because}`)
-      yield* Console.error(`  written to ${stored.success}`)
+      yield* Console.error(`  written to ${proposal.path}`)
       yield* Console.error("")
       yield* Console.error(proposal.diff)
       yield* Console.error("")
@@ -377,8 +369,7 @@ const amend = (
 const confirmOverride = (
   artifact: CapabilityArtifact,
   existing: TenantOverride | undefined,
-  episodes: ReadonlyArray<InterventionRecord>,
-  scrub: (text: string) => string,
+  episodes: ReadonlyArray<RunLearning>,
   argv: Argv
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
@@ -386,12 +377,10 @@ const confirmOverride = (
     if (tenant === undefined || argv.switches.has("noAmend")) return
 
     let carried = existing
-    for (const record of episodes) {
-      const proposal = proposeOverride({
-        artifact,
+    for (const learning of episodes) {
+      const proposal = learning.override({
+        directory: OVERRIDES_DIRECTORY,
         tenant,
-        record,
-        scrub,
         ...(carried === undefined ? {} : { existing: carried })
       })
 
@@ -408,10 +397,9 @@ const confirmOverride = (
         continue
       }
 
-      const stored = writeOverride(OVERRIDES_DIRECTORY, proposal.override)
-      if (Result.isFailure(stored)) {
+      if (proposal._tag === "NotStored") {
         yield* Console.error("")
-        yield* Console.error(`OVERRIDE NOT STORED  ${stored.failure.message}`)
+        yield* Console.error(`OVERRIDE NOT STORED  ${proposal.failure.message}`)
         continue
       }
       carried = proposal.override
@@ -421,7 +409,7 @@ const confirmOverride = (
         `CONFIRMED  ${tenant} override for ${artifact.capability}@${artifact.version}`
       )
       yield* Console.error(`  ${proposal.because}`)
-      yield* Console.error(`  written to ${stored.success}`)
+      yield* Console.error(`  written to ${proposal.path}`)
       yield* Console.error(
         `  the capability itself is unchanged: artifacts/${artifact.capability}/ has not been ` +
           `written to`
@@ -596,7 +584,9 @@ export const runReplayCommand = (
       // The interventions are the input to the amendment below and nothing else
       // in this file reads the Session, which is what keeps "what a person did"
       // out of the executor's decisions.
-      return { result, episodes: (yield* control.snapshot).resolved, scrub: (yield* Evidence).scrub }
+      const episodes = yield* Effect.forEach((yield* control.snapshot).resolved,
+        (record) => learningForIntervention({ artifact, record }))
+      return { result, episodes }
     }).pipe(Effect.provide(services))
 
     const { result } = ran
@@ -605,8 +595,8 @@ export const runReplayCommand = (
     // An amendment is a new version of the vendor's document, and an override is
     // a delta against it; neither is ever cut from a document that already has
     // somebody else's delta folded into it.
-    yield* amend(artifact, ran.episodes, ran.scrub, argv)
-    yield* confirmOverride(artifact, override, ran.episodes, ran.scrub, argv)
+    yield* amend(ran.episodes, argv)
+    yield* confirmOverride(artifact, override, ran.episodes, argv)
 
     // A Business Outcome exits zero: the application answered and the answer is
     // the product. An Intervention does not, because nothing was produced and a
