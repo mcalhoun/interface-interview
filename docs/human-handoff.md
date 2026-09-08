@@ -37,6 +37,8 @@ bun run verify:handoff
 
 This uses a scripted Operator through the real operator interface and real Chromium. It verifies the request context, control ownership, refusal of a competing Replay, manual field changes and click, return, post-return Checkpoint, balance outputs and text redaction. A second case verifies the blocked return.
 
+The [retained verification bundle](../evidence/verification/2026-09-08-architecture/README.md) contains both cases and a separate native UI run.
+
 To retain the two runs in a fresh directory:
 
 ```sh

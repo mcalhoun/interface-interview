@@ -1,0 +1,10 @@
+$ bun run test test/human-handoff-acceptance.test.ts --maxWorkers 1
+$ bun run --bun vitest run test/human-handoff-acceptance.test.ts --maxWorkers "1"
+
+ RUN  v4.1.11 /Users/matt/code/github.com/mcalhoun/interface-interview/.scratch/architecture-worktree
+
+
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+   Start at  12:32:28
+   Duration  6.54s (transform 138ms, setup 0ms, import 303ms, tests 6.20s, environment 0ms)

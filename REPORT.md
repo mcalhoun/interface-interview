@@ -40,6 +40,8 @@ Vendor-level artifacts remain independent of tenant origins. A confirmed Tenant 
 
 `bun run demo:handoff` launches a repeatable headed demonstration. The [walkthrough](docs/human-handoff.md) maps it to assignment section 3.6 and explains how a person takes control, releases a synthetic supervisor hold and returns the same Session. `bun run verify:handoff` checks the transfer and blocked-return paths with a scripted Operator against real Chromium.
 
+The [architecture verification bundle](evidence/verification/2026-09-08-architecture/README.md) records 547 passing tests, the complete demo without a model key, final handoff acceptance and a separate native UI transfer.
+
 Discovery stops on bounded time or steps, repeated unproductive states and dead ends. Replay escalates when declared handling cannot establish a safe result. An Intervention carries the goal or capability, stopping step, reason and evidence. Without an available operator interface, the process returns a structured stopped result instead of waiting indefinitely.
 
 Handoff transfers ownership of the same live session. Automation pauses; an Operator takes the visible Chromium window through a token-protected local interface, works there and returns control. The ownership state machine rejects conflicting transitions and automation actions while the Operator owns the session. The intervention record preserves notes, observed changes and the transfer history. An operator who cannot proceed can return a blocked answer.

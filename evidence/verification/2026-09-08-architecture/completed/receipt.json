@@ -1,0 +1,82 @@
+{
+  "verifiedAt": "2026-09-08T16:32:31.974Z",
+  "provenance": "Scripted Operator judgment through the real local operator interface and the same real Chromium Surface Adapter used by Replay. No person at a keyboard is claimed.",
+  "screenshots": "Synthetic fixture only. Screenshot pixels are not redacted.",
+  "sessionId": "session-handoff-completed",
+  "owners": [
+    "automation",
+    "paused",
+    "operator",
+    "resume_requested",
+    "automation"
+  ],
+  "result": {
+    "result": "success",
+    "capability": "member.account-balance",
+    "version": "1.1.0",
+    "runId": "handoff-completed",
+    "sessionId": "session-handoff-completed",
+    "evidenceDirectory": "/var/folders/n7/58y6vxbj30vd6gjq4pk1d55m0000gn/T/cua-handoff-z3gLVv/handoff-completed",
+    "steps": [
+      {
+        "id": "open-member-search",
+        "intent": "Land on the Member Services search screen with an empty search form.",
+        "action": "navigate",
+        "checkpoint": "held"
+      },
+      {
+        "id": "enter-member-number",
+        "intent": "Type the member number into the search panel's own number field.",
+        "action": "fill",
+        "checkpoint": "held"
+      },
+      {
+        "id": "run-member-search",
+        "intent": "Submit the search and arrive at the member's record.",
+        "action": "click",
+        "checkpoint": "held"
+      },
+      {
+        "id": "open-account",
+        "intent": "Open the account the caller asked for, whichever of them that is.",
+        "action": "selectFromList",
+        "checkpoint": "held"
+      },
+      {
+        "id": "read-available-balance",
+        "intent": "Read the available balance out of the account panel.",
+        "action": "extract",
+        "checkpoint": "held",
+        "read": "$2,730.11"
+      },
+      {
+        "id": "read-current-balance",
+        "intent": "Read the current ledger balance out of the same panel.",
+        "action": "extract",
+        "checkpoint": "held",
+        "read": "$2,905.60"
+      }
+    ],
+    "outputs": {
+      "availableBalance": {
+        "type": "money",
+        "value": {
+          "amount": 2730.11,
+          "currency": "USD"
+        }
+      },
+      "currentBalance": {
+        "type": "money",
+        "value": {
+          "amount": 2905.6,
+          "currency": "USD"
+        }
+      }
+    }
+  },
+  "observedFields": [
+    "supervisorId",
+    "authorizationCode"
+  ],
+  "events": "run/events.jsonl"
+}
