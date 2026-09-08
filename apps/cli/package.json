@@ -1,0 +1,18 @@
+{
+  "name": "@cua/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cua/agent": "workspace:*",
+    "@cua/artifact": "workspace:*",
+    "@cua/evidence": "workspace:*",
+    "@cua/legacy-core": "workspace:*",
+    "@cua/operator": "workspace:*",
+    "@cua/policy": "workspace:*",
+    "@cua/replay": "workspace:*",
+    "@cua/session": "workspace:*",
+    "@cua/surface": "workspace:*",
+    "effect": "4.0.0-rc.112"
+  }
+}

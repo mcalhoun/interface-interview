@@ -310,10 +310,6 @@ Second tenant `community-cu`, same vendor product:
 
 We do not hand-write the override. Replay against `community-cu` fails to resolve the submit control, the ladder fires, assisted recovery proposes `Find`, a human confirms once, and the confirmation gets written as a scoped tenant delta recording how it was discovered and who confirmed it. Tenant drift is detected because replay fails, and adaptation is the recovery ladder doing its ordinary job.
 
-### Capability catalog
-
-Saved artifacts are exposed as a catalog of callable capabilities with typed signatures, discoverable and invocable by name. Small, and it closes the framing loop. The agent-facing product decides what to do. This system is how it does it.
-
 ### CLI
 
 ```
@@ -324,7 +320,6 @@ bun run replay <capability> --memberId 12345
 bun run replay <capability> --memberId 12345 --accountType Checking
 bun run replay <capability> --memberId 88888 [--assist]
 bun run operator                                     # meaningful while a run is paused
-bun run catalog                                      # list callable capabilities
 bun run demo                                         # the full arc, unattended
 ```
 
@@ -380,6 +375,7 @@ Discovery against a live model. It is slow, it costs money, and it is non-determ
 
 | Not built | Seam left behind | What comes next |
 | --- | --- | --- |
+| Capability catalog | Stored artifacts already declare typed inputs and outputs; replay invokes them by name | Add a discoverable listing over reviewed artifacts |
 | Desktop or OS-level adapter | `SurfaceAdapter`, and accessibility-only observation means no DOM assumptions to unwind | UIAutomation or AXAPI adapter behind the same interface |
 | Real-time co-browsing console | Ownership state machine is real, only the transport is mocked | CDP screencast to an operator canvas with input relay |
 | Screenshot redaction | Text evidence is scrubbed, pixels are not | OCR-based masking of known parameter values |
@@ -398,7 +394,7 @@ Also out of scope: queues, clusters, databases, containers. In-memory state and 
 
 ## Further notes
 
-**Scope discipline.** The brief says to pick at most one or two stretch goals, and states plainly that feature breadth is not rewarded. Assisted fallback and cross-tenant reuse have collapsed into a single mechanism, one recovery ladder demonstrated against three different problems, so they read as depth rather than breadth. The capability catalog is the only addition beyond that. Everything else on the stretch list is named in Out of scope along with what we would build, which the brief explicitly asks for.
+**Scope discipline.** The brief permits at most two stretch goals. This implementation retains bounded assisted recovery and cross-tenant reuse. They share the recovery ladder, but count as two separate stretch goals. Named invocation with typed inputs and outputs belongs to core replay; a separate capability catalog is outside the delivered scope.
 
 **Primary risk: Effect 4 is a release candidate.** Documentation is thin and model knowledge of the API is weak, so implementation must check shipped type definitions rather than trust recall, and some API usage will be wrong before it is right. The payoff makes it worth the friction. `unstable/ai` as the provider seam, `Redacted` as core, and layer requirements as machine-checked proof that no model runs in production. That last one is an argument no other stack makes available.
 

@@ -1,0 +1,439 @@
+/**
+ * The Surface Adapter, driven against the real Heritage Core in a real browser.
+ *
+ * `it.live` throughout, not `it.effect`: `waitFor` sleeps between polls, and
+ * under the TestClock those sleeps never come back on their own.
+ *
+ * These are not unit tests and are not meant to be. The thing worth pinning is
+ * that a Target written in an operator's words survives Heritage Core's nested
+ * layout tables, its captions that label nothing, and its unnamed iframe — and
+ * that it does so without the adapter ever offering a way to reach the document.
+ * A fake tree would prove none of that.
+ */
+
+import { it } from "@effect/vitest"
+import { Effect } from "effect"
+import { expect } from "vitest"
+import { serve } from "@cua/legacy-core"
+import {
+  type AccessibilityNode,
+  type Target,
+  formatAccessibilityTree,
+  formatAccessibilityTreeWithFrames,
+  parseAccessibilityTree,
+  SurfaceAdapter,
+  TargetAmbiguous,
+  TargetNotFound,
+  playwrightSurface,
+  textPresent
+} from "@cua/surface"
+
+const SAVINGS = "0000012345-S01"
+
+/** The search field an operator means, said the way an operator says it. */
+const memberNumberField: Target = {
+  role: "textbox",
+  name: "Member Number",
+  within: { name: "Member Number Search" }
+}
+
+const searchButton: Target = { role: "button", name: "Search" }
+
+/**
+ * One Heritage Core and one browser per test.
+ *
+ * `serve({ port: 0 })` takes a free port; the server hangs off the test's Scope
+ * and the browser off the layer's, so neither leaks between tests. The body runs
+ * inside `Effect.provide` so the browser is still open while it does.
+ */
+const withSurface = <A, E>(
+  path: string,
+  body: (surface: SurfaceAdapter["Service"]) => Effect.Effect<A, E>
+) =>
+  Effect.gen(function* () {
+    const core = yield* serve({ port: 0 })
+    const layer = playwrightSurface({ startUrl: core.origin + path })
+    return yield* Effect.gen(function* () {
+      const surface = yield* SurfaceAdapter
+      return yield* body(surface)
+    }).pipe(Effect.provide(layer))
+  }).pipe(Effect.scoped)
+
+it.live("observe reports accessibility structure, location and frames, and no markup", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      const state = yield* surface.observe
+
+      expect(state.title).toBe("Heritage Core - Member Search")
+      expect(state.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/)
+      expect(state.frames.map((frame) => frame.name)).toEqual(["main"])
+
+      // Semantic structure survives markup with no ids, classes or ARIA.
+      expect(state.accessibility).toContain('textbox "Member Number"')
+      expect(state.accessibility).toContain('button "Search"')
+
+      // Nothing that could be pasted back in as a selector: no markup, and no
+      // Playwright node handles either.
+      expect(state.accessibility).not.toMatch(/<[a-z!/]/i)
+      expect(state.accessibility).not.toMatch(/\[ref=/)
+      expect(JSON.stringify(state.tree)).not.toMatch(/\bref\b/)
+    })
+  )
+)
+
+it.live("a Target survives layout tables that repeat the same text at every level", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      const resolution = yield* surface.resolveTarget(memberNumberField)
+
+      expect(resolution.match.description).toBe('textbox "Member Number"')
+      expect(resolution.match.frame).toBe("main")
+      // The tree is deep and noisy; the point is that the Target still lands.
+      expect(resolution.considered).toBeGreaterThan(40)
+      expect(resolution.strategies).toContain("within")
+      expect(resolution.rationale).toContain("Member Number Search")
+    })
+  )
+)
+
+it.live("the near-duplicate field is reported as ambiguous rather than guessed at", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      const failure = yield* surface
+        .resolveTarget({ role: "textbox", name: "Member Num" })
+        .pipe(Effect.flip)
+
+      expect(failure).toBeInstanceOf(TargetAmbiguous)
+      const ambiguous = failure as TargetAmbiguous
+      expect(ambiguous.matches.map((match) => match.description)).toEqual([
+        'textbox "Member Number"',
+        'textbox "Member Number (Legacy)"'
+      ])
+
+      // Scoping to the panel an operator would name resolves it.
+      const scoped = yield* surface.resolveTarget(memberNumberField)
+      expect(scoped.match.description).toBe('textbox "Member Number"')
+    })
+  )
+)
+
+it.live("an exact accessible name beats the near-duplicate without disambiguation", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      const resolution = yield* surface.resolveTarget({ role: "textbox", name: "Member Number" })
+      expect(resolution.match.description).toBe('textbox "Member Number"')
+      expect(resolution.strategies).toContain("name")
+    })
+  )
+)
+
+it.live("a Target that matches nothing fails with what it looked at", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      const failure = yield* surface
+        .resolveTarget({ role: "textbox", name: "Sort Code" })
+        .pipe(Effect.flip)
+
+      expect(failure).toBeInstanceOf(TargetNotFound)
+      expect((failure as TargetNotFound).considered).toBeGreaterThan(0)
+    })
+  )
+)
+
+it.live("fill and click walk Member Search through to Member Detail", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      yield* surface.fill(memberNumberField, "12345")
+
+      const typed = yield* surface.extract(memberNumberField)
+      expect(typed).toBe("12345")
+
+      const afterSearch = yield* surface.click(searchButton)
+      expect(afterSearch.url).toContain("/member?memberNumber=12345")
+      expect(afterSearch.title).toBe("Heritage Core - Member 12345")
+      expect(afterSearch.accessibility).toContain("MARGARET T HOLLOWAY")
+
+      // Landing on the Cross-Reference decoy would look like this instead.
+      expect(afterSearch.url).not.toContain("/xref")
+    })
+  )
+)
+
+it.live("waitFor settles on a condition read off the accessibility tree", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      yield* surface.fill(memberNumberField, "12345")
+      yield* surface.click(searchButton)
+
+      const state = yield* surface.waitFor(textPresent("Share and Deposit Accounts"), {
+        timeoutMillis: 5_000
+      })
+      expect(state.accessibility).toContain("Share and Deposit Accounts")
+    })
+  )
+)
+
+it.live("waitFor gives up with the condition it was waiting on", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      const failure = yield* surface
+        .waitFor(textPresent("Wire Transfer Approval"), {
+          timeoutMillis: 400,
+          intervalMillis: 100
+        })
+        .pipe(Effect.flip)
+
+      expect(failure._tag).toBe("SurfaceTimeout")
+    })
+  )
+)
+
+it.live("a control inside the iframe resolves without the caller knowing it exists", () =>
+  withSurface(`/account?memberNumber=12345&accountNumber=${SAVINGS}`, (surface) =>
+    Effect.gen(function* () {
+      // Nothing in this Target mentions a frame. The caller names the caption
+      // beside the figure, exactly as it appears on screen.
+      const balance = yield* surface.extract({ role: "cell", label: "Available Balance" })
+      expect(balance).toBe("$4,182.55")
+
+      const resolution = yield* surface.resolveTarget({ role: "cell", label: "Current Balance" })
+      // The adapter knows which frame it crossed into and says so; the Target did not.
+      expect(resolution.match.frame).toBe("acctdetail")
+      expect(resolution.match.text).toBe("$4,382.55")
+
+      const state = yield* surface.observe
+      expect(state.frames.map((frame) => frame.name)).toEqual(["main", "acctdetail"])
+    })
+  )
+)
+
+it.live("the whole happy path: search, open an account, read a balance", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      yield* surface.fill(memberNumberField, "12345")
+      yield* surface.click(searchButton)
+      yield* surface.click({ role: "link", name: "Primary Savings" })
+
+      const state = yield* surface.observe
+      expect(state.url).toContain("/account?memberNumber=12345")
+      expect(state.frames).toHaveLength(2)
+
+      const available = yield* surface.extract({ role: "cell", label: "Available Balance" })
+      const status = yield* surface.extract({
+        role: "cell",
+        label: "Status",
+        within: { name: "Primary Savings" }
+      })
+
+      expect(available).toBe("$4,182.55")
+      expect(status).toBe("Active")
+    })
+  )
+)
+
+it.live("textNear measures proximity in edges of the accessibility tree", () =>
+  withSurface(`/account?memberNumber=12345&accountNumber=${SAVINGS}`, (surface) =>
+    Effect.gen(function* () {
+      const resolution = yield* surface.resolveTarget({
+        role: "cell",
+        textNear: "Current Balance"
+      })
+
+      expect(resolution.match.text).toBe("$4,382.55")
+      expect(resolution.strategies).toContain("textNear")
+      expect(resolution.rationale).toMatch(/\d+ tree edge\(s\) from "Current Balance"/)
+    })
+  )
+)
+
+it.live("captureEvidence returns a picture and the state that goes with it", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      const evidence = yield* surface.captureEvidence
+
+      // PNG magic number. The screenshot is for a person reviewing the run.
+      expect([...evidence.screenshot.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47])
+      expect(evidence.state.title).toBe("Heritage Core - Member Search")
+      expect(Date.parse(evidence.capturedAt)).not.toBeNaN()
+    })
+  )
+)
+
+it.live("navigate reaches a page and reports what is there", () =>
+  withSurface("/", (surface) =>
+    Effect.gen(function* () {
+      const state = yield* surface.observe
+      const origin = new URL(state.url).origin
+      const detail = yield* surface.navigate(`${origin}/member?memberNumber=12345`)
+
+      expect(detail.title).toBe("Heritage Core - Member 12345")
+      expect(detail.accessibility).toContain('link "Checking"')
+    })
+  )
+)
+
+it.live("the rendered accessibility tree round-trips, so a snapshot hash is stable", () =>
+  Effect.gen(function* () {
+    const core = yield* serve({ port: 0 })
+    const layer = playwrightSurface({ startUrl: core.origin + "/" })
+    yield* Effect.gen(function* () {
+      const surface = yield* SurfaceAdapter
+
+      // Discovery's stuck detection hashes normalised snapshots. That only works
+      // if rendering the tree is a fixed point, so pin it here rather than
+      // discover it later as a loop that never terminates.
+      //
+      // Both renders, because there are two and each has a reader who depends on
+      // it: `state.accessibility` is what a model is shown and what the hash is
+      // taken over, and the frame-annotated render is what `parseAccessibilityTree`
+      // is the inverse of and what `bun run surface observe` prints.
+      //
+      // Every screen the system drives, not just the entry page: the frames
+      // fixture is the one that carries `[frame=...]` tags, and Account Detail
+      // is the one whose iframe contents are inlined. A page-shaped claim is
+      // only as strong as the pages it was checked on.
+      for (const path of [
+        "/",
+        "/member?memberNumber=12345",
+        `/account?memberNumber=12345&accountNumber=${SAVINGS}`,
+        "/fixtures/nested-tables",
+        "/fixtures/duplicate-labels",
+        "/fixtures/frames"
+      ]) {
+        const state = yield* surface.navigate(core.origin + path)
+        const reparsed = formatAccessibilityTree(parseAccessibilityTree(state.accessibility))
+        expect(reparsed, `${path} does not render to a fixed point`).toBe(state.accessibility)
+
+        const annotated = formatAccessibilityTreeWithFrames(state.tree)
+        expect(
+          formatAccessibilityTreeWithFrames(parseAccessibilityTree(annotated)),
+          `${path} does not render to a fixed point with its frames annotated`
+        ).toBe(annotated)
+      }
+    }).pipe(Effect.provide(layer))
+  }).pipe(Effect.scoped)
+)
+
+/**
+ * The same fixed-point claim, off the pages Heritage Core happens to render.
+ *
+ * Every string here is something a screen could put in a cell, and every one of
+ * them is a way the renderer and the parser could disagree. Two of these were
+ * genuine defects: a value opening with a quote came back truncated at the
+ * closing quote (`"hello" world` reparsed as `hello`), and a value that was
+ * exactly `|` reparsed as a block scalar header rather than as text. Both are
+ * silent — the tree simply loses a node's text — which is why the property is
+ * checked against adversarial input rather than against six known screens.
+ */
+it("rendering a tree and reading it back is a fixed point, whatever the text is", () => {
+  const awkward = [
+    '"hello" world',
+    "'tis the season",
+    "|",
+    "|-",
+    ">",
+    "Balance: $4,182.55",
+    "  padded  ",
+    "[ref=e31]",
+    "back \\ slash",
+    "# not a comment",
+    "line\nbreak",
+    "- dash",
+    "&anchor",
+    ""
+  ]
+
+  const tree: AccessibilityNode = {
+    role: "document",
+    properties: {},
+    children: [
+      ...awkward.map(
+        (text): AccessibilityNode => ({
+          role: "cell",
+          name: text,
+          value: text,
+          properties: { url: text },
+          children: [{ role: "text", value: text, properties: {}, children: [] }]
+        })
+      ),
+      {
+        role: "iframe",
+        frame: "ledgerone",
+        properties: {},
+        children: [{ role: "cell", name: "Posted Balance", properties: {}, children: [] }]
+      }
+    ]
+  }
+
+  // The frame-annotated render, because that is the one whose round trip has to
+  // carry a frame name back as a frame name. `parseAccessibilityTree` reads
+  // `[frame=...]`, and this is the only render that writes it.
+  const rendered = formatAccessibilityTreeWithFrames(tree)
+  const reparsed = parseAccessibilityTree(rendered)
+
+  // The property Discovery's stuck detection depends on: rendering is stable.
+  expect(formatAccessibilityTreeWithFrames(reparsed)).toBe(rendered)
+  expect(formatAccessibilityTree(parseAccessibilityTree(formatAccessibilityTree(tree)))).toBe(
+    formatAccessibilityTree(tree)
+  )
+
+  // And the text really survives, rather than the two sides agreeing on a loss.
+  // A name is written verbatim; a value is whitespace-normalised on the way out,
+  // so that is what comes back.
+  awkward.forEach((text, index) => {
+    const node = reparsed.children[index]!
+    const flat = text.replace(/\s+/g, " ").trim()
+    expect(node.name, `name ${JSON.stringify(text)}`).toBe(text)
+    expect(node.value ?? "", `value ${JSON.stringify(text)}`).toBe(flat)
+    expect(node.properties.url ?? "", `property ${JSON.stringify(text)}`).toBe(flat)
+    expect(node.children[0]!.value ?? "", `child ${JSON.stringify(text)}`).toBe(flat)
+  })
+
+  // A frame name is a frame name on the way back, not an ordinary property.
+  const frame = reparsed.children[awkward.length]!
+  expect(frame.frame).toBe("ledgerone")
+  expect(frame.children[0]!.name).toBe("Posted Balance")
+})
+
+/**
+ * A `|` block scalar with nothing under it used to swallow its siblings.
+ *
+ * `blockIndent` took the next line's indent unconditionally, so a header with no
+ * content read the sibling's own indent as the block's, and the `>=` loop then
+ * consumed that sibling and everything after it. The nodes did not become
+ * malformed — they disappeared, which is the shape of bug a resolution failure
+ * blames on the screen.
+ */
+it("an empty block scalar does not eat the nodes after it", () => {
+  const tree = parseAccessibilityTree(
+    ['- cell "First": |', '- cell "Second"', '- cell "Third"', "  - text: inside"].join("\n")
+  )
+
+  expect(tree.children.map((child) => child.name)).toEqual(["First", "Second", "Third"])
+  expect(tree.children[0]!.value ?? "").toBe("")
+  expect(tree.children[2]!.children[0]!.value).toBe("inside")
+})
+
+it.live("the layer owns the browser, and closing its scope closes it", () =>
+  Effect.gen(function* () {
+    const core = yield* serve({ port: 0 })
+
+    // Effect 4 has no `Layer.scoped`: `Layer.effect` is typed
+    // `Layer<I, E, Exclude<R, Scope.Scope>>` and runs its effect in the layer's
+    // own scope, which is what makes `Effect.acquireRelease` inside it the right
+    // and only spelling. This is that claim as behaviour rather than as a type:
+    // the adapter is carried out of the scope that built it, and the browser it
+    // was holding is gone.
+    const surface = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* SurfaceAdapter
+        // Alive inside the scope.
+        expect((yield* adapter.observe).url).toContain(core.origin)
+        return adapter
+      }).pipe(Effect.provide(playwrightSurface({ startUrl: core.origin + "/" })))
+    )
+
+    const afterwards = yield* Effect.result(surface.observe)
+    expect(afterwards._tag).toBe("Failure")
+  }).pipe(Effect.scoped)
+)

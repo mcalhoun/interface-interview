@@ -1,0 +1,805 @@
+$ bun run demo.ts
+
+==============================================================================
+  Computer-use automation for back-office banking, end to end
+==============================================================================
+
+  A model drives a real legacy UI once and the successful run becomes a typed,
+  versioned capability. From then on the capability is replayed with no model in
+  the loop at all. What follows is that arc, plus the four things that make it
+  usable in production: an error taxonomy, a policy chokepoint, redaction, and a
+  person who can take the live session and hand it back.
+
+  Everything this run writes is under evidence/demo/. Nothing else is touched.
+
+  READ THIS FIRST. A language model drove a real discovery run, and the artifact
+  this repository ships as `discovered` was compiled from it. That run is at
+  evidence/discovery/gpt-4.1-drove-this/ and is not what act 2 below does: a demo
+  has to give the same answer every time and has to run with no key, so acts 2, 5
+  and 7b substitute a script for the model's judgement and label it where they do.
+  Act 7a calls the provider for real, and prints what came back either way.
+
+
+==============================================================================
+  ACT 1 OF 9   The catalog: what an agent sees before it calls anything
+==============================================================================
+
+  A capability is a callable signature, not a script. This is the whole
+  agent-facing surface: what it takes, what it returns, which domain answers it
+  can give instead of returning, where it stops for a person, and the exact line
+  that invokes it.
+
+  $ bun run catalog
+
+    member.account-balance@1.2.0
+      Read a member's account balance
+      web · Heritage Core Member Services (MSS 4.02.11) · entry / · hand-written
+      versions: 1.2.0 (current), 1.1.0, 1.0.0
+
+      Looks a member up by number in Heritage Core Member Services, opens one of their…
+
+      takes:
+        --memberId          string   required  sensitive  matching /^[0-9]{4,10}$/
+                            The member's account number as an operator would read it off a…
+        --accountType       enum     optional  one of: Primary Savings, Checking  default Savings
+                            Which of the member's accounts to read. Say as little as…
+        --operatorPassword  string   optional  sensitive
+                            The password for the workstation's teller sign-on, used only if…
+
+      returns:
+        availableBalance  money USD
+                          Funds the member can withdraw right now. This is the figure to…
+        currentBalance    money USD
+                          The ledger balance, including deposits that have not yet cleared.…
+
+      or, instead of returning:
+        MEMBER_NOT_FOUND  No member record exists for the number searched.
+        NO_MATCHING_ITEM  Nothing on offer matched: Open the account the caller asked for, whichever of them that is.
+
+      or, stopping for a person (learned, and never automated):
+        OPEN_ACCOUNT_REQUIRES_HUMAN  A person with authority is required: Open the account the caller asked for, whichever of them that is.
+
+      invoke:
+        bun run replay member.account-balance --memberId <string> [--accountType <enum>] [--operatorPassword <string>]
+
+    member.account-balance.discovered@1.4.0   [awaiting review]
+      Reported the available balance for the member's savings account as requested.
+      web · Heritage Core Member Services (MSS 4.02.11) · entry / · discovered
+      versions: 1.4.0 (current), 1.3.0, 1.2.0, 1.1.0, 1.0.0
+
+      Reported the available balance for the member's savings account as requested.
+
+      takes:
+        --memberId     string   required  sensitive
+                       Supplied by the caller. Discovered as the value step fill-1 took from…
+        --accountType  enum     optional  one of: Primary Savings, Checking  default savings
+                       Which item to choose from the list on screen. The legal values below…
+
+      returns:
+        availableBalance  money USD
+                          The available balance of the member's savings account.
+
+      or, instead of returning:
+        NO_MATCHING_ITEM        Nothing on offer matched: Select the savings account to view its details and balance.
+        MEMBER_NOT_FOUND        No member exists for that number
+        INPUT_VALIDATION_ERROR  The member number has an invalid format
+
+      invoke:
+        bun run replay member.account-balance.discovered --memberId <string> [--accountType <enum>]
+
+  The second entry is tagged [awaiting review] because it was written by the
+  compiler rather than by a person. Note also that its accountType default is
+  withheld: every parameter a model discovers is sensitive by default (ADR-0008),
+  and the catalog publishes a parameter's domain but never its value.
+
+
+==============================================================================
+  ACT 2 OF 9   Discovery: a sentence becomes a capability
+==============================================================================
+
+    goal: "Look up the savings account balance of member [redacted:memberId]"
+
+    the equivalent command, with a working key:
+
+    $ bun run discover "Look up the savings account balance of member [redacted:memberId]"
+
+  NOTE  No language model produced the judgement in this act. It is scripted at
+        LanguageModel.make, the same provider hook @effect/ai-openai fills, so a
+        demo gives the same answer every time and runs for somebody with no key.
+        Everything below the judgement is the production path. A run a real model
+        drove is committed at evidence/discovery/gpt-4.1-drove-this/ and is
+        reproduced by: bun run apps/demo/src/support/drive-the-discovery-run.ts
+
+  GOAL REACHED in 4 steps: Reads the available balance of a member's savings account
+
+  steps the model chose, from a seven-word vocabulary:
+    fill-1  enter the member number
+    click-2  run the member search
+    selectFromList-3  open the savings account
+    read-available-balance  read the available balance
+
+  parameters it inferred from the goal, with nobody declaring a schema:
+    memberId  (sensitive: true; used by fill-1)
+    accountType  (sensitive: false; used by selectFromList-3)
+
+  the selection rule it discovered for accountType:
+    values read off the live screen: "Primary Savings", "Checking"
+    default recorded:               "savings"   <- the goal's own word
+    label it matched:               "Primary Savings"   <- this tenant's word, NOT recorded
+
+  Which of those two words gets recorded is the whole multi-tenant argument.
+  Recording "Primary Savings" would bind the capability to this institution's
+  label table. Recording "savings" makes act 8 free.
+
+  evidence -> evidence/demo/02-discovery
+
+  compiled to evidence/demo/02-discovery/compiled-artifact.yaml
+  Three gates ran before it was allowed to exist: no fixed literal may echo a
+  goal term, no fixed literal may contain a value the run typed, and the finished
+  YAML, prose included, is scanned for both. A member number in a capability is
+  a compile error rather than a code review comment.
+
+  and replayed, unedited, by the engine that has never seen a model:
+    member.account-balance.demo@1.0.0  SUCCESS  availableBalance: 4182.55 USD
+  evidence -> evidence/demo/02-discovery-replayed
+  The same arc, with a real model rather than this scripted one, is committed at
+  evidence/discovery/gpt-4.1-drove-this/. artifacts/member.account-balance.discovered/1.0.0.yaml
+  was compiled from THAT run, in the process that did it, and is callable by name:
+    $ bun run replay member.account-balance.discovered --memberId [redacted:memberId]
+
+    $ bun run apps/demo/src/support/drive-the-discovery-run.ts     # needs OPENAI_API_KEY
+
+
+==============================================================================
+  ACT 3 OF 9   Replay: the same call twice, and the same answer twice
+==============================================================================
+
+  $ bun run replay member.account-balance --memberId [redacted:memberId]
+
+
+    member.account-balance@1.2.0  SUCCESS
+      availableBalance: 4182.55 USD
+      currentBalance: 4382.55 USD
+
+    steps:
+      [held] open-member-search  Land on the Member Services search screen with an empty search form.
+      [held] enter-member-number  Type the member number into the search panel's own number field.
+      [held] run-member-search  Submit the search and arrive at the member's record.
+      [held] open-account  Open the account the caller asked for, whichever of them that is.
+      [held] read-available-balance  Read the available balance out of the account panel.  -> $4,182.55
+      [held] read-current-balance  Read the current ledger balance out of the same panel.  -> $4,382.55
+
+    policy:   heritage-core-default (policies/default.yaml)
+    evidence: evidence/replay/member.account-balance-2026-09-08T13-54-47-351Z-6205ba7f
+  exit code 0  (nothing here needs a person)
+
+  Six steps, six checkpoints, all held. A checkpoint is a condition written in
+  the artifact and asserted after the action; it is not "the action did not
+  throw", which is how automation ends up confidently on the wrong screen.
+
+  Now the same call twice more, with --json, and the two results compared:
+
+    $ bun run replay member.account-balance --memberId [redacted:memberId] --json
+
+  Byte-identical once runId, sessionId and evidenceDirectory are removed:
+  same outputs, same steps, same actions, same checkpoint verdicts, same order.
+
+  Determinism means no model in the loop, not no logic. The account was still
+  chosen by reading the live list and matching a parameter against it. Same list,
+  same parameter, same choice, every time.
+
+  There is no decide event anywhere in either log, and there cannot be: the replay
+  engine's effect requires SurfaceAdapter | Policy | Evidence | Session and nothing
+  else, so a code path reaching for a language model does not compile. A test pins
+  that requirement set (test/replay-has-no-model.test.ts).
+
+
+==============================================================================
+  ACT 4 OF 9   The taxonomy: three things that are not failures
+==============================================================================
+
+  A caller has to be able to tell the application saying no from the automation
+  breaking. Four result classes: success, business_outcome, intervention_required,
+  failure. Two of the three below exit 0.
+
+  (a) the application answering: no such member
+
+  $ bun run replay member.account-balance --memberId [redacted:memberId]
+
+
+    member.account-balance@1.2.0  MEMBER_NOT_FOUND
+      No member record exists for the number searched.
+
+    steps:
+      [held] open-member-search  Land on the Member Services search screen with an empty search form.
+      [held] enter-member-number  Type the member number into the search panel's own number field.
+      [outcome] run-member-search  Submit the search and arrive at the member's record.
+      [not_reached] open-account  Open the account the caller asked for, whichever of them that is.
+      [not_reached] read-available-balance  Read the available balance out of the account panel.
+      [not_reached] read-current-balance  Read the current ledger balance out of the same panel.
+
+    policy:   heritage-core-default (policies/default.yaml)
+    evidence: evidence/replay/member.account-balance-2026-09-08T13-54-50-713Z-6054fe50
+  exit code 0  (nothing here needs a person)
+
+  Declared in the artifact in advance, never inferred at run time from the shape
+  of a screen. Heritage Core answers a missing member with HTTP 200 and a
+  well-formed page, so nothing at the transport layer can tell it apart: reading
+  the screen is the only way, which is why the recognition rule is written down.
+
+  (b) a transient condition the run gets past on its own
+
+  $ bun run replay member.account-balance --memberId [redacted:memberId]
+
+
+    member.account-balance@1.2.0  SUCCESS
+      availableBalance: 917.40 USD
+      currentBalance: 1117.40 USD
+
+    steps:
+      [held] open-member-search  Land on the Member Services search screen with an empty search form.
+      [held] enter-member-number  Type the member number into the search panel's own number field.
+      [held] run-member-search  Submit the search and arrive at the member's record.  (recovered from TRANSIENT_OVERLAY)
+      [held] open-account  Open the account the caller asked for, whichever of them that is.
+      [held] read-available-balance  Read the available balance out of the account panel.  -> $917.40
+      [held] read-current-balance  Read the current ledger balance out of the same panel.  -> $1,117.40
+
+    policy:   heritage-core-default (policies/default.yaml)
+    evidence: evidence/replay/member.account-balance-2026-09-08T13-54-51-736Z-5368e1c4
+  exit code 0  (nothing here needs a person)
+
+  (c) a session that expires mid-flow, re-authenticated and resumed
+
+  $ bun run replay member.account-balance --memberId [redacted:memberId] --operatorPassword [redacted:operatorPassword] --expireSessionAfter 2
+
+
+    member.account-balance@1.2.0  SUCCESS
+      availableBalance: 4182.55 USD
+      currentBalance: 4382.55 USD
+
+    steps:
+      [held] open-member-search  Land on the Member Services search screen with an empty search form.
+      [held] enter-member-number  Type the member number into the search panel's own number field.
+      [held] run-member-search  Submit the search and arrive at the member's record.
+      [held] open-account  Open the account the caller asked for, whichever of them that is.  (recovered from SESSION_EXPIRED)
+      [held] read-available-balance  Read the available balance out of the account panel.  -> $4,182.55
+      [held] read-current-balance  Read the current ledger balance out of the same panel.  -> $4,382.55
+
+    policy:   heritage-core-default (policies/default.yaml)
+    evidence: evidence/replay/member.account-balance-2026-09-08T13-54-55-945Z-0207512a
+  exit code 0  (nothing here needs a person)
+
+  Recovery rules are declared in the artifact too, with a detect condition, a
+  remedy in the same action vocabulary a step uses, and a bound. The run resumed
+  at the interrupted step rather than starting over: one run.start, each step
+  attempted once, and the steps before the interruption never re-ran.
+
+  The password never appears in the evidence. Act 9 checks.
+
+
+==============================================================================
+  ACT 5 OF 9   Escalation: a person takes the live session, and hands it back
+==============================================================================
+
+  Member [redacted:memberId]'s savings account is held pending supervisor authorization. Nothing
+  on the way in announces it, so the run reaches the last screen before it finds
+  out it cannot finish. Replayed at 1.1.0, the version before anybody had met
+  this state, it is a generic unknown state:
+
+    $ bun run replay member.account-balance --memberId [redacted:memberId] --version 1.1.0 --headed --handoff
+
+  NOTE  There is nobody at this keyboard, so the operator is scripted: it posts to
+        the real operator interface over HTTP and acts on the automation's own
+        browser window, which is what a handoff is. The command a person runs
+        instead is printed above.
+
+  PAUSED at step open-account
+    the checkpoint "Account Detail is showing, with the balance panel loaded inside its frame." did not hold
+    the live browser window is on the screen the run stopped at, in the
+    separate Google Chrome for Testing application Playwright opens
+
+  r.mensah takes control
+    the session owner is now HUMAN; automation cannot act, and a second
+    replay against this session fails with control_lost rather than racing
+
+  r.mensah acts, in the automation's own browser window
+    filled Supervisor ID, filled Authorization Code, pressed Authorize
+    the session saw both values as they were typed and redacted them
+
+  r.mensah hands control back, and answers the one question
+    "Next time automation meets this state, should it handle it itself?"
+    -> no: automation should always stop here
+
+  the run resumed from the paused step and finished: member.account-balance@1.1.0  SUCCESS  availableBalance: 2730.11 USD, currentBalance: 2905.60 USD
+    it finished because a person acted. The step's checkpoint was re-asked, not
+    its action re-performed: the action had already landed, and what changed was
+    the state, by hand.
+  evidence -> evidence/demo/05-handoff
+
+  LEARNED  member.account-balance@1.2.0 (requires_human)
+    r.mensah resolved this by acting on the live session and confirmed that automation should always stop here rather than repeat what they did
+    diff written to evidence/demo/05-handoff/proposed-1.1.0-to-1.2.0.diff
+
+  The demo stops one step short of storing it. artifacts/ already holds 1.2.0,
+  cut by exactly this episode when the repository was built, and the store is
+  append-only: writing it again is refused rather than replaced. Act 6 shows the
+  committed version and the diff a reviewer approves.
+
+
+==============================================================================
+  ACT 6 OF 9   Learning: one question, one mechanism, two opposite conclusions
+==============================================================================
+
+  The same mechanism learning two opposite lessons
+  ================================================
+
+  One question, asked once, of the person who just resolved a state: "Next time
+  automation meets this state, should it handle it itself?"
+
+  One amendment mechanism, which can write exactly two shapes of change and
+  nothing else. One ratchet, which only ever tightens. Two directories here, and
+  between them the whole argument for why a system like this can be allowed to
+  change its own capabilities.
+
+    [redacted:memberId]-checking-only/
+        Member [redacted:memberId] holds a checking account and no savings account. An operator
+        met the state, looked at it, and CHANGED NOTHING. That is the evidence
+        it is terminal and observational, so v1.1.0 declares it a Business
+        Outcome: the run that used to stop now answers, unattended, and exits 0.
+
+            -      escalate: NO_MATCHING_ITEM
+            +      outcome: NO_MATCHING_ITEM
+
+    [redacted:memberId]-supervisor-hold/
+        Member [redacted:memberId]'s savings account is held pending supervisor authorization.
+        An operator met the state and RESOLVED IT BY ACTING — a supervisor id, an
+        override code, Authorize. That is the evidence it takes authority rather
+        than perception, so v1.2.0 declares it a state automation must never
+        handle itself: the run still stops, but now under a code, with the
+        sentence somebody who already solved it wrote, routed to a person instead
+        of reported as breakage.
+
+            +requiresHuman:
+            +  OPEN_ACCOUNT_REQUIRES_HUMAN:
+            +    step: open-account
+
+  Read the two diffs side by side. They are the same mechanism, given the same
+  question, arriving at opposite conclusions — and what separates them is not the
+  answer. It is what the person did before answering.
+
+  The answer alone could not have separated them, and this is the part worth
+  dwelling on. Both operators were asked one question. What made [redacted:memberId] declarable
+  and [redacted:memberId] permanent is a fact the system recorded without asking anybody: whether
+  the intervention's `actions` list is empty. An operator who had to act cannot
+  produce a Business Outcome from any answer at all, so the direction that costs a
+  person forever is reachable by a radio button and the direction that makes a run
+  unattended is not.
+
+  Neither direction is reversible downward. A requires-human entry is write-once:
+  no later intervention downgrades one, however many times somebody resolves it,
+  because frequency is not evidence of safety. See the last section of
+  [redacted:memberId]-supervisor-hold/README.txt for the three places that is enforced.
+
+  docs/adr/0004-outcome-classification-is-derived-from-human-behaviour.md is the
+  decision both of these are an instance of.
+
+------------------------------------------------------------------------------
+  evidence/learning/[redacted:memberId]-checking-only/1.0.0-to-1.1.0.diff
+------------------------------------------------------------------------------
+  --- member.account-balance@1.0.0
+  +++ member.account-balance@1.1.0
+  @@ -1,5 +1,5 @@
+   capability: member.account-balance
+  -version: 1.0.0
+  +version: 1.1.0
+   title: Read a member's account balance
+   summary: |
+     Looks a member up by number in Heritage Core Member Services, opens one of their accounts, and reads back the available and current balances. Which account is a parameter; omitted, it is the member's savings account, because that is what the goal this capability was discovered from asked for.
+  @@ -78,6 +78,24 @@
+         compiler will emit, this field records the intervention that produced the outcome: the
+         operator who met this screen, observed it, changed nothing and returned control, and the
+         confirmation that made it declarable rather than an escalation.
+  +  NO_MATCHING_ITEM:
+  +    title: >-
+  +      Nothing on offer matched: Open the account the caller asked for, whichever of them that
+  +      is.
+  +    summary: |-
+  +      The screen rendered link items in "Share and Deposit Accounts", and nothing on it carried every token of parameter accountType. That is not the automation failing to see something: the list was read in full, and what it offered is what there was.
+  +
+  +      Before this version, this state stopped the run and asked for a person. It no longer does. Somebody met it, looked at it, changed nothing, and confirmed that the application was answering rather than the capability being wrong — so it is an answer, a caller should branch on it the way they branch on any other domain result, and a run that ends here has succeeded.
+  +
+  +      What that person said about it, in their own words: "Looked at the account list and touched nothing. This member holds a checking account only; there is no savings account to open, so there is nothing here for automation or anyone else to fix. The list is complete and correct"
+  +    discoveredFrom: |-
+  +      Learned from intervention 01eb0911-08f7-4031-b815-012c2da952dd-intervention-1 (session 01eb0911-08f7-4031-b815-012c2da952dd, run member.account-balance-2026-08-27T08-12-09-314Z-e87fa3f4, step open-account), raised at 2026-08-27T08:12:09.503Z.
+  +
+  +      j.okafor took control at 2026-08-27T08:12:15.251Z, recorded no actions on the live session, and returned it at 2026-08-27T08:12:19.607Z.
+  +
+  +      Asked "Next time automation meets this state, should it handle it itself?", they answered yes. j.okafor took control, observed the screen, changed nothing, and confirmed that automation should treat this state as an answer next time.
+  +
+  +      ADR-0004: an operator who resolves a state without acting has demonstrated that it is terminal and observational, which is what makes it declarable. The classification comes from what they did, not from what anyone wrote in advance, and it only ever tightens from here.
+   steps:
+   - id: open-member-search
+     intent: Land on the Member Services search screen with an empty search form.
+  @@ -187,7 +205,7 @@
+           name: accountType
+         strategy: tokenSubset
+       onNoMatch:
+  -      escalate: NO_MATCHING_ITEM
+  +      outcome: NO_MATCHING_ITEM
+       onMultiple:
+         escalate: AMBIGUOUS_MATCH
+       robustness: |
+
+------------------------------------------------------------------------------
+  evidence/learning/[redacted:memberId]-supervisor-hold/1.1.0-to-1.2.0.diff
+------------------------------------------------------------------------------
+  --- member.account-balance@1.1.0
+  +++ member.account-balance@1.2.0
+  @@ -1,5 +1,5 @@
+   capability: member.account-balance
+  -version: 1.1.0
+  +version: 1.2.0
+   title: Read a member's account balance
+   summary: |
+     Looks a member up by number in Heritage Core Member Services, opens one of their accounts, and reads back the available and current balances. Which account is a parameter; omitted, it is the member's savings account, because that is what the goal this capability was discovered from asked for.
+  @@ -96,6 +96,28 @@
+         Asked "Next time automation meets this state, should it handle it itself?", they answered yes. j.okafor took control, observed the screen, changed nothing, and confirmed that automation should treat this state as an answer next time.
+
+         ADR-0004: an operator who resolves a state without acting has demonstrated that it is terminal and observational, which is what makes it declarable. The classification comes from what they did, not from what anyone wrote in advance, and it only ever tightens from here.
+  +requiresHuman:
+  +  OPEN_ACCOUNT_REQUIRES_HUMAN:
+  +    step: open-account
+  +    title: >-
+  +      A person with authority is required: Open the account the caller asked for, whichever of
+  +      them that is.
+  +    summary: |-
+  +      Automation reached this step and the checkpoint "Account Detail is showing, with the balance panel loaded inside its frame" did not hold. Somebody took the live session and resolved it, and resolving it took 1 action(s) on that session — not a longer wait, not a second look, and not a better description of a control. That is what makes this a permissions problem rather than a user interface one (ADR-0004).
+  +
+  +      From this version on, a run that meets this state stops under a code and says this, rather than reporting a checkpoint that would not hold and leaving whoever arrives to work out what they are looking at. Every declared recovery rule still gets its one look first, because a transient condition can be met at this step too and getting past one of those unattended is worth more than appearing to fail faster; what changes is that when none of them recognises the screen, the answer is a lookup rather than an inference from having run out of things to try.
+  +
+  +      What it does not do is get past it. Nothing was learned about how to resolve this state, because what resolved it was authority, and authority is not a thing a capability can be given in a document. This entry is write-once: no later intervention can downgrade it to a business outcome, however many times somebody resolves it, because frequency is not evidence of safety.
+  +
+  +      What that person said about it, in their own words: "released the supervisor hold on this account as an authorized supervisor. Nothing about the screen was wrong and nothing was waiting to load; the application was refusing, correctly, until somebody with the authority to override it said so"
+  +    discoveredFrom: |-
+  +      Learned from intervention session-supervisor-hold-intervention-1 (session session-supervisor-hold, run supervisor-hold, step open-account), raised at 2026-08-27T21:03:00.820Z.
+  +
+  +      r.mensah took control at 2026-08-27T21:03:00.824Z, recorded 1 action(s) on the live session (entered supervisor override for SUP-HOLD-02), and returned it at 2026-08-27T21:03:01.181Z.
+  +
+  +      Asked "Next time automation meets this state, should it handle it itself?", they answered no: automation should always stop here. r.mensah resolved this by acting on the live session and confirmed that automation should always stop here rather than repeat what they did.
+  +
+  +      ADR-0004: an operator who resolves a state by exercising authority has demonstrated a permissions problem rather than a user interface one, and a capability cannot be given authority by a document. The classification comes from what they did, not from what anyone wrote in advance, and it never moves back down: no later intervention can downgrade this to a business outcome.
+   steps:
+   - id: open-member-search
+     intent: Land on the Member Services search screen with an empty search form.
+
+  Both artifacts were written by a run, not typed by hand. Now the before and
+  after of each, driven live, with nobody watching:
+
+  $ bun run replay member.account-balance --memberId [redacted:memberId] --version 1.0.0
+
+
+    member.account-balance@1.0.0  FAILURE
+      step:     open-account (Open the account the caller asked for, whichever of them that is.)
+      reason:   no_matching_item
+      escalate: NO_MATCHING_ITEM
+      expected: one of the link items in "Share and Deposit Accounts" to carry every token of "Savings"
+      observed: scoped to the table headed "Share and Deposit Accounts"; 1 link(s) on offer: "Checking"; no label carries every token of "Savings"
+
+    steps:
+      [held] open-member-search  Land on the Member Services search screen with an empty search form.
+      [held] enter-member-number  Type the member number into the search panel's own number field.
+      [held] run-member-search  Submit the search and arrive at the member's record.
+
+    policy:   heritage-core-default (policies/default.yaml)
+    evidence: evidence/replay/member.account-balance-2026-09-08T13-55-03-402Z-bcd5e16a
+  exit code 1  (this run produced no answer)
+
+  $ bun run replay member.account-balance --memberId [redacted:memberId]
+
+
+    member.account-balance@1.2.0  NO_MATCHING_ITEM
+      Nothing on offer matched: Open the account the caller asked for, whichever of them that is.
+
+    steps:
+      [held] open-member-search  Land on the Member Services search screen with an empty search form.
+      [held] enter-member-number  Type the member number into the search panel's own number field.
+      [held] run-member-search  Submit the search and arrive at the member's record.
+      [outcome] open-account  Open the account the caller asked for, whichever of them that is.
+      [not_reached] read-available-balance  Read the available balance out of the account panel.
+      [not_reached] read-current-balance  Read the current ledger balance out of the same panel.
+
+    policy:   heritage-core-default (policies/default.yaml)
+    evidence: evidence/replay/member.account-balance-2026-09-08T13-55-03-923Z-2a69833f
+  exit code 0  (nothing here needs a person)
+
+  The same screen. Before: a run that stops and needs somebody. After: an answer
+  a caller branches on, unattended, exit 0. The code did not change across the
+  promotion: the artifact's author had already named this state. What the
+  intervention taught is its classification, not its vocabulary.
+
+  $ bun run replay member.account-balance --memberId [redacted:memberId] --version 1.1.0
+
+
+    member.account-balance@1.1.0  FAILURE
+      step:     open-account (Open the account the caller asked for, whichever of them that is.)
+      reason:   checkpoint_failed
+      expected: exactly one cell labelled "Available Balance"
+      observed: nothing matched on "Heritage Core - Account 00000[redacted:memberId]-S01" at http://127.0.0.1:55258/account?memberNumber=[redacted:memberId]&accountNumber=00000[redacted:memberId]-S01
+
+    steps:
+      [held] open-member-search  Land on the Member Services search screen with an empty search form.
+      [held] enter-member-number  Type the member number into the search panel's own number field.
+      [held] run-member-search  Submit the search and arrive at the member's record.
+      [failed] open-account  Open the account the caller asked for, whichever of them that is.
+
+    policy:   heritage-core-default (policies/default.yaml)
+    evidence: evidence/replay/member.account-balance-2026-09-08T13-55-04-455Z-7cd55f3e
+  exit code 1  (this run produced no answer)
+
+  $ bun run replay member.account-balance --memberId [redacted:memberId]
+
+
+    member.account-balance@1.2.0  INTERVENTION REQUIRED
+      escalate: OPEN_ACCOUNT_REQUIRES_HUMAN
+      at step open-account: A person with authority is required: Open the account the caller asked for, whichever of them that is.
+      session:  88b9b7f2-de7f-4dc1-ade1-8467b6c32ef4
+
+    steps:
+      [held] open-member-search  Land on the Member Services search screen with an empty search form.
+      [held] enter-member-number  Type the member number into the search panel's own number field.
+      [held] run-member-search  Submit the search and arrive at the member's record.
+      [failed] open-account  Open the account the caller asked for, whichever of them that is.
+
+    policy:   heritage-core-default (policies/default.yaml)
+    evidence: evidence/replay/member.account-balance-2026-09-08T13-55-07-615Z-39fa6c81
+  exit code 1  (this run produced no answer)
+
+  The opposite direction, and the run still stops. What the intervention bought is
+  the diagnosis: before, a checkpoint failure and an engineer deducing the state
+  from an expected/observed pair; after, a declared code, the sentence somebody
+  who already solved it wrote, and a result class that routes to a person instead
+  of reporting breakage. Learning that a state needs authority never makes it
+  automatable, and the entry can never be downgraded.
+
+
+==============================================================================
+  ACT 7 OF 9   The assisted rung: between deterministic replay and waking somebody
+==============================================================================
+
+  One bounded consultation, off by default, denied by any policy without an
+  assist: block. The model gets a stuck screen and a closed list of this
+  capability's own outcome codes. Its toolkit contains no acting verb at all.
+  There is nowhere in it to put a control, so a hallucination cannot press one.
+
+  (a) against the real provider, with whatever key this environment has
+
+  $ bun run replay member.account-balance --memberId [redacted:memberId] --version 1.0.0 --assist
+
+
+    member.account-balance@1.0.0  FAILURE
+      step:     open-account (Open the account the caller asked for, whichever of them that is.)
+      reason:   no_matching_item
+      escalate: NO_MATCHING_ITEM
+      expected: one of the link items in "Share and Deposit Accounts" to carry every token of "Savings"
+      observed: scoped to the table headed "Share and Deposit Accounts"; 1 link(s) on offer: "Checking"; no label carries every token of "Savings"
+
+    steps:
+      [held] open-member-search  Land on the Member Services search screen with an empty search form.
+      [held] enter-member-number  Type the member number into the search panel's own number field.
+      [held] run-member-search  Submit the search and arrive at the member's record.
+
+    policy:   heritage-core-default (policies/default.yaml)
+    evidence: evidence/replay/member.account-balance-2026-09-08T13-55-10-714Z-5dd8b3ca
+  exit code 1  (this run produced no answer)
+
+  what the evidence records for that consultation:
+    assist.request   the rung was reached
+    policy.check     assist, allowed by the shipped policy
+    assist.declined  assisted recovery could not classify this state: the advisor could not answer: assistance is unavailable because model credentials or configuration are missing or invalid
+
+  That is a genuine HTTP round trip, and the only live call this demo makes. With
+  a key the consultation happens and the log records what came back; with none it
+  records assist.declined naming the reason. Either way, note what the rung did
+  next: it reported whether it could settle the stall, and a stall it could not
+  settle fell through to exactly the failure the run would have had anyway. A rung
+  whose job is to avoid an escalation must never be able to cause one.
+
+  (b) the same run again, with the judgement scripted so it is the same every time
+
+  NOTE  No language model produced the judgement in this act. It is scripted at
+        LanguageModel.make, the same provider hook @effect/ai-openai fills, so a
+        demo gives the same answer every time and runs for somebody with no key.
+        Everything below the judgement is the production path. A run a real model
+        drove is committed at evidence/discovery/gpt-4.1-drove-this/ and is
+        reproduced by: bun run apps/demo/src/support/drive-the-discovery-run.ts
+
+    member.account-balance@1.0.0  NO_MATCHING_ITEM  [ASSISTED]
+    assisted: true   confidence: 0.92
+    proposal: events.jsonl#assist-1
+  evidence -> evidence/demo/07b-assist-accepted
+
+    artifacts/ is byte-for-byte unchanged across the assisted run.
+
+  The result is marked assisted, carries its confidence, and points at the
+  proposal in the evidence, so a caller can always tell a proposed answer from an
+  observed one. It never counts as deterministic. Promoting a proposal into the
+  capability still needs a person, through an intervention. A model can propose a
+  meaning and can never write one down.
+
+
+==============================================================================
+  ACT 8 OF 9   A second institution, running the same vendor product
+==============================================================================
+
+  community-cu differs from heritage-core in four ways: the member-number caption
+  reads Member # rather than Member Number, savings and checking are labelled
+  Regular Savings and Share Draft, the submit button reads Find rather than
+  Search, and account detail is not in an iframe.
+
+  Three of the four cost nothing. The base document, unconfigured:
+
+    member.account-balance@1.2.0  FAILURE  target_missing at run-member-search
+    steps that held first: open-member-search, enter-member-number
+  evidence -> evidence/demo/08a-tenant-unconfigured
+
+  The shortened caption was absorbed by matching on the accessible name, and both
+  steps before the submit held. The fourth difference is not absorbable (Find and
+  Search share no token in either direction), so tenant drift surfaces as an
+  ordinary replay failure, detected by the same mechanism as everything else.
+
+  That failure entered the recovery ladder, the assisted rung named Find as one of
+  the controls the screen was actually offering, and a person confirmed it once.
+  Nothing pressed it. The confirmation was written as a scoped delta:
+
+    tenant: community-cu
+    capability: member.account-balance
+    baseVersion: 1.2.0
+    targets:
+    - step: run-member-search
+      was: Search
+      name: Find
+      discoveredFrom: |-
+        Discovered by replay failing. Run community-cu-onboarding executed member.account-balance@1.2.0 against run-member-search and could not resolve the control it names; that is an ordinary replay failure, and it is the only way tenant drift is detected here (ADR-0006).
+
+        Assisted recovery was consulted once about that screen and proposed the control "Find" at confidence 0.90. The proposal is at events.jsonl#assist-1 in that run's evidence.
+
+        In its own words: "the search panel offers one submit control and it reads Find; the other button on the screen belongs to the Cross-Reference Lookup panel"
+
+        ADR-0005: the consultation could name a control and could not press one. Nothing was acted on, and this document exists because a person then agreed with it.
+      confirmedBy: |-
+        a.reyes took the live session at 2026-08-27T09:48:30.537Z (intervention session-community-cu-onboarding-intervention-1, session session-community-cu-onboarding) and returned it at 2026-08-27T09:48:30.538Z.
+
+        Asked "Assisted recovery could not find one control and proposes a correspondent. Is it right?", they answered yes.
+
+        What they said about it: "looked at the search panel. This installation labels the submit control Find; it is the same control Heritage Core labels Search, and there is nothing else on the panel it could be"
+
+  One entry, and the file contains none of the other three differences. It lives
+  under overrides/, not artifacts/, so onboarding a tenant moved no file the
+  vendor-level capability is made of. Now the same capability at both
+  institutions:
+
+  $ bun run replay member.account-balance --memberId [redacted:memberId] --tenant community-cu
+
+
+    member.account-balance@1.2.0  SUCCESS
+      availableBalance: 4182.55 USD
+      currentBalance: 4382.55 USD
+
+    steps:
+      [held] open-member-search  Land on the Member Services search screen with an empty search form.
+      [held] enter-member-number  Type the member number into the search panel's own number field.
+      [held] run-member-search  Submit the search and arrive at the member's record.
+      [held] open-account  Open the account the caller asked for, whichever of them that is.
+      [held] read-available-balance  Read the available balance out of the account panel.  -> $4,182.55
+      [held] read-current-balance  Read the current ledger balance out of the same panel.  -> $4,382.55
+
+    policy:   heritage-core-default (policies/default.yaml)
+    evidence: evidence/replay/member.account-balance-2026-09-08T13-55-11-680Z-660fef62
+    tenant:   community-cu (overrides/community-cu/member.account-balance.yaml)
+      member.account-balance@1.2.0 step run-member-search: "Search" is "Find" at community-cu
+  exit code 0  (nothing here needs a person)
+
+  $ bun run replay member.account-balance --memberId [redacted:memberId]
+
+
+    member.account-balance@1.2.0  SUCCESS
+      availableBalance: 4182.55 USD
+      currentBalance: 4382.55 USD
+
+    steps:
+      [held] open-member-search  Land on the Member Services search screen with an empty search form.
+      [held] enter-member-number  Type the member number into the search panel's own number field.
+      [held] run-member-search  Submit the search and arrive at the member's record.
+      [held] open-account  Open the account the caller asked for, whichever of them that is.
+      [held] read-available-balance  Read the available balance out of the account panel.  -> $4,182.55
+      [held] read-current-balance  Read the current ledger balance out of the same panel.  -> $4,382.55
+
+    policy:   heritage-core-default (policies/default.yaml)
+    evidence: evidence/replay/member.account-balance-2026-09-08T13-55-12-244Z-8c6c98b9
+  exit code 0  (nothing here needs a person)
+
+  Of the four ways the second institution differs, three cost nothing at all and
+  the fourth cost one line in one file that nobody wrote. The reason is that reuse
+  falls out of the matching rule rather than arriving as configuration.
+
+  The four runs behind the committed version of this act, with a README framing
+  them against the spec's table, are in evidence/tenant/community-cu/.
+
+
+==============================================================================
+  ACT 9 OF 9   Safety: what is in everything this demo just wrote
+==============================================================================
+
+  38 text files under evidence/demo, 22 screenshots skipped
+
+  every member number this demo typed:
+    looked for "[redacted:memberId]", "[redacted:memberId]", "[redacted:memberId]", "[redacted:memberId]", "[redacted:memberId]" in evidence/demo
+    found nothing.
+
+  the operator password, in the one run that supplied it:
+    looked for "[redacted:operatorPassword]" in evidence/demo/04c-session-expiry
+    found nothing.
+
+  what the operator typed into the live session, in the run they held:
+    looked for "[redacted:supervisorId]", "[redacted:authorizationCode]" in evidence/demo/05-handoff
+    found nothing.
+
+  That second scan is the interesting one. Heritage Core's banner reads [redacted:operatorPassword]
+  CORE in capitals, so the password collides with a word on every screen, and in
+  that run's evidence the banner itself reads [redacted:operatorPassword] CORE.
+  The scrubber is field-blind and matches by literal occurrence, which is why.
+
+  Every parameter is sensitive unless the artifact says otherwise in writing AND
+  policy allowlists it, and the shipped allowlist is empty. A sensitive value is a
+  Redacted<string> end to end with exactly two places in the workspace that unwrap
+  one, pinned by a test. The evidence writer scrubs at the single point where an
+  event is serialised, so redaction does not depend on any call site remembering.
+
+  The cost of matching by literal occurrence is legibility: Heritage Core's
+  account number embeds the member number, so the evidence reads
+  00000[redacted:memberId]-S01. Illegible evidence is recoverable; a leaked
+  identifier is not.
+
+  SCREENSHOTS ARE NOT REDACTED. They render member numbers and balances as
+  captured. The exclusion above is one line of code in apps/demo/src/support/secret-scan.ts
+  so the gap is findable rather than silent, and every evidence directory says so
+  in its own README.txt. Pixel masking is named as a gap, not half-solved.
+
+
+==============================================================================
+  Everything this run produced
+==============================================================================
+
+  evidence/demo/02-discovery
+  evidence/demo/02-discovery-replayed
+  evidence/demo/03-determinism-a
+  evidence/demo/03-determinism-b
+  evidence/demo/03-replay
+  evidence/demo/04a-business-outcome
+  evidence/demo/04b-recoverable
+  evidence/demo/04c-session-expiry
+  evidence/demo/05-handoff
+  evidence/demo/06a-[redacted:memberId]-before
+  evidence/demo/06b-[redacted:memberId]-after
+  evidence/demo/06c-[redacted:memberId]-before
+  evidence/demo/06d-[redacted:memberId]-after
+  evidence/demo/07a-assist-live
+  evidence/demo/07b-assist-accepted
+  evidence/demo/08a-tenant-unconfigured
+  evidence/demo/08b-tenant-with-override
+  evidence/demo/08c-vendor-unchanged
+
+  Committed beside it, each produced by a command in this repository:
+
+    evidence/discovery/gpt-4.1-drove-this/   a model-driven run, and the artifact
+                                             compiled from it
+    evidence/learning/                       the two amendments
+    evidence/tenant/community-cu/            the second institution
+    evidence/assist/                         the assisted rung
+
+  REPORT.md argues every decision above. README.md is how to run any of it.
+
+  The discovery run above was scripted so this command is deterministic. The one
+  a model drove is one command, and it costs a few cents:
+
+    $ bun run apps/demo/src/support/drive-the-discovery-run.ts

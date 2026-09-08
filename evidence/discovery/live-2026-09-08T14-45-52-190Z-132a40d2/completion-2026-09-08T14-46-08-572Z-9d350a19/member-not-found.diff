@@ -1,0 +1,41 @@
+--- member.account-balance.discovered@1.6.0
++++ member.account-balance.discovered@1.7.0
+@@ -1,5 +1,5 @@
+ capability: member.account-balance.discovered
+-version: 1.6.0
++version: 1.7.0
+ title: Returns the available and current balances of a member's savings account.
+ summary: |-
+   Returns the available and current balances of a member's savings account.
+@@ -76,6 +76,19 @@
+       Asked "Next time automation meets this state, should it handle it itself?", they answered yes. demo.operator took control, observed the screen, changed nothing, and confirmed that automation should treat this state as an answer next time.
+ 
+       ADR-0004: an operator who resolves a state without acting has demonstrated that it is terminal and observational, which is what makes it declarable. The classification comes from what they did, not from what anyone wrote in advance, and it only ever tightens from here.
++  MEMBER_NOT_FOUND:
++    title: No member exists for that number
++    summary: >-
++      The operator observed "Member Not Found", changed nothing, and confirmed that this state
++      is an application answer. No member exists for that number
++    discoveredFrom: |-
++      Learned from intervention session-learn-member-not-found-intervention-1 (session session-learn-member-not-found, run learn-member-not-found, step click-2), raised at 2026-09-08T14:46:14.969Z.
++
++      demo.operator took control at 2026-09-08T14:46:14.978Z and returned it at 2026-09-08T14:46:14.981Z. Action evidence: recorded no actions on the live session.
++
++      Asked "Next time automation meets this state, should it handle it itself?", they answered yes. demo.operator took control, observed the screen, changed nothing, and confirmed that automation should treat this state as an answer next time.
++
++      ADR-0004: an operator who resolves a state without acting has demonstrated that it is terminal and observational, which is what makes it declarable. The classification comes from what they did, not from what anyone wrote in advance, and it only ever tightens from here.
+ steps:
+ - id: open
+   intent: Open the application at the entry path this capability starts from.
+@@ -166,6 +179,11 @@
+     expect:
+     - assert: textPresent
+       text: Share and Deposit Accounts
++    orOutcome:
++    - code: MEMBER_NOT_FOUND
++      when:
++      - assert: textPresent
++        text: Member Not Found
+ - id: selectFromList-3
+   intent: Select the savings account to view its balance
+   action:

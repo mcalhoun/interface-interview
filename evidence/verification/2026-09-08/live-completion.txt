@@ -1,0 +1,6 @@
+Saved member.account-balance.discovered@1.1.0; replaying the exact stored artifact.
+Fresh artifact replay succeeded; exercising its exceptional-state handoff.
+The observed intervention produced a business_outcome amendment; saving and replaying it.
+Observing and learning the MEMBER_NOT_FOUND checkpoint answer on the same discovered capability.
+Observing and learning the INPUT_VALIDATION_ERROR checkpoint answer on the same discovered capability.
+Saved member.account-balance.discovered@1.1.0, learned through @1.4.0; success and three business outcomes; evidence: evidence/discovery/live-2026-09-08T13-36-29-223Z-9972cdc9

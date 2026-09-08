@@ -4,4 +4,4 @@ We build on `effect@4.0.0-rc.112` rather than the stable 3.x line. The 4.x monop
 
 ## Consequences
 
-Docs are thin and model recall of the API is unreliable. Implementation has to check the shipped type definitions rather than trust memory, and some API usage will be wrong before it is right. What makes it worth the friction is ADR-0003: service requirements turn into machine-checked proof that no model runs in the production path. No other stack we considered offers that.
+Docs are thin and model recall of the API is unreliable. Implementation has to check the shipped type definitions rather than trust memory, and some API usage will be wrong before it is right. What makes it worth the friction is ADR-0003: service requirements exclude a model service from ordinary replay, while import checks and tests verify its default composition. This does not prove arbitrary injected callbacks are model-free; opt-in assisted classification is separately labeled.

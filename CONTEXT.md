@@ -4,6 +4,11 @@ A system that lets an AI agent operate back-office banking applications that exp
 
 ## Language
 
+These terms distinguish domain concepts. They are not bans on accurate technical
+names in adapters, protocols or public interfaces. A browser has pages; an
+accessibility observation is a snapshot; a session can expose an ownership
+snapshot. Keep existing names when they describe those facts clearly.
+
 ### Execution modes
 
 **Discovery**:
@@ -47,8 +52,8 @@ _Avoid_: source, lineage, binding
 ### Surfaces
 
 **Surface**:
-An application as it can be perceived and operated. A legacy web app, an accessibility tree, a desktop application. What a Capability acts upon.
-_Avoid_: page, app, browser, UI
+An application as it can be perceived and operated, whether a legacy web app or a desktop application. What a Capability acts upon. An accessibility tree is an observation of that Surface.
+A browser **page** is a concrete document within a web Surface. Fields such as `ActionRequest.page` carry its URL; they do not introduce another domain concept.
 
 **Surface Adapter**:
 The component that translates Actions and Targets into operations on one concrete kind of Surface. The seam that keeps Capability Artifacts free of browser-specific detail.
@@ -59,13 +64,16 @@ A logical description of a control to act upon, written in terms an operator wou
 _Avoid_: selector, locator, element, node
 
 **Surface State**:
-What the system perceives of a Surface at one moment: its accessibility structure, location and frames. The only thing Discovery ever sees.
-_Avoid_: snapshot, DOM, page state, screen
+What the system perceives of a Surface at one moment: its accessibility structure, location and frames. A browser accessibility **snapshot** supplies this observation. Discovery receives the permitted, scrubbed projection; raw markup is not an observation channel. A **screen** is an ordinary description of what an operator sees.
+
+**Selection**:
+Choosing one of the items a Surface currently offers by matching a parameter against their labels by token subset. Distinct from resolving a Target: a Target says which control, a Selection works out which control from a list read at Replay time. The legal values are read off the page during Discovery, never written into source.
+_Avoid_: filter, lookup, search, pick
 
 ### Outcomes
 
 **Business Outcome**:
-An expected result of the application's own domain that the caller needs to know about, such as a member not existing. A legitimate answer, never a failure.
+An expected result of the application's own domain that the caller needs to know about, such as a member not existing. A legitimate answer, never a failure. Always declared in the Capability Artifact and recognised by a condition written there in advance, never inferred at run time from the shape of a screen.
 _Avoid_: error, exception, negative result
 
 **Recoverable Condition**:
@@ -91,16 +99,20 @@ A single, bounded consultation of a model when Replay cannot proceed. It may pro
 _Avoid_: fallback, self-healing, auto-repair
 
 **Intervention**:
-The episode in which automation stops, a person takes the live Session, resolves the state, and returns control. Includes the record of what they did.
-_Avoid_: escalation, handoff, manual override, human-in-the-loop
+The episode in which automation stops and asks a person to resolve a state. Its **intervention record** preserves the request, control transfers, operator notes and observed changes. An Operator who cannot proceed closes the episode as blocked, which teaches nothing about how to handle the state unattended.
+
+**Handoff**:
+The mechanism that transfers control of the same live Session between automation and Operator. It implements part of an Intervention, but is distinct from the record of that episode. Names such as `Handoff`, `handoffSession` and `--handoff` describe this mechanism.
+
+**Ownership snapshot**:
+A read of the current Control Owner and associated handoff state. Distinct from a Surface State or accessibility snapshot; it describes who may act, not what the application displays.
 
 **Operator**:
 The person who receives an Intervention and holds the Session while resolving it.
 _Avoid_: user, admin, agent, human
 
 **Session**:
-The single live browser context a run operates in, which passes intact between automation and Operator. Never a fresh one for the human.
-_Avoid_: browser, context, connection
+The live execution context a run operates in, which passes intact between automation and Operator. The implemented Session uses one browser context; a future desktop adapter would retain its application/window context. Handoff never creates a fresh application session for the human.
 
 **Control Owner**:
 Which party, automation or Operator, is currently permitted to act on a Session. Always answerable, never implied.
@@ -125,9 +137,7 @@ A scoped delta against a Capability Artifact, covering a difference a Tenant's S
 _Avoid_: config, customization, variant, patch
 
 **Policy**:
-The explicit statement of what the system may do: which origins, which Actions, and how conservatively risky ones get treated. Every Action passes through it in both modes.
-_Avoid_: rules, permissions, guardrails, allowlist
+The explicit statement of what the system may do: which origins, which Actions, and how conservatively risky ones get treated. Every Action passes through it in both modes. The **origin allowlist** is one component; the browser enforces it at the network and frame boundary as well as the engine checking Action permission.
 
 **Evidence**:
-The structured record of what happened during a run. Decisions, actions, checkpoints, outcomes, interventions, enough to reconstruct and audit it afterwards.
-_Avoid_: logs, trace, history, audit trail
+The structured record of what happened during a run: decisions, actions, checkpoints, outcomes and interventions. Event **logs**, scrubbed accessibility snapshots and screenshots are concrete evidence formats. Screenshot pixels are not redacted in this synthetic demonstration; see ADR-0010.

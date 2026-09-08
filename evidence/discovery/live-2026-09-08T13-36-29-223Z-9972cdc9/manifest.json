@@ -1,0 +1,8 @@
+{
+  "source": "source.json",
+  "sha256": "811f7e4ad09e2ab1f42e664012ea512347ca64edff47cab85e358ddbcf5f078f",
+  "discovery": "discovery/events.jsonl",
+  "compilation": "compilation.json",
+  "completion": "completion-2026-09-08T13-45-28-588Z-b1e6f2d1/manifest.json",
+  "note": "Prior attempt evidence was retained; this completion reused the verified discovery artifact without a model."
+}

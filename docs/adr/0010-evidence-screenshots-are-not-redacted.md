@@ -1,7 +1,20 @@
 # Evidence screenshots are not redacted
 
-We redact sensitive values from event logs and accessibility snapshots at the single point where Evidence gets serialised. Screenshots we store as captured, so they contain rendered member identifiers and balances.
+Text evidence passes through the run's scrubber. Screenshot pixels are stored
+as captured when explicitly enabled, and can contain member identifiers and
+balances. Pixel masking is not implemented.
+
+## Default and synthetic exception
+
+EvidenceWriter disables binary attachments by default. A caller must explicitly
+set `allowUnredactedScreenshots: true` to enable the synthetic-data exception.
+The built-in fixture commands and demo opt in because their data is synthetic.
+Commands targeting an external `--baseUrl` do not opt in; they retain scrubbed
+accessibility evidence without persisting screenshot bytes.
 
 ## Consequences
 
-Screenshot redaction is a stated limit rather than a solved problem. Doing it properly means masking known values under optical recognition, which is more than this job needs. So screenshots go only to the evidence directory, over synthetic data, and the gap is written down where a reviewer will find it. Naming the limit is the honest position. Implying that pixels are protected would not be.
+The default prevents accidental binary persistence. Opt-in does not redact
+pixels or establish that an external application contains safe data. A deployment
+must verify masking before enabling screenshots over real records. Passing a
+text-evidence scan is not evidence that enabled screenshots are safe.

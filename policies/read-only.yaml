@@ -1,0 +1,35 @@
+# Policy — look, do not touch.
+#
+# The conservative default made literal: this policy permits neither of the two
+# risky action types, so a run under it cannot type into a field or press a
+# control no matter what the Capability Artifact asks for. Nothing needs to be
+# said about `fill` and `click` here, because a policy permits only what it
+# lists, and this one does not list them.
+#
+# Run a capability under it with:
+#
+#   bun run replay member.account-balance --memberId 12345 --policy read-only
+#
+# member.account-balance stops at its second step, where it would have typed a
+# member number into the search field, and reports a policy violation. The run
+# stops; nothing moved. That is the failure mode this system is built for.
+
+policy: heritage-core-read-only
+
+description: >
+  For capabilities that genuinely only read, and for verifying what a run does
+  when the answer is no. Navigation and extraction only: this policy cannot type
+  and cannot press.
+
+  It is also how to establish what a suspicious capability would do without
+  letting it do anything — run it under this policy and read the evidence for
+  the first action it was refused.
+
+origins:
+  - http://127.0.0.1:*
+  - http://localhost:*
+  - https://mss.heritagecu.example
+
+actions:
+  - type: navigate
+  - type: extract

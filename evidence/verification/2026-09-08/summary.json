@@ -1,0 +1,22 @@
+{
+  "baseCommit": "60b4519da023abbec6141c0b41eb128df61ddb5a",
+  "sourceManifestSha256": "6123cbdfe167687fe3551043f3a6f4a31dba0ea9041e058c2db27cd1a6562c79",
+  "sourceFiles": 164,
+  "tests": {
+    "files": 43,
+    "passed": 494,
+    "failed": 0
+  },
+  "typecheck": "passed",
+  "cleanFrozenInstall": "passed",
+  "cleanInstalledReplayVersion": "1.4.0",
+  "demoWithoutModelKey": "passed",
+  "independentReview": "both reproduced residual findings closed",
+  "liveBundle": "../../discovery/live-2026-09-08T13-36-29-223Z-9972cdc9/manifest.json",
+  "privacyScan": {
+    "textFiles": 39,
+    "leaks": 0,
+    "syntheticPngFilesExcluded": 19
+  },
+  "scope": "Local uncommitted working tree; no publication or submission performed."
+}

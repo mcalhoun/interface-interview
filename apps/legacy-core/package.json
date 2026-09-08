@@ -1,0 +1,11 @@
+{
+  "name": "@cua/legacy-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "effect": "4.0.0-rc.112"
+  }
+}

@@ -1,0 +1,12 @@
+bun install v1.4.2 (744846f84)
+
++ @effect/vitest@4.0.0-rc.112
++ @types/bun@1.4.0
++ playwright@1.62.1
++ typescript@5.9.3
++ vitest@4.1.11
++ @effect/ai-openai@4.0.0-rc.112
++ effect@4.0.0-rc.112
+
+62 packages installed [487.00ms]
+$ tsc --noEmit -p tsconfig.json

@@ -1,0 +1,367 @@
+/**
+ * Heritage Core is the fixture every later ticket is tested against, so what is
+ * pinned here is the happy path an operator walks and the hostility that makes
+ * the fixture worth having. Both are externally observable: the bytes the server
+ * puts on the wire.
+ */
+
+import { it } from "@effect/vitest"
+import { Effect } from "effect"
+import { expect } from "vitest"
+import { serve } from "@cua/legacy-core"
+
+const SAVINGS = "0000012345-S01"
+const CHECKING = "0000012345-D10"
+
+const openCore = Effect.gen(function* () {
+  const core = yield* serve({ port: 0 })
+  const get = (path: string) =>
+    Effect.promise(() => fetch(core.origin + path).then((response) => response.text()))
+  /** What a browser sends when a form whose method is POST is submitted. */
+  const post = (path: string, fields: Readonly<Record<string, string>>) =>
+    Effect.promise(() =>
+      fetch(core.origin + path, {
+        method: "POST",
+        body: new URLSearchParams(fields)
+      }).then((response) => response.text())
+    )
+  return { core, get, post } as const
+})
+
+it.effect("Member Search offers a near-duplicate of the Member Number field", () =>
+  Effect.gen(function* () {
+    const { get } = yield* openCore
+    const page = yield* get("/")
+
+    expect(page).toContain('title="Member Number"')
+    expect(page).toContain('title="Member Number (Legacy)"')
+    expect(page).toContain("Member Number Search")
+    expect(page).toContain("Cross-Reference Lookup")
+
+    // Both fields answer to a bare "Member Number" name match, which is exactly
+    // the ambiguity `within` and `nth` disambiguation has to resolve.
+    const confusable = page.match(/title="Member Number[^"]*"/g) ?? []
+    expect(confusable).toHaveLength(2)
+  })
+)
+
+it.effect("Member Search submits as a GET, so navigation is a full page load", () =>
+  Effect.gen(function* () {
+    const { get } = yield* openCore
+    const page = yield* get("/")
+    expect(page).toContain('<form method="get" action="/member">')
+    expect(page).toContain('<input type="submit" value="Search">')
+  })
+)
+
+it.effect("Member Detail lists Primary Savings and Checking for member 12345", () =>
+  Effect.gen(function* () {
+    const { get } = yield* openCore
+    const page = yield* get("/member?memberNumber=12345")
+
+    expect(page).toContain("MARGARET T HOLLOWAY")
+    expect(page).toContain(`<a href="/account?memberNumber=12345&amp;accountNumber=${SAVINGS}">Primary Savings</a>`)
+    expect(page).toContain(`<a href="/account?memberNumber=12345&amp;accountNumber=${CHECKING}">Checking</a>`)
+
+    // Balances are only reachable through Account Detail, so the click-through
+    // cannot be skipped.
+    expect(page).not.toContain("Available Balance")
+  })
+)
+
+it.effect("Account Detail puts every figure inside an iframe", () =>
+  Effect.gen(function* () {
+    const { get } = yield* openCore
+    const outer = yield* get(`/account?memberNumber=12345&accountNumber=${SAVINGS}`)
+
+    expect(outer).toContain(
+      `<iframe src="/account/panel?memberNumber=12345&amp;accountNumber=${SAVINGS}"`
+    )
+    expect(outer).not.toContain("Available Balance")
+
+    const panel = yield* get(`/account/panel?memberNumber=12345&accountNumber=${SAVINGS}`)
+    expect(panel).toContain("Available Balance")
+    expect(panel).toContain("$4,182.55")
+    expect(panel).toContain("Current Balance")
+    expect(panel).toContain("$4,382.55")
+    expect(panel).toContain("Status")
+    expect(panel).toContain("Active")
+  })
+)
+
+it.effect("every page is server-rendered hostile markup", () =>
+  Effect.gen(function* () {
+    const { get } = yield* openCore
+    const paths = [
+      "/",
+      "/member?memberNumber=12345",
+      `/account?memberNumber=12345&accountNumber=${SAVINGS}`,
+      `/account/panel?memberNumber=12345&accountNumber=${SAVINGS}`,
+      "/member?memberNumber=99999",
+      "/xref?legacyMemberNumber=ABC123",
+      // The diagnostic screens are served by the same application and obey the
+      // same rules. A fixture that quietly allowed itself an `id` would be
+      // testing a system this repository does not have.
+      "/fixtures",
+      "/fixtures/duplicate-labels",
+      "/fixtures/nested-tables",
+      "/fixtures/frames",
+      "/fixtures/frames/panel?ledger=A"
+    ]
+
+    for (const path of paths) {
+      const page = yield* get(path)
+      expect(page, `${path} renders client side`).not.toMatch(/<script/i)
+      expect(page, `${path} carries a test id`).not.toMatch(/\s(id|class|data-[a-z-]+)\s*=/i)
+      expect(page, `${path} carries ARIA`).not.toMatch(/\s(role|aria-[a-z-]+)\s*=/i)
+      expect(page, `${path} carries semantic markup`).not.toMatch(
+        /<(label|th|main|nav|header|footer|section|article|aside)[\s>]/i
+      )
+      expect(page, `${path} is not table based`).toMatch(/<table/i)
+    }
+  })
+)
+
+it.effect("a member who does not exist gets a real screen and an HTTP 200, not an error", () =>
+  Effect.gen(function* () {
+    const { core } = yield* openCore
+    const response = yield* Effect.promise(() =>
+      fetch(`${core.origin}/member?memberNumber=99999`)
+    )
+    const page = yield* Effect.promise(() => response.text())
+
+    // The single most important byte on the wire. Heritage Core understood the
+    // search and answered it; the answer is that there is no such member. Nothing
+    // at the transport layer says otherwise, so anything hoping to classify this
+    // by status code, `response.ok` or a thrown exception is told "success" and
+    // handed a page with no balances on it.
+    expect(response.status).toBe(200)
+    expect(response.ok).toBe(true)
+
+    expect(page).toContain("Member Not Found")
+    expect(page).toContain("No member record found for member number 99999.")
+
+    // Not the generic system-message page. A request that could not be carried
+    // out and a request that was carried out and came back empty are different
+    // things, and this fixture only teaches the distinction if it draws it.
+    expect(page).not.toContain("System Message")
+  })
+)
+
+it.effect("an empty search is an operator error, and does not borrow the not-found screen", () =>
+  Effect.gen(function* () {
+    const { core } = yield* openCore
+    const response = yield* Effect.promise(() => fetch(`${core.origin}/member?memberNumber=`))
+    const page = yield* Effect.promise(() => response.text())
+
+    expect(response.status).toBe(400)
+    expect(page).toContain("System Message")
+    expect(page).not.toContain("Member Not Found")
+  })
+)
+
+it.effect("the diagnostic screens carry the hazards they exist for", () =>
+  Effect.gen(function* () {
+    const { get } = yield* openCore
+
+    // Duplicate labels: three controls with the same role, the same accessible
+    // name and the same caption. Nothing in the name can separate them.
+    const transfers = yield* get("/fixtures/duplicate-labels")
+    expect(transfers.match(/title="Amount"/g)).toHaveLength(3)
+    expect(transfers.match(/value="Post"/g)).toHaveLength(3)
+    for (const heading of ["Scheduled Transfer", "Recurring Transfer", "One-Time Transfer"]) {
+      expect(transfers).toContain(heading)
+    }
+    // One per-panel fact, so a test can prove which panel it acted on.
+    expect(transfers).toContain("REC-2002")
+
+    // Nested tables: the figure sits several layout tables below its panel.
+    const settlement = yield* get("/fixtures/nested-tables")
+    expect(settlement).toContain("$18,204.36")
+    expect((settlement.match(/<table/g) ?? []).length).toBeGreaterThan(20)
+
+    // Frame-crossing: two documents, each with its own copy of the captions.
+    const ledgers = yield* get("/fixtures/frames")
+    expect(ledgers).toContain('name="ledgerone"')
+    expect(ledgers).toContain('name="ledgertwo"')
+    for (const key of ["A", "B"]) {
+      const panel = yield* get(`/fixtures/frames/panel?ledger=${key}`)
+      expect(panel).toContain("Posted Balance")
+      expect(panel).toContain('title="Adjustment"')
+      // The panel's own form carries the ledger it belongs to. A GET form
+      // submits only its own fields, and this route needs `ledger` to know which
+      // document to render — without the hidden field, pressing `Post` in either
+      // frame landed on a 404, so the one control on the fixture was a dead end.
+      expect(panel).toContain(`<input type="hidden" name="ledger" value="${key}">`)
+    }
+  })
+)
+
+it.effect("posting a ledger adjustment lands back on the same ledger", () =>
+  Effect.gen(function* () {
+    const { core } = yield* openCore
+
+    // What the browser actually sends when `Post` is pressed: the form's own
+    // fields, and nothing else. This is the request the fixture has to answer.
+    for (const [key, heading] of [
+      ["A", "Ledger A"],
+      ["B", "Ledger B"]
+    ]) {
+      const response = yield* Effect.promise(() =>
+        fetch(`${core.origin}/fixtures/frames/panel?ledger=${key}&adjustment=25.00`)
+      )
+      expect(response.status, `posting ledger ${key}`).toBe(200)
+      expect(yield* Effect.promise(() => response.text())).toContain(heading!)
+    }
+
+    // And the request the form used to send, so the hidden field above is
+    // visibly load-bearing rather than decorative.
+    const withoutLedger = yield* Effect.promise(() =>
+      fetch(`${core.origin}/fixtures/frames/panel?adjustment=25.00`)
+    )
+    expect(withoutLedger.status).toBe(404)
+  })
+)
+
+it.effect("nothing an operator can reach links to a diagnostic screen", () =>
+  Effect.gen(function* () {
+    const { get } = yield* openCore
+
+    // The fixtures are reachable by URL and nowhere else. If Member Search grew
+    // a link to them, observing it would no longer be observing the application
+    // ticket 01 built, and every screen assertion downstream would be measuring
+    // the fixture instead.
+    for (const path of ["/", "/member?memberNumber=12345", "/xref"]) {
+      expect(yield* get(path), `${path} links to a diagnostic screen`).not.toContain("/fixtures")
+    }
+  })
+)
+
+// ---------------------------------------------------------------------------
+// Member 77777: an account restriction that needs a person with authority
+// ---------------------------------------------------------------------------
+
+const HELD = "0000077777-S01"
+
+it.effect("member 77777 looks entirely ordinary until the account panel", () =>
+  Effect.gen(function* () {
+    const { get } = yield* openCore
+    const detail = yield* get("/member?memberNumber=77777")
+
+    expect(detail).toContain("DOUGLAS R FAIRWEATHER")
+    expect(detail).toContain(`<a href="/account?memberNumber=77777&amp;accountNumber=${HELD}">Primary Savings</a>`)
+
+    // The restriction is per account, not per member, so nothing on the way in
+    // announces it. A run finds out on the last screen, which is where flows
+    // actually fail.
+    expect(detail).not.toContain("RESTRICTED")
+    expect(yield* get(`/account?memberNumber=77777&accountNumber=${HELD}`)).toContain("<iframe")
+  })
+)
+
+it.effect("a restricted account withholds the figures rather than erroring", () =>
+  Effect.gen(function* () {
+    const { get } = yield* openCore
+    const panel = yield* get(`/account/panel?memberNumber=77777&accountNumber=${HELD}`)
+
+    expect(panel).toContain("ACCOUNT RESTRICTED - SUPERVISOR AUTHORIZATION REQUIRED")
+    expect(panel).toContain("SUP-HOLD-02")
+
+    // The words a checkpoint asserts on are simply not on the page. Nothing
+    // raises, nothing 500s, and the account it names is still the right one.
+    expect(panel).not.toContain("Available Balance")
+    expect(panel).not.toContain("Current Balance")
+    expect(panel).toContain(HELD)
+
+    // Getting past it needs authority: a supervisor id and an override code.
+    expect(panel).toContain('title="Supervisor ID"')
+    expect(panel).toContain('title="Authorization Code"')
+    expect(panel).toContain('<input type="submit" value="Authorize">')
+  })
+)
+
+it.effect("a supervisor override releases the hold, and a bad one does not", () =>
+  Effect.gen(function* () {
+    const { get, post } = yield* openCore
+    const identifying = { memberNumber: "77777", accountNumber: HELD }
+
+    const released = yield* post("/account/panel", {
+      ...identifying,
+      supervisorId: "SUP7",
+      authorizationCode: "4417"
+    })
+    expect(released).toContain("Available Balance")
+    expect(released).toContain("$2,730.11")
+    expect(released).toContain("Current Balance")
+    expect(released).toContain("$2,905.60")
+    expect(released).toContain("overridden by supervisor SUP7")
+
+    const rejected = yield* post("/account/panel", {
+      ...identifying,
+      supervisorId: "SUP7",
+      authorizationCode: "nope"
+    })
+    expect(rejected).toContain("Authorization not accepted")
+    expect(rejected).not.toContain("Available Balance")
+
+    // The POST answers with the panel itself, so releasing the hold is one page
+    // load inside the frame and the outer Account Detail page never moves.
+    expect(yield* get(`/account?memberNumber=77777&accountNumber=${HELD}`)).not.toContain(
+      "Available Balance"
+    )
+  })
+)
+
+it.effect("a supervisor override cannot arrive on a query string at all", () =>
+  Effect.gen(function* () {
+    const { get } = yield* openCore
+    const base = `?memberNumber=77777&accountNumber=${HELD}`
+    const credentials = "&supervisorId=SUP7&authorizationCode=4417"
+
+    // The form is a POST and the route reads the credentials from the body only,
+    // so this URL -- the exact one the old GET form produced, and the one that
+    // ended up in `page.url()` and therefore in Evidence -- releases nothing. A
+    // credential that cannot be put in a URL cannot be read out of one later.
+    for (const route of ["/account/panel", "/account"]) {
+      const withCredentials = yield* get(`${route}${base}${credentials}`)
+      expect(withCredentials, `${route} honoured a query-string override`).not.toContain(
+        "Available Balance"
+      )
+    }
+    // The panel itself is still showing the refusal, so the assertion above is
+    // about the override being ignored rather than about the page being empty.
+    expect(yield* get(`/account/panel${base}${credentials}`)).toContain("ACCOUNT RESTRICTED")
+
+    // And the form a person is shown says so: a GET form is what serialises the
+    // typed value into the address bar, so the method is the fix.
+    const panel = yield* get(`/account/panel${base}`)
+    expect(panel).toContain('<form method="post" action="/account/panel">')
+    expect(panel).not.toMatch(/<form method="get"[^>]*>[\s\S]*?Authorization Code/)
+  })
+)
+
+it.effect("the sign-on password is read from the body, never from the URL", () =>
+  Effect.gen(function* () {
+    const { core, get } = yield* openCore
+
+    // Same class of defect, same fix: `operatorPassword` is a declared sensitive
+    // input, but "the scrubber will catch it" is a worse guarantee than the
+    // credential never being in an address bar in the first place.
+    expect(yield* get("/signon")).toContain('<form method="post" action="/signon">')
+
+    const viaUrl = yield* Effect.promise(() =>
+      fetch(`${core.origin}/signon?password=hunter2`, { redirect: "manual" })
+    )
+    expect(viaUrl.status).toBe(200)
+    expect(yield* Effect.promise(() => viaUrl.text())).toContain("Operator Sign On")
+
+    const viaBody = yield* Effect.promise(() =>
+      fetch(`${core.origin}/signon`, {
+        method: "POST",
+        body: new URLSearchParams({ password: "hunter2" }),
+        redirect: "manual"
+      })
+    )
+    expect(viaBody.status).toBe(302)
+  })
+)

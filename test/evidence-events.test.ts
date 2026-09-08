@@ -1,0 +1,301 @@
+/**
+ * Evidence as a contract.
+ *
+ * SPEC: "Schema validates the union on write. That makes the evidence itself a
+ * contract, and makes 'no model decided anything in replay' assertable by a test
+ * over the files." A log that accepts anything is not evidence of anything, so
+ * the writer's rejection of a malformed event is as much the product as its
+ * acceptance of a valid one.
+ *
+ * The scrubbing seam is checked here too. Ticket 08 supplies the real scrubber;
+ * what ticket 03 owes it is a single point where one can be inserted and be sure
+ * of seeing everything.
+ */
+
+import { mkdtempSync, readFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { it } from "@effect/vitest"
+import { Effect, Layer } from "effect"
+import { expect } from "vitest"
+import {
+  type EvidenceEvent,
+  type SecretRegistry,
+  Evidence,
+  EvidenceEventSchema,
+  KINDS_FORBIDDEN_IN_REPLAY,
+  evidenceFiles,
+  noSecrets,
+  secretRegistry
+} from "@cua/evidence"
+
+const withEvidence = <A, E>(
+  body: (evidence: Evidence["Service"], directory: string) => Effect.Effect<A, E>,
+  scrubber: SecretRegistry = noSecrets(),
+  allowUnredactedScreenshots = false
+) =>
+  Effect.gen(function* () {
+    const root = mkdtempSync(join(tmpdir(), "cua-evidence-test-"))
+    const layer: Layer.Layer<Evidence, unknown> = evidenceFiles({
+      root,
+      allowUnredactedScreenshots,
+      runId: "r1",
+      sessionId: "s1",
+      scrubber
+    })
+    return yield* Effect.gen(function* () {
+      const evidence = yield* Evidence
+      return yield* body(evidence, join(root, "r1"))
+    }).pipe(Effect.provide(layer))
+  }).pipe(Effect.scoped)
+
+const linesOf = (directory: string): ReadonlyArray<EvidenceEvent> =>
+  readFileSync(join(directory, "events.jsonl"), "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as EvidenceEvent)
+
+it.live("stamps the envelope on every event so records join up afterwards", () =>
+  withEvidence((evidence, directory) =>
+    Effect.gen(function* () {
+      yield* evidence.record({ kind: "outcome", code: "SUCCESS", detail: "first" })
+      yield* evidence.record({ kind: "outcome", stepId: "step-2", code: "SUCCESS", detail: "second" })
+
+      const written = linesOf(directory)
+      expect(written.map((event) => event.seq)).toEqual([0, 1])
+      expect(written.every((event) => event.runId === "r1" && event.sessionId === "s1")).toBe(true)
+      expect(written[1]?.stepId).toBe("step-2")
+    })
+  )
+)
+
+it.live("refuses to write an event that does not satisfy the schema", () =>
+  withEvidence((evidence, directory) =>
+    Effect.gen(function* () {
+      // A malformed event is what a future ticket's bug looks like from here, and
+      // a log that swallowed it would be worse than no log.
+      const rejected = yield* evidence
+        .record({ kind: "outcome", code: 404 } as never)
+        .pipe(Effect.flip)
+      expect(rejected._tag).toBe("EvidenceUnwritable")
+      expect(rejected.reason).toContain("schema")
+
+      // Nothing partial reached the file.
+      expect(() => linesOf(directory)).toThrow()
+    })
+  )
+)
+
+it.live("passes every string through the scrubber before it is written", () =>
+  withEvidence(
+    (evidence, directory) =>
+      Effect.gen(function* () {
+        yield* evidence.record({
+          kind: "observe",
+          url: "http://example/member?memberNumber=12345",
+          title: "Member 12345",
+          frames: ["main"],
+          accessibility: 'cell "12345"'
+        })
+
+        // Ticket 08's real scrubber replaces declared sensitive values with a
+        // labelled placeholder. What this pins is that it will see all of them —
+        // nested, in arrays, in fields nobody thought to list — from one place.
+        const written = JSON.stringify(linesOf(directory))
+        expect(written).not.toContain("12345")
+        expect(written).toContain("[redacted:memberId]")
+      }),
+    secretRegistry([{ label: "memberId", text: "12345" }])
+  )
+)
+
+it.live("writes a screenshot beside the log, unscrubbed and stated as such", () =>
+  withEvidence((evidence, directory) =>
+    Effect.gen(function* () {
+      yield* evidence.attach("final.png", new Uint8Array([137, 80, 78, 71]))
+      expect(readFileSync(join(directory, "final.png")).byteLength).toBe(4)
+      expect(readFileSync(join(directory, "README.txt"), "utf8")).toContain("NOT redacted")
+    }), noSecrets(), true
+  )
+)
+
+it("defines every event kind SPEC lists, including the ones replay may never emit", () => {
+  const kinds = new Set(
+    EvidenceEventSchema.members.map(
+      (member) => (member.fields.kind as { readonly literal: string }).literal
+    )
+  )
+
+  const SPEC_KINDS = [
+    "run.start",
+    "observe",
+    "decide",
+    "policy.check",
+    "action",
+    "checkpoint",
+    "outcome",
+    "assist.request",
+    "assist.proposal",
+    "intervention.raise",
+    "intervention.human_action",
+    "intervention.resolve",
+    "run.end"
+  ]
+  for (const kind of SPEC_KINDS) expect(kinds, `SPEC lists ${kind}`).toContain(kind)
+
+  // `decide` has to be a thing that could have been written for "a replay run
+  // contains no decide event" to be a claim worth testing.
+  expect(KINDS_FORBIDDEN_IN_REPLAY).toEqual(["decide"])
+
+  // Seven additions to SPEC's list, and every group is added for the reason SPEC
+  // itself gives for `assist.*` having its own kinds rather than reusing
+  // `decide`.
+  //
+  // The `recovery.*` three: getting past a transient state unattended must not
+  // be able to hide inside an ordinary `action` or a re-run `checkpoint`.
+  //
+  // `assist.declined` (ticket 15): a consultation that produced no proposal must
+  // say so and say why. Without it, a rung that could not reach a model and a
+  // rung whose answer was dropped on the floor look identical in the log, and
+  // "every assisted-recovery decision recorded as evidence" would hold only for
+  // the decisions that went well.
+  //
+  // `intervention.observed`: a value the system *saw* a person type into the
+  // live screen, registered for redaction and named by its field. Not an
+  // `intervention.human_action`, and the difference is load-bearing rather than
+  // tidy: `intervention.resolve` says out loud that an auditor can re-derive
+  // ADR-0004's classification from the human_action events plus the one
+  // question, and an observation is not something the operator reported doing.
+  // Counting one as an action would turn "the operator changed nothing" into
+  // "the operator acted" for exactly the row a Business Outcome depends on.
+  //
+  // `assist.target_proposal` (ticket 16): a proposed *outcome* is something the
+  // run may act on and a proposed *control* is something only a person may act
+  // on. One kind for both would put "the model classified this state" and "the
+  // model suggested a button to somebody" on the same line.
+  //
+  // `override.applied` (ticket 16): a run against a tenant executes the base
+  // capability plus that tenant's confirmed delta, and which document actually
+  // ran is the first thing an auditor asks. Without it the log of a run against
+  // an institution whose button reads Find is identical to one against an
+  // institution whose button reads Search.
+  //
+  // Pinning the whole set here means a further kind is a decision somebody has
+  // to make on purpose.
+  const RECOVERY_KINDS = ["recovery.detected", "recovery.attempt", "recovery.resolved"]
+  const ASSIST_KINDS = ["assist.declined", "assist.target_proposal"]
+  const TENANT_KINDS = ["override.applied"]
+  const CAPTURE_KINDS = ["intervention.observed"]
+  expect(kinds).toEqual(
+    new Set([
+      ...SPEC_KINDS,
+      ...RECOVERY_KINDS,
+      ...ASSIST_KINDS,
+      ...TENANT_KINDS,
+      ...CAPTURE_KINDS
+    ])
+  )
+})
+
+// ---------------------------------------------------------------------------
+// One run, one directory
+// ---------------------------------------------------------------------------
+
+it.effect("a second writer on the same run is refused, rather than interleaving two sessions", () =>
+  Effect.gen(function* () {
+    const root = mkdtempSync(join(tmpdir(), "cua-exclusive-"))
+    const open = (sessionId: string) =>
+      Effect.gen(function* () {
+        const evidence = yield* Evidence
+        yield* evidence.record({
+          kind: "run.start",
+          mode: "replay",
+          capability: "c",
+          version: "1.0.0",
+          baseUrl: "http://127.0.0.1:4173",
+          inputs: []
+        })
+      }).pipe(
+        Effect.provide(evidenceFiles({ root, runId: "shared", sessionId, scrubber: noSecrets() }))
+      )
+
+    yield* open("session-one")
+
+    // `seq` is promised monotonic within a run. A second writer opened on the
+    // same runId would start its own counter at zero and append to the same
+    // file, so the log would carry two sessions with a seq that goes backwards.
+    // The writer refuses instead, and says which directory it would not reuse.
+    const second = yield* Effect.result(open("session-two"))
+    expect(second._tag).toBe("Failure")
+    if (second._tag === "Failure") {
+      expect((second.failure as { path: string }).path).toContain("shared")
+    }
+
+    // The first run's log is intact and untouched.
+    const lines = readFileSync(join(root, "shared", "events.jsonl"), "utf8").trim().split("\n")
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]!).sessionId).toBe("session-one")
+  })
+)
+
+it.live("keeps sealed schema tags and generated run identifiers stable when secrets collide", () =>
+  withEvidence((evidence, directory) => Effect.gen(function*() {
+    yield* evidence.record({ kind: "action", action: "action", target: "action success allow risky r1 s1" })
+    yield* evidence.record({ kind: "policy.check", action: "fill", subject: "success",
+      verdict: "allow", reason: "allow risky", policy: "test-policy", risk: "risky" })
+    yield* evidence.record({ kind: "run.end", result: "success", summary: "success", durationMillis: 1 })
+    const records = linesOf(directory)
+    expect(records.map((event) => event.kind)).toEqual(["action", "policy.check", "run.end"])
+    expect(records.every((event) => event.runId === "r1" && event.sessionId === "s1")).toBe(true)
+    expect(records[0]).toMatchObject({ action: "[redacted:private]", target: "[redacted:private] [redacted:private] [redacted:private] [redacted:private] [redacted:private] [redacted:private]" })
+    expect(records[1]).toMatchObject({ verdict: "allow", risk: "risky", reason: "[redacted:private] [redacted:private]" })
+    expect(records[2]).toMatchObject({ result: "success", summary: "[redacted:private]" })
+  }), secretRegistry(["action", "success", "allow", "risky", "r1", "s1"].map((text) => ({ label: "private", text }))))
+)
+
+
+it.live("does not persist binary evidence without explicit synthetic-data opt-in", () =>
+  withEvidence((evidence, directory) => Effect.gen(function*() {
+    const refused = yield* evidence.attach("final.png", new Uint8Array([137, 80, 78, 71])).pipe(Effect.flip)
+    expect(refused.reason).toContain("synthetic-data opt-in")
+    expect(() => readFileSync(join(directory, "final.png"))).toThrow()
+    expect(readFileSync(join(directory, "README.txt"), "utf8")).toContain("Screenshots are disabled")
+  })))
+
+it.live("shares discovery diagnostics protection with handoff writers without changing compiler secrets", () => {
+  const registry = secretRegistry([{ label: "memberId", text: "65432" }])
+  return withEvidence((evidence, directory) => Effect.gen(function*() {
+    const handoffScrub = evidence.scrub
+    const handoffRecord = evidence.record
+    expect(handoffScrub("Morgan Ellsworth 65432")).toBe("Morgan Ellsworth [redacted:memberId]")
+
+    const publicTerms = new Set<string>()
+    yield* evidence.protectDiagnostics((text) => {
+      let protectedText = text
+      for (const term of ["Morgan", "Ellsworth", "savings", "action", "r1", "65432"]) {
+        if (!publicTerms.has(term)) protectedText = protectedText.replaceAll(term, "[redacted:goal]")
+      }
+      return protectedText
+    })
+
+    yield* handoffRecord({ kind: "intervention.human_action", operator: "reviewer",
+      detail: "Helped Morgan Ellsworth with member 65432 and savings action r1" })
+    expect(handoffScrub("Morgan Ellsworth 65432")).toBe("[redacted:goal] [redacted:goal] [redacted:memberId]")
+    expect(registry.labels()).toEqual(["memberId"])
+    expect(registry.scrub("Morgan Ellsworth savings")).toBe("Morgan Ellsworth savings")
+
+    // Approved public vocabulary may grow, and every existing writer and scrub
+    // reference must see the current protection rather than a captured snapshot.
+    publicTerms.add("savings")
+    expect(handoffScrub("savings Morgan")).toBe("savings [redacted:goal]")
+    yield* handoffRecord({ kind: "action", action: "action", target: "savings Morgan" })
+    const disk = readFileSync(join(directory, "events.jsonl"), "utf8")
+    expect(disk).not.toContain("Morgan")
+    expect(disk).not.toContain("Ellsworth")
+    expect(disk).not.toContain("65432")
+    const records = linesOf(directory)
+    expect(records.map((event) => event.kind)).toEqual(["intervention.human_action", "action"])
+    expect(records.every((event) => event.runId === "r1" && event.sessionId === "s1")).toBe(true)
+    expect(records[1]).toMatchObject({ action: "[redacted:goal]", target: "savings [redacted:goal]" })
+  }), registry)
+})
