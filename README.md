@@ -1,17 +1,18 @@
 # Computer-use automation coding exercise
 
 This repository is my solution to interface.ai's engineering take-home assignment,
-"Computer-Use Automation System." The assignment asks for a working backend that
-uses a language model to learn a task in an application with no API, saves the
-successful flow as a reusable capability, then runs it again without model
-decisions. It also asks for explicit error handling, safety rules, evidence and
-human takeover of the live session.
+"Computer-Use Automation System." The assignment asks for a system that uses a
+language model to complete a task through an application's UI, records the
+successful flow as a reusable capability, then replays it without model decisions.
+It also asks for explicit error handling, safety rules, evidence and human
+takeover of the live session. It leaves the target application and architecture
+to the candidate.
 
-We built Heritage Core, a fictitious banking application, as the target. We then
-built the automation that operates it through real Chromium. The example task is
-to find a member, open their savings account and return the available and current
-balances. All institutions, members, accounts and credentials in the demo are
-synthetic. This is a coding exercise, not a connection to a real bank.
+I chose to build a backend automation system and Heritage Core, a fictitious
+banking application to test it against. The automation operates Heritage Core
+through real Chromium. The example task is to find a member, open their savings
+account and return the available and current balances. All institutions, members,
+accounts and credentials in the demo are synthetic.
 
 Start with the local demo below. The [recorded proof](#proof-that-it-works) includes
 a genuine model-driven discovery run, its compiled capability, later replays and
@@ -73,8 +74,8 @@ misleading member-number field. A member can have two accounts that both match
 "Savings." Reaching the account page does not prove the balance panel has loaded.
 The automation must check the screen after each step before it can report success.
 
-The fixture has two tenant configurations of the same fictional vendor product.
-They share the synthetic member book; they demonstrate UI configuration differences.
+I created two tenant configurations of the same fictional vendor product.
+They share the synthetic member book and demonstrate UI configuration differences.
 
 | Configuration | Heritage Core | Community CU |
 | --- | --- | --- |
