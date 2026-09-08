@@ -70,7 +70,7 @@ Add `--headed` to watch the browser. Ordinary replay does not need a model key.
 The banking application imitates an older back-office member-services system.
 Both tenants follow the same flow: member search, member detail, account selection,
 then account detail. The pages use server-rendered HTML, nested tables,
-near-duplicate field names and full page loads. Heritage Core displays balances
+near-duplicate field names and complete page reloads. Heritage Core displays balances
 in an unnamed iframe; Community CU displays them inline. There are no test IDs
 or application API shortcuts for the automation.
 

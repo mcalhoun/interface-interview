@@ -2,7 +2,7 @@
 
 This is my solution to the computer-use automation assignment. I chose to build a backend automation system and a fictional banking application with two tenants, Heritage Core and Community CU. Both run the same application code with different branding, control labels and balance layouts. All data is synthetic.
 
-The task is to find a member, open an account and return its balances. Discovery uses a language model to operate the live UI. Compilation records the successful flow as a typed, versioned capability. Replay executes that capability without asking a model to choose actions. I used nested tables, ambiguous captions and full page loads to test control selection and verification after navigation.
+The task is to find a member, open an account and return its balances. Discovery uses a language model to operate the live UI. Compilation records the successful flow as a typed, versioned capability. Replay executes that capability without asking a model to choose actions. I used nested tables, ambiguous captions and complete page reloads to test control selection and verification after navigation.
 
 I chose TypeScript and Effect to make service dependencies explicit. Ordinary replay requires browser access, policy, evidence and session ownership, but no model service. Tests check both that dependency boundary and the production configuration. Optional model assistance is a separate path with distinct evidence. Bun runs the commands and local application; files hold capabilities and run evidence. A database or queue would add deployment work without helping demonstrate this flow. [ADR-0003](docs/adr/0003-no-model-in-replay-proven-by-service-requirements.md) explains the replay dependency checks and their limits.
 
