@@ -65,7 +65,9 @@ it.live("demonstrates a same-session handoff, ownership exclusion, recorded acti
     expect(outcome.snapshot.resolved[0]?.actions.some((action) => action.kind !== "note")).toBe(true)
     const returned = outcome.events.findIndex((event) => event.kind === "intervention.resolve")
     expect(returned).toBeGreaterThan(0)
-    expect(outcome.events.slice(returned + 1).some((event) => event.kind === "checkpoint")).toBe(true)
+    expect(outcome.events.slice(returned + 1).some((event) =>
+      event.kind === "checkpoint" && event.stepId === "open-account" && event.verdict === "held"
+    )).toBe(true)
     expect(outcome.events.at(-1)).toMatchObject({ kind: "run.end", result: "success" })
     const text = JSON.stringify(outcome.events)
     for (const secret of ["77777", "SUP7", "4417"]) expect(text).not.toContain(secret)

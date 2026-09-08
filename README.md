@@ -63,7 +63,8 @@ repeating this example after it has already written a document.
 `discover --json` writes a checked compilation envelope to standard output.
 Human-readable status goes to standard error. Private-data compiler checks run
 inside discovery, while the raw goal and parameter values are still in memory.
-The exported artifact is separate from the scrubbed diagnostic trajectory.
+The workflow returns scrubbed diagnostics separately from its checked artifact;
+its private trajectory stays inside Discovery.
 `compile` validates the staged artifact and applies the requested public naming
 metadata. It rejects legacy raw-trajectory input. The envelope's marker is not a
 signature, and it does not establish reviewer approval or let another process

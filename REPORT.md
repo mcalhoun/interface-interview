@@ -12,7 +12,7 @@ Each YAML document has a capability name, immutable version, typed inputs and ou
 
 Values record whether they come from an input parameter, a constant or an earlier extraction. This prevents a member number from becoming a fixed string in a reusable flow. Entry locations are paths; deployment supplies the origin. Parsing checks references between parameters, steps, outputs and outcomes. Every step needs a checkpoint, because a successful click alone does not prove the intended screen appeared.
 
-Compilation runs while the private goal and discovered values remain in memory. It rejects literals and prose that retain those values. Discovery's JSON export is a checked artifact envelope, separate from its scrubbed diagnostic trajectory. The later compile command validates that staged artifact; it cannot repeat private-data checks after their inputs have been erased. The envelope is provenance metadata, not a cryptographic signature or an approval decision.
+The Discovery workflow owns its growing secret registry and compiles while the private goal and discovered values remain in memory. It returns scrubbed diagnostics and an explicit compilation result; executable callers never receive its private trajectory. Compilation rejects literals and prose that retain known private values, including quoted representations. The later compile command validates the checked artifact envelope; it cannot repeat private-data checks after their inputs have been erased. The envelope records provenance but does not provide a cryptographic signature or an approval decision.
 
 A resumed discovery intervention becomes an explicit human dependency in the artifact. Replay requests the missing manual work if the next-state checkpoint fails, then verifies the operator's result. It never invents omitted actions. Entry URLs containing query or fragment values become required sensitive runtime parameters without defaults.
 
@@ -21,6 +21,8 @@ A single successful run supplies no evidence for unseen business states. Their c
 ## Determinism & error handling
 
 Replay resolves each Target against a fresh accessibility snapshot, applies explicit matching rules and checks the resulting state. List selection compares an input against labels in a named region. Ambiguous matches stop with candidate descriptions; the engine does not choose an arbitrary account. Bounded polling accommodates delayed loads without adding model decisions.
+
+The Checkpoint module owns observation and read authorization for ordinary verification, declared outcomes and recovery detection. It checks Session ownership during polling and repeats Policy authorization when the page changes. Callers no longer enumerate assertions or construct a separately authorized reader.
 
 The result contract separates success with outputs, expected business outcomes, hard failures and requests for intervention. `MEMBER_NOT_FOUND` is a business answer. A transient overlay can trigger a declared remedy. An expired session can recover when credentials and policy permit it. An ambiguous Target or prohibited action stops with the step, expectation and observed state.
 
@@ -45,6 +47,8 @@ Handoff transfers ownership of the same live session. Automation pauses; an Oper
 Resumption verifies the resulting screen. A person's claim of success does not replace the checkpoint. A stopped action and an action whose checkpoint failed also need different resume behavior: the returned checkpoint determines whether a person completed the stopped action or merely restored its control.
 
 Learning requires a recorded intervention and an executor-supplied failure cause bound to the same capability, version and step. An authority-requiring intervention can teach the capability to request a person next time. A business-outcome amendment requires evidence that observation alone sufficed. An empty free-text action list cannot prove that nobody changed the screen. Existing automated handoff demonstrations use scripted operators through the real interface; they do not establish that a person completed those demonstrations at a keyboard.
+
+Learning captures the run's live Evidence scrubber before its services close. Amendment and Tenant Override operations propose, validate and save together, so secrets learned from later screen or Operator activity remain protected when the document is written. Immutable versions and the existing confirmation requirements still apply.
 
 ## Safety
 
