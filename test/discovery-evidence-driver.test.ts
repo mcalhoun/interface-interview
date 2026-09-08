@@ -134,7 +134,19 @@ it.each([
     ])
     expect(exitCode, stderr).toBe(succeeds ? 0 : 1)
     if (succeeds) expect(stdout).toContain("already complete")
-    else expect(stderr).toContain("Discovery evidence run failed")
+    else {
+      expect(stderr).toContain("Discovery evidence run failed")
+      const probe = Bun.spawn([process.execPath, "--eval", `
+        import { Effect } from ${JSON.stringify(import.meta.resolve("effect"))}
+        import { resumeDiscoveryEvidence } from ${JSON.stringify(resolve("apps/demo/src/support/drive-the-discovery-run.ts"))}
+        await Effect.runPromise(resumeDiscoveryEvidence(${JSON.stringify(directory)}))
+      `], { cwd: root, stdout: "pipe", stderr: "pipe" })
+      const [probeExit, , probeError] = await Promise.all([
+        probe.exited, new Response(probe.stdout).text(), new Response(probe.stderr).text()
+      ])
+      expect(probeExit).toBe(1)
+      expect(probeError).toContain("neither capability store matches the recorded source and digest")
+    }
     expect(readFileSync(join(directory, "source.json"), "utf8")).toBe(readFileSync(join(original, "source.json"), "utf8"))
     if (legacy === "stale") expect(readFileSync(join(old, "1.5.0.yaml"), "utf8")).toBe(readFileSync(source, "utf8") + "\n# stale copy\n")
   } finally {
