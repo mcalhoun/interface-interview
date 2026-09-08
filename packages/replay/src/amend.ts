@@ -334,7 +334,7 @@ const summaryFor = (record: InterventionRecord, list: string, wanted: string): s
       `and a run that ends here has succeeded.`,
     ``,
     `What that person said about it, in their own words: ` +
-      `${JSON.stringify(withoutTrailingStop(record.detail ?? "(nothing recorded)"))}`
+      `${JSON.stringify(record.detail ?? "(nothing recorded)")}`
   ].join("\n")
 
 /**
@@ -416,7 +416,7 @@ const requiresHumanSummaryFor = (record: InterventionRecord, checkpoint: string)
       `is not evidence of safety.`,
     ``,
     `What that person said about it, in their own words: ` +
-      `${JSON.stringify(withoutTrailingStop(record.detail ?? "(nothing recorded)"))}`
+      `${JSON.stringify(record.detail ?? "(nothing recorded)")}`
   ].join("\n")
 
 /**

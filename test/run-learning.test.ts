@@ -113,3 +113,70 @@ it("writes neither kind of learning without the Operator's confirmation", async 
     expect(existsSync(join(root, "overrides"))).toBe(false)
   }))
 })
+
+const quotedSecrets = [
+  'operator-private-"492817"',
+  "operator-private-\\492817\\",
+  "operator-private-\n492817-end",
+  'operator-private-"\\\n492817"'
+]
+
+it.each(quotedSecrets)("refuses a late secret quoted in Amendment prose: %j", async (secret) => {
+  await withEvidence((root) => Effect.gen(function* () {
+    const learning = yield* learningForIntervention({ artifact, record: { ...record(), detail: secret } })
+    yield* (yield* Evidence).redact([{ label: "operator", text: secret }])
+    const saved = learning.amendment({ directory: join(root, "artifacts") })
+    expect(saved._tag).toBe("Refused")
+    expect(existsSync(join(root, "artifacts"))).toBe(false)
+  }))
+})
+
+it.each(quotedSecrets)("refuses a late secret escaped by Override serialization: %j", async (secret) => {
+  await withEvidence((root) => Effect.gen(function* () {
+    const episode = overrideRecord()
+    const learning = yield* learningForIntervention({ artifact, record: {
+      ...episode, intervention: { ...episode.intervention, proposal: {
+        forTarget: 'button "Search"', control: secret, confidence: 0.99,
+        rationale: "The lookup submit button", proposalRef: "assist/1"
+      } }
+    } })
+    yield* (yield* Evidence).redact([{ label: "operator", text: secret }])
+    const saved = learning.override({ directory: join(root, "overrides"), tenant: "community-cu" })
+    expect(saved._tag).toBe("Refused")
+    expect(existsSync(join(root, "overrides"))).toBe(false)
+  }))
+})
+
+it("checks nested JSON quotations in learned provenance without a fixed encoding limit", async () => {
+  await withEvidence((root) => Effect.gen(function* () {
+    const secret = 'operator-private-"\\\n492817"'
+    let detail = secret
+    for (let depth = 0; depth < 8; depth++) detail = JSON.stringify(detail)
+    const learning = yield* learningForIntervention({ artifact, record: { ...record(), detail } })
+    yield* (yield* Evidence).redact([{ label: "operator", text: secret }])
+    expect(learning.amendment({ directory: join(root, "artifacts") })._tag).toBe("Refused")
+    expect(existsSync(join(root, "artifacts"))).toBe(false)
+  }))
+})
+
+it("preserves trailing whitespace while checking quoted Operator detail", async () => {
+  await withEvidence((root) => Effect.gen(function* () {
+    const secret = "operator-private-\n492817\n"
+    const learning = yield* learningForIntervention({ artifact, record: { ...record(), detail: secret } })
+    yield* (yield* Evidence).redact([{ label: "operator", text: secret }])
+    expect(learning.amendment({ directory: join(root, "artifacts") })._tag).toBe("Refused")
+    expect(existsSync(join(root, "artifacts"))).toBe(false)
+  }))
+})
+
+it("checks quoted text even after an unmatched prose quotation mark", async () => {
+  await withEvidence((root) => Effect.gen(function* () {
+    const secret = 'operator-private-"492817"'
+    const learning = yield* learningForIntervention({
+      artifact: { ...artifact, title: 'Public "separator ' + JSON.stringify(secret) }, record: record()
+    })
+    yield* (yield* Evidence).redact([{ label: "operator", text: secret }])
+    expect(learning.amendment({ directory: join(root, "artifacts") })._tag).toBe("Refused")
+    expect(existsSync(join(root, "artifacts"))).toBe(false)
+  }))
+})

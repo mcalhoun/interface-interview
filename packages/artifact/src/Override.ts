@@ -58,6 +58,7 @@
  * first principles — the only way to find out is to look at it.
  */
 
+import { carriesSensitiveText } from "./privacy.ts"
 import { Result, Schema } from "effect"
 import type { CapabilityArtifact, Step } from "./CapabilityArtifact.ts"
 import { ArtifactInvalid, formatArtifact } from "./parse.ts"
@@ -279,8 +280,8 @@ export const declareTargetOverride = (
   }
 
   // The same rule an Amendment is held to, applied to the same kind of document:
-  // if scrubbing what would be written changes it, it carries a runtime value and
-  // must not be stored. The line count is reported and the value never is.
+  // if its text carries a known runtime value, it must not be stored.
+  // Check before serialization can escape that text. Never report the value.
   //
   // The type makes the scrubber required; this is the runtime half, because the
   // failure it prevents is a silent one — a delta compared against an unchanged
@@ -292,9 +293,7 @@ export const declareTargetOverride = (
         "be checked is refused rather than written"
     )
   }
-  const rendered = JSON.stringify(override)
-  const scrubbed = options.scrub(rendered)
-  if (scrubbed !== rendered) {
+  if (carriesSensitiveText(override, options.scrub)) {
     return refuse(
       `the override would carry a value this run treats as sensitive. A tenant override ` +
         `outlives the run it was discovered in and carries no runtime data (ADR-0008)`
