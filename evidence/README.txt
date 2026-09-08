@@ -99,8 +99,8 @@ files in the current checkout:
   test/support/drive-the-*.ts      apps/demo/src/support/drive-the-*.ts
 
 These moves do not change saved capability bytes. The discovery resume command
-resolves the former default capability store to its current location and still
-checks the artifact against its recorded digest, compilation receipt and copy.
+checks both the current and former default capability stores. It accepts a copy
+only when it matches the recorded digest, compilation receipt and evidence copy.
 Other custom store locations retain their recorded meaning.
 
 Historical source manifests describe their recorded revisions. Their paths and

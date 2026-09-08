@@ -131,10 +131,18 @@ const verifiedSource = (directory: string, artifactsRoot: string) => {
   return { version, stored, path, sha256: hash(path) }
 }
 
-// Retained receipts name the former default store. Resolve its new location
-// without changing the recorded path or relaxing the artifact digest checks.
-const receiptStore = (recorded: string): string =>
-  recorded === "artifacts" && !existsSync(recorded) ? ARTIFACTS_DIRECTORY : recorded
+const receiptStore = (directory: string, receipt: typeof SourceReceipt.Type): string => {
+  if (receipt.artifactsRoot !== "artifacts") return receipt.artifactsRoot
+  for (const candidate of [ARTIFACTS_DIRECTORY, receipt.artifactsRoot]) {
+    try {
+      const source = verifiedSource(directory, candidate)
+      if (source.version === receipt.version && source.sha256 === receipt.sha256) return candidate
+    } catch {
+      // A leftover store may be missing this version or contain a different copy.
+    }
+  }
+  throw new Error("Discovery source mismatch: neither capability store matches the recorded source and digest")
+}
 
 /** Older interrupted runs can acquire a receipt only after the same checks. */
 const writeSourceReceipt = (directory: string, artifactsRoot = ARTIFACTS_DIRECTORY, lookupRoot = artifactsRoot) => {
@@ -155,10 +163,11 @@ const writeSourceReceipt = (directory: string, artifactsRoot = ARTIFACTS_DIRECTO
 /** Append a fresh deterministic completion attempt; never rediscover or overwrite. */
 export const resumeDiscoveryEvidence = (directory: string) => Effect.gen(function* () {
     const receiptPath = join(directory, "source.json")
-    const recordedArtifactsRoot = existsSync(receiptPath)
-      ? Schema.decodeUnknownSync(SourceReceipt)(JSON.parse(readFileSync(receiptPath, "utf8"))).artifactsRoot
-      : ARTIFACTS_DIRECTORY
-    const artifactsRoot = receiptStore(recordedArtifactsRoot)
+    const recorded = existsSync(receiptPath)
+      ? Schema.decodeUnknownSync(SourceReceipt)(JSON.parse(readFileSync(receiptPath, "utf8")))
+      : undefined
+    const recordedArtifactsRoot = recorded?.artifactsRoot ?? ARTIFACTS_DIRECTORY
+    const artifactsRoot = recorded ? receiptStore(directory, recorded) : ARTIFACTS_DIRECTORY
     const receipt = writeSourceReceipt(directory, recordedArtifactsRoot, artifactsRoot)
     if (existsSync(join(directory, "manifest.json"))) {
       say(`Discovery evidence is already complete: ${directory}`)

@@ -1,6 +1,6 @@
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import { planDiscoveryRun } from "../apps/demo/src/support/drive-the-discovery-run.ts"
 
@@ -100,5 +100,44 @@ it("resolves the recorded default store after relocation without changing receip
     await expect(Effect.runPromise(resumeDiscoveryEvidence(directory))).rejects.toThrow("source mismatch")
   } finally {
     rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+it.each([
+  { legacy: "empty", current: "matching", succeeds: true },
+  { legacy: "stale", current: "matching", succeeds: true },
+  { legacy: "matching", current: "stale", succeeds: true },
+  { legacy: "stale", current: "stale", succeeds: false }
+])("checks historical discovery with $legacy legacy and $current current stores", async ({ legacy, current: currentState, succeeds }) => {
+  const root = mkdtempSync(join(tmpdir(), "cua-leftover-store-"))
+  const original = "evidence/discovery/live-2026-09-08T14-45-52-190Z-132a40d2"
+  const capability = "member.account-balance.discovered"
+  const current = join(root, "config/capabilities", capability)
+  const old = join(root, "artifacts", capability)
+  const directory = join(root, "run")
+  try {
+    for (const path of [current, old, directory]) mkdirSync(path, { recursive: true })
+    for (const name of ["source.json", "compilation.json", "manifest.json"]) {
+      copyFileSync(join(original, name), join(directory, name))
+    }
+    const source = join("config/capabilities", capability, "1.5.0.yaml")
+    copyFileSync(source, join(current, "1.5.0.yaml"))
+    copyFileSync(source, join(directory, "1.5.0.yaml"))
+    if (legacy === "matching") copyFileSync(source, join(old, "1.5.0.yaml"))
+    if (legacy === "stale") writeFileSync(join(old, "1.5.0.yaml"), readFileSync(source, "utf8") + "\n# stale copy\n")
+    if (currentState === "stale") writeFileSync(join(current, "1.5.0.yaml"), readFileSync(source, "utf8") + "\n# stale copy\n")
+    const child = Bun.spawn([process.execPath, resolve("apps/demo/src/support/drive-the-discovery-run.ts"), "--resume", directory], {
+      cwd: root, stdout: "pipe", stderr: "pipe"
+    })
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()
+    ])
+    expect(exitCode, stderr).toBe(succeeds ? 0 : 1)
+    if (succeeds) expect(stdout).toContain("already complete")
+    else expect(stderr).toContain("Discovery evidence run failed")
+    expect(readFileSync(join(directory, "source.json"), "utf8")).toBe(readFileSync(join(original, "source.json"), "utf8"))
+    if (legacy === "stale") expect(readFileSync(join(old, "1.5.0.yaml"), "utf8")).toBe(readFileSync(source, "utf8") + "\n# stale copy\n")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })
