@@ -14,7 +14,9 @@ The recording's assertions verify:
 - Replay returns available balance `2730.11 USD` and current balance `2905.60 USD`.
 - Every event in the main run retains one Session ID, and its text contains none of the tested raw member or supervisor values.
 
-The [receipt](receipt.json) contains source revision `146b9b3b0c8ee709db46b3baf1a0c390529c1779`, timestamps, ownership history, result and video hashes. The [main event log](run/events.jsonl) supports the recording. The implementation matches all 182 files in the prior [tested source manifest](../2026-09-08-architecture/source-files.sha256). Later changes add this proof and README links only.
+The [receipt](receipt.json) contains source revision `146b9b3b0c8ee709db46b3baf1a0c390529c1779`, timestamps, ownership history, result and video hashes. The [main event log](run/events.jsonl) supports the recording. The recorded implementation matches all 182 files in the prior [tested source manifest](../2026-09-08-architecture/source-files.sha256). PR review later improved refusal diagnostics, avoided decoding fully redacted quoted text, and tightened tests. It did not change the handoff behavior shown here.
+
+Review found that the original recorder could accept a missing return event or missing Session IDs. The saved evidence contains both. [verify.mjs](verify.mjs) requires a non-empty receipt Session ID, the same ID on every event, and a held account Checkpoint after an explicit return event. It also verifies that six altered evidence cases fail these checks. Run `bun evidence/verification/2026-09-08-handoff-video/verify.mjs` from the repository root. The original recording script remains unchanged to preserve its provenance.
 
 Both browser recordings run at original speed and are aligned using page-creation timestamps. Labels and captions identify the views and describe assertions that passed during the run. The final frames are held briefly so the result can be read. No application state was fabricated. The uploaded MP4 was fetched and its SHA-256 matched the local file byte for byte. It has H.264 video and no audio.
 

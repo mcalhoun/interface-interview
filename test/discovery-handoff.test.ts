@@ -69,6 +69,11 @@ it.live("discovery hands over its live browser, guards ownership, records action
       expect(result.diagnostics.conclusion).toBe("reached")
       expect(result.diagnostics.sessionId).toBe("same-session")
       expect(result.compilation.status).toBe("refused")
+      if (result.compilation.status === "refused") {
+        expect(result.compilation.reasons).toContain(
+          "the artifact contains registered private runtime data. Keep run-specific values behind caller-supplied parameter references."
+        )
+      }
       const snapshot = yield* control.snapshot
       expect(snapshot.owner).toBe("automation")
       expect(snapshot.resolved).toHaveLength(1)

@@ -137,6 +137,7 @@ export const scrubbing = (values: Iterable<SensitiveText>): Scrubber => {
       if (literal === undefined) continue
       const start = match.index
       const end = start + literal.length
+      if (raw.some((span) => span.start <= start && span.end >= end)) continue
       let decoded: unknown
       try { decoded = JSON.parse(literal) } catch { continue }
       if (typeof decoded !== "string") continue

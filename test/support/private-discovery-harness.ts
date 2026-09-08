@@ -24,7 +24,7 @@ export interface DiscoveryRun {
 }
 
 export const runDiscovery = (
-  options: DiscoveryHarnessOptions
+  options: Omit<DiscoveryHarnessOptions, "compilation">
 ): Effect.Effect<DiscoveryRun, unknown, never> =>
   Effect.scoped(
     Effect.gen(function*() {
@@ -74,4 +74,3 @@ export const runDiscovery = (
       return { trajectory, events, evidenceDirectory: directory }
     })
   ) as Effect.Effect<DiscoveryRun, unknown, never>
-

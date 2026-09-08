@@ -86,7 +86,10 @@ export const driveDiscoveryRun = (options: Parameters<typeof planDiscoveryRun>[0
     if (result.diagnostics.conclusion !== "reached") {
       throw new Error(`Discovery stopped: ${result.diagnostics.conclusion}; evidence: ${plan.out}`)
     }
-    if (result.compilation.status !== "compiled") throw new Error("Discovery compilation was refused")
+    if (result.compilation.status !== "compiled") {
+      const reasons = result.compilation.status === "refused" ? `: ${result.compilation.reasons.join("; ")}` : ""
+      throw new Error(`Discovery compilation was not stored (${result.compilation.status})${reasons}`)
+    }
     say(`Discovery reached the goal in ${result.diagnostics.steps.length} steps and compiled the recorded flow.`)
     const compilation = result.compilation.stored
     const written = writeArtifact(plan.artifactsRoot, compilation.artifact)
