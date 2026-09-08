@@ -1,6 +1,6 @@
 $ bun run --bun vitest run
 
- RUN  v4.1.11 /Users/matt/code/github.com/mcalhoun/interface-interview
+ RUN  v4.1.11 <repository-root>
 
 
  Test Files  50 passed (50)

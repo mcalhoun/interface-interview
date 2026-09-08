@@ -7,3 +7,5 @@ The fixes preserve scrubbed compilation refusal reasons, skip decoding quoted te
 The [video evidence verifier](../2026-09-08-handoff-video/verify.mjs) passed against the original 35 recorded events. It also rejected six altered cases covering missing return, missing or empty receipt Session IDs, missing or inconsistent event Session IDs, and a missing account Checkpoint after return. The recording scripts and video remain the original capture.
 
 A fresh read-only review of these fixes found no actionable correctness or comment issues.
+
+Retained test log headers use `<repository-root>` in place of the developer-local checkout path. Commands, runner versions and test results are unchanged. This normalization also covers the earlier verification logs.
