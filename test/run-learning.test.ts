@@ -121,6 +121,22 @@ const quotedSecrets = [
   'operator-private-"\\\n492817"'
 ]
 
+it.each(["operator-private-492817.", "operator-private-492817 ", "operator-private-492817\n", 'operator-private-"492817".'])(
+  "preserves complete action detail when checking a late secret: %j", async (secret) => {
+    await withEvidence((root) => Effect.gen(function* () {
+      const episode = record()
+      const learning = yield* learningForIntervention({ artifact, record: {
+        ...episode, classification: "resolved", nextTime: "always_stop_here",
+        intervention: { ...episode.intervention, failureCause: { type: "checkpoint_failed" } },
+        actions: [{ at: "2026-09-08T12:00:15.000Z", kind: "confirmed_action", detail: secret }]
+      } })
+      yield* (yield* Evidence).redact([{ label: "operator", text: secret }])
+      expect(learning.amendment({ directory: join(root, "artifacts") })._tag).toBe("Refused")
+      expect(existsSync(join(root, "artifacts"))).toBe(false)
+    }))
+  }
+)
+
 it.each(quotedSecrets)("refuses a late secret quoted in Amendment prose: %j", async (secret) => {
   await withEvidence((root) => Effect.gen(function* () {
     const learning = yield* learningForIntervention({ artifact, record: { ...record(), detail: secret } })

@@ -352,7 +352,7 @@ const actionEvidenceFor = (record: InterventionRecord): string => {
   const observed = [...new Set(record.observed)]
   const evidence = [
     ...(actions.length === 0 ? [] : [
-      `recorded ${actions.length} action(s) on the live session (${actions.map((action) => withoutTrailingStop(action.detail)).join("; ")})`
+      `recorded ${actions.length} action(s) on the live session (${actions.map((action) => JSON.stringify(action.detail)).join("; ")})`
     ]),
     ...(observed.length === 0 ? [] : [
       `the session observed changes in ${observed.length} field(s) or URL parameters (${observed.join(", ")})`
