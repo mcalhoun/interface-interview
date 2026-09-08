@@ -118,7 +118,6 @@ import { publicResult } from "./diagnostics.ts"
 import { Effect, Ref, Result } from "effect"
 import {
   type Action,
-  type Assertion,
   type CapabilityArtifact,
   type Checkpoint,
   type OutputValue,
@@ -171,14 +170,12 @@ import {
 import {
   type CheckpointOutcome,
   type StepReadings,
-  assertionsOf,
-  evaluate,
+  createCheckpointEvaluator,
   resolveValue
 } from "./checkpoint.ts"
 import { chooseItem } from "./selection.ts"
 import { urlSecrets } from "./redaction.ts"
 import {
-  type RecoveryBlocked,
   type RecoveryOutcome,
   type RecoveryPort,
   type RemedyReport,
@@ -349,16 +346,9 @@ export const replayCapability = (
       )
     }
 
-    /**
-     * What a Checkpoint is allowed to touch, with the same registration on it.
-     *
-     * A Checkpoint polls a live screen, and the screen it is waiting for is
-     * routinely the first one to render a personal field -- the member detail
-     * page arrives in the Checkpoint of the search step, not in the observation
-     * before it. Handing evaluation the bare adapter would leave that first
-     * sighting unregistered.
-     */
-    const perception = { observe: observing, resolveTarget: surface.resolveTarget }
+    const checkpoints = createCheckpointEvaluator({
+      surface: { ...surface, observe: observing }, policy, session, evidence, inputs, readings
+    })
 
     /** The half of a result that is the same whatever class it turns out to be. */
     const common = {
@@ -380,7 +370,7 @@ export const replayCapability = (
      * permission of a system you do not control is not asking permission. Every
      * Action in this engine goes through here; nothing calls the adapter's
      * `navigate`, `click`, `fill` or `extract` anywhere else, and
-     * `test/replay-has-no-model.test.ts` counts the call sites to keep it that way.
+     * behavioral tests verify denial prevents the adapter operation.
      *
      * `page` is the URL the run is on when it asks. Policy checks every Action
      * against the origin it happens *on*, and a navigation additionally against
@@ -440,60 +430,6 @@ export const replayCapability = (
         }
 
         return yield* act(surface)
-      })
-
-    /**
-     * Authorises every read a Checkpoint declares, then hands back the reader.
-     *
-     * A `targetReads` assertion reads a live control, which is an `extract` by
-     * any other name, and an `extract` the Policy engine never saw would be a
-     * second path to the adapter — the one thing a chokepoint cannot have. So the
-     * reads are put through the same gate the Step's own Action went through, and
-     * the function that performs them does not exist until the gate has allowed
-     * them all. `EvaluationContext` takes only `observe` and `resolveTarget` off
-     * the adapter, so Checkpoint evaluation has no way to construct one itself.
-     *
-     * Authorisation is per Checkpoint rather than per poll: evaluation retries the
-     * same read it was permitted, and asking again on every hundred-millisecond
-     * tick would bury the record under duplicates without deciding anything new.
-     *
-     * **Two invariants to keep, and they are different.**
-     *
-     * *Every assertion kind that calls `read` must be one this loop authorises.*
-     * Today that is `targetReads` and only `targetReads`. Adding
-     * an assertion that reads a control has to add it here as well, or that read
-     * reaches the adapter unjudged.
-     *
-     * *Every place a Checkpoint keeps assertions must reach this loop.* Callers
-     * pass `assertionsOf(checkpoint)`, which is `expect` **and** the `when` of
-     * every declared outcome branch. `evaluate` puts a branch's conditions to the
-     * screen through the same `context.read` as `expect`, so authorising only
-     * `expect` left a branch's `targetReads` reaching `surface.extract` with no
-     * `policy.check` in front of it and no deny path. The set lives in `checkpoint.ts` beside `evaluate`
-     * so the two cannot drift.
-     *
-     * The assertions are a parameter rather than being read off the Step, because
-     * a Recoverable Condition's `detect` list is made of the same Assertions and
-     * is evaluated against the same live screen. A detection that read a control
-     * outside this gate would be the same bypass, reopened one rung lower.
-     */
-    const authorisedReader = (
-      step: Step,
-      page: string,
-      assertions: ReadonlyArray<Assertion>
-    ): Effect.Effect<
-      (target: SurfaceTarget) => Effect.Effect<string, TargetFailure>,
-      ReplayFailure | EvidenceUnwritable
-    > =>
-      Effect.gen(function* () {
-        for (const assertion of assertions) {
-          if (assertion.assert !== "targetReads") continue
-          const target = toSurfaceTarget(assertion.target)
-          yield* authorised(step, "extract", describeTarget(target), page, () =>
-            Effect.succeed(undefined)
-          )
-        }
-        return (target: SurfaceTarget) => surface.extract(target)
       })
 
     // -----------------------------------------------------------------------
@@ -587,23 +523,7 @@ export const replayCapability = (
         if (performed.read !== undefined) readings.set(step.id, performed.read)
         const read = performed.read
 
-        /**
-         * Ask the Checkpoint once, from the page the run is actually on.
-         *
-         * Available more than once on purpose: once now, once after a recovery
-         * has done something about a declared transient condition, and once after
-         * an Operator has been in the Session. `evaluate` is idempotent, so
-         * re-asking is how the run finds out what happened rather than being told.
-         *
-         * `page` is a parameter rather than a closed-over constant because the
-         * calls are authorised against *different* pages. The first is wherever
-         * the Action left the run; the later ones are wherever a remedy or an
-         * Operator left it, which is not something the engine may assume. A
-         * Checkpoint's reads are `extract`s and pass the same gate as any other
-         * action, so each pass asks Policy again rather than reusing a permission
-         * granted before the screen moved.
-         */
-        const verify = (page: string) => verifyCheckpoint(step, page)
+        const verify = () => verifyCheckpoint(step)
 
         // ---------------------------------------------------------------
         // The ladder below a failed Checkpoint
@@ -648,7 +568,7 @@ export const replayCapability = (
         //      rung having had its turn for an *unclassified* state does not
         //      type-check either.
         let outcome: CheckpointOutcome = performed._tag === "CompletedByOperator"
-          ? performed.checkpoint : yield* verify(performed.url)
+          ? performed.checkpoint : yield* verify()
         let escalation: Escalated | undefined
         // Possibly already true: an Operator may have been in the Session before
         // the Action could run at all, in which case this Step has had a person
@@ -738,27 +658,12 @@ export const replayCapability = (
               if (handed.resumed) {
                 afterHandoff = true
 
-                // Where the person left the run. Observed rather than assumed:
-                // between the pause and here, the only thing that moved the Surface
-                // was a human being.
-                const resumedAt = yield* observing.pipe(
-                  Effect.catch((unavailable) =>
-                    Effect.fail(
-                      fail({
-                        reason: "surface_failed",
-                        expected: "to observe the surface control was returned on",
-                        observed: unavailable.reason
-                      })
-                    )
-                  )
-                )
-
                 // Deliberately not another trip round the recovery rung. The
                 // Artifact's rules were tried against this Checkpoint already and
                 // did not clear it; a person has since acted, and if the screen
                 // still disagrees the answer is a record for someone to read, not
                 // another automated retry on top of a manual one.
-                outcome = yield* verify(resumedAt.url)
+                outcome = yield* verify()
                 if (outcome.verdict === "failed") {
                   // They said they had resolved it and the screen disagrees. Not a
                   // failure of the automation, and not something to escalate a
@@ -959,7 +864,7 @@ export const replayCapability = (
         )
 
         if (handed.operatorActed && step.action.type !== "extract") {
-          const checkpoint = yield* verifyCheckpoint(step, resumedAt.url)
+          const checkpoint = yield* verifyCheckpoint(step)
           if (checkpoint.verdict !== "failed") {
             return {
               performed: { _tag: "CompletedByOperator", read: undefined, url: resumedAt.url, checkpoint },
@@ -980,18 +885,19 @@ export const replayCapability = (
         )
       })
 
-    const verifyCheckpoint = (step: Step, page: string): Effect.Effect<CheckpointOutcome, StepProblem> =>
-      Effect.gen(function* () {
-        const readTarget = yield* authorisedReader(step, page, assertionsOf(step.checkpoint))
-        return yield* evaluate(
-          { surface: perception, inputs, readings, read: readTarget },
-          step.checkpoint
-        ).pipe(Effect.catch((unavailable) => Effect.fail<StepProblem>(failing(step)({
-          reason: "surface_failed",
-          expected: `to verify: ${step.checkpoint.description}`,
-          observed: unavailable.reason
-        }))))
-      }).pipe(Effect.tap((outcome) => recordVerdict(step, outcome)))
+    const verifyCheckpoint = (step: Step): Effect.Effect<CheckpointOutcome, StepProblem> =>
+      checkpoints.evaluate(step, step.checkpoint).pipe(
+        Effect.catch((problem) =>
+          "_tag" in problem && problem._tag === "SurfaceUnavailable"
+            ? Effect.fail<StepProblem>(failing(step)({
+                reason: "surface_failed",
+                expected: `to verify: ${step.checkpoint.description}`,
+                observed: problem.reason
+              }))
+            : Effect.fail<StepProblem>(problem)
+        ),
+        Effect.tap((outcome) => recordVerdict(step, outcome))
+      )
 
     /** The Step's Action, with a zero-match failure caught rather than propagated. */
     const attemptAction = (
@@ -1130,16 +1036,6 @@ export const replayCapability = (
           )
         )
 
-      /** The Checkpoint's own reads, re-authorised against wherever the run is now. */
-      const evaluateHere = (
-        checkpoint: Checkpoint
-      ): Effect.Effect<CheckpointOutcome, RecoveryBlocked> =>
-        Effect.gen(function* () {
-          const at = yield* observing
-          const readTarget = yield* authorisedReader(step, at.url, assertionsOf(checkpoint))
-          return yield* evaluate({ surface: perception, inputs, readings, read: readTarget }, checkpoint)
-        })
-
       return {
         perform: (remedy) => attempt(remedy.action, remedy.intent, false),
 
@@ -1172,16 +1068,9 @@ export const replayCapability = (
           return reports
         }),
 
-        recheck: evaluateHere(step.checkpoint),
+        recheck: checkpoints.evaluate(step, step.checkpoint),
 
-        detected: (assertions: ReadonlyArray<Assertion>) =>
-          evaluateHere({
-            description: "the screen matches a declared recoverable condition",
-            expect: assertions,
-            // One look. Detection asks what is on screen now; waiting for a
-            // condition to appear would be waiting for trouble.
-            withinMillis: 0
-          }).pipe(Effect.map((result) => result.verdict === "held")),
+        detected: (assertions) => checkpoints.detect(step, assertions),
 
         // Stamped with the Step being recovered, so the `recovery.*` events sit
         // in the log beside the `checkpoint` they answer rather than floating at

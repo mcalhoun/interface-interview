@@ -196,24 +196,14 @@ it("every surface action in the engine goes through the policy chokepoint", () =
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/(^|[^:])\/\/.*$/gm, "$1")
 
-  // Every acting call on the adapter must sit inside an `authorised(...)` block.
-  // Counting them is crude and that is the point: another one appearing outside
-  // the chokepoint changes this number and fails here (SPEC user story 57).
-  //
-  // Five, not four. Ticket 07 added the fifth: a Checkpoint's `targetReads`
-  // assertion reads a live control, which is an `extract`, and it used to reach
-  // the adapter from `checkpoint.ts` without passing Policy. It now runs from
-  // `authorisedReader`, which puts every read a Checkpoint declares through the
-  // same gate before the function that performs them is built. `checkpoint.ts`
-  // has none left, which the next assertion pins.
+  // Step Actions remain in the engine. Checkpoint extraction is owned by the
+  // evaluator, whose denial behavior is covered with real Chromium in
+  // checkpoint-authorization.test.ts.
   const acting = [...engine.matchAll(/surface\s*\.\s*(navigate|click|fill|extract)\s*\(/g)]
-  expect(acting).toHaveLength(5)
+  expect(acting).toHaveLength(4)
 
-  // And the engine is the only file in the package that touches an acting method.
-  // Checkpoint evaluation takes `observe` and `resolveTarget` off the adapter and
-  // nothing else — its `EvaluationContext` has no other methods to reach for.
   for (const { name, text } of readdirSync(REPLAY_SOURCE)
-    .filter((file) => file.endsWith(".ts") && file !== "engine.ts")
+    .filter((file) => file.endsWith(".ts") && file !== "engine.ts" && file !== "checkpoint.ts")
     .map((file) => ({ name: file, text: readFileSync(join(REPLAY_SOURCE, file), "utf8") }))) {
     expect(text, `${name} acts on the surface outside the policy gate`).not.toMatch(
       /surface\s*\.\s*(navigate|click|fill|extract)\s*\(/

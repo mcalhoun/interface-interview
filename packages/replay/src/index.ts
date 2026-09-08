@@ -34,7 +34,7 @@ export type { OverrideRequest, ProposedOverride } from "./override.ts"
 export { proposeOverride } from "./override.ts"
 
 export type { CheckpointOutcome, EvaluationContext, StepReadings } from "./checkpoint.ts"
-export { DEFAULT_CHECKPOINT_MILLIS, evaluate as evaluateCheckpoint, resolveValue } from "./checkpoint.ts"
+export { DEFAULT_CHECKPOINT_MILLIS, createCheckpointEvaluator, resolveValue } from "./checkpoint.ts"
 
 export type { AppliedOverride, ReplayRequest } from "./engine.ts"
 export { replayCapability } from "./engine.ts"
