@@ -1,0 +1,52 @@
+{
+  "verifiedAt": "2026-09-08T16:32:34.922Z",
+  "provenance": "Scripted Operator judgment through the real local operator interface and the same real Chromium Surface Adapter used by Replay. No person at a keyboard is claimed.",
+  "screenshots": "Synthetic fixture only. Screenshot pixels are not redacted.",
+  "sessionId": "session-handoff-blocked",
+  "owners": [
+    "automation",
+    "paused",
+    "operator",
+    "resume_requested",
+    "automation"
+  ],
+  "result": {
+    "result": "intervention_required",
+    "capability": "member.account-balance",
+    "version": "1.1.0",
+    "runId": "handoff-blocked",
+    "sessionId": "session-handoff-blocked",
+    "evidenceDirectory": "/var/folders/n7/58y6vxbj30vd6gjq4pk1d55m0000gn/T/cua-handoff-rEJaN9/handoff-blocked",
+    "steps": [
+      {
+        "id": "open-member-search",
+        "intent": "Land on the Member Services search screen with an empty search form.",
+        "action": "navigate",
+        "checkpoint": "held"
+      },
+      {
+        "id": "enter-member-number",
+        "intent": "Type the member number into the search panel's own number field.",
+        "action": "fill",
+        "checkpoint": "held"
+      },
+      {
+        "id": "run-member-search",
+        "intent": "Submit the search and arrive at the member's record.",
+        "action": "click",
+        "checkpoint": "held"
+      },
+      {
+        "id": "open-account",
+        "intent": "Open the account the caller asked for, whichever of them that is.",
+        "action": "selectFromList",
+        "checkpoint": "failed"
+      }
+    ],
+    "reason": "Account Detail is showing, with the balance panel loaded inside its frame.: the operator could not act on this state: No supervisor is available to authorize the synthetic hold.",
+    "stepId": "open-account",
+    "accessibility": "- table:\n  - rowgroup:\n    - row:\n      - cell \"HERITAGE CORE Member Services\":\n        - generic: HERITAGE CORE\n        - text: Member Services\n    - row:\n      - cell \"MSS 4.02.11 | TELLER OPR[redacted:url] | BRANCH [redacted:url] | F1 HELP F3 EXIT\"\n    - row:\n      - cell\n    - row:\n      - cell:\n        - table:\n          - rowgroup:\n            - row:\n              - cell:\n                - table:\n                  - rowgroup:\n                    - row:\n                      - cell \"Account Detail\"\n                - table:\n                  - rowgroup:\n                    - row:\n                      - cell:\n                        - iframe:\n                          - generic:\n                            - table:\n                              - rowgroup:\n                                - row:\n                                  - cell \"Primary Savings\"\n                                - row:\n                                  - cell \"Account Number\"\n                                  - cell \"[redacted:url]\"\n                                - row:\n                                  - cell \"Account Type\"\n                                  - cell \"SAVINGS\"\n                                - row:\n                                  - cell \"Member Number\"\n                                  - cell \"[redacted:memberId]\"\n                                - row:\n                                  - cell \"Status\"\n                                  - cell \"Restricted\"\n                            - table:\n                              - rowgroup:\n                                - row:\n                                  - cell \"Account Restriction\"\n                                - row:\n                                  - cell \"ACCOUNT RESTRICTED - SUPERVISOR AUTHORIZATION REQUIRED\"\n                                - row:\n                                  - cell \"Restriction Code\"\n                                  - cell \"SUP-HOLD-02\"\n                                - row:\n                                  - cell \"Balances are withheld on this account pending supervisor authorization. A supervisor must enter an override code to display the account.\"\n                                - row:\n                                  - cell \"Supervisor ID\"\n                                  - cell:\n                                    - textbox \"Supervisor ID\"\n                                - row:\n                                  - cell \"Authorization Code\"\n                                  - cell:\n                                    - textbox \"Authorization Code\"\n                                - row:\n                                  - cell:\n                                    - button \"Authorize\"\n                - link \"Return to Member Detail\":\n                  - /cursor: pointer\n                  - /url: /member?memberNumber=[redacted:memberId]\n    - row:\n      - cell\n    - row:\n      - cell \"HERITAGE FINANCIAL SYSTEMS INC ALL TRANSACTIONS LOGGED\""
+  },
+  "observedFields": [],
+  "events": "run/events.jsonl"
+}

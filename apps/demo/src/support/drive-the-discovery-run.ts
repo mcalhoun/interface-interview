@@ -9,20 +9,17 @@ import { createHash, randomUUID } from "node:crypto"
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import {
-  DEFAULT_BOUNDS, DEFAULT_PROVIDER, discover, discoveredSecrets, providerFor,
-  serializeCompilation
+  DEFAULT_BOUNDS, DEFAULT_PROVIDER, discoveryRun, providerFor
 } from "@cua/agent"
 import {
   ARTIFACTS_DIRECTORY, CapabilityArtifactSchema, describeOutputValue, formatArtifact, listVersions, loadArtifact,
-  nextMinorVersion, prepareInputs, writeArtifact
+  nextMinorVersion, writeArtifact
 } from "@cua/artifact"
-import { evidenceFiles } from "@cua/evidence"
 import { serve } from "@cua/legacy-core"
 import {
-  DEFAULT_POLICY, POLICIES_DIRECTORY, declassifierFor, loadPolicy,
-  heritagePublicGoalTerms, originAuthorizer, policyFrom, sensitivityPolicy
+  DEFAULT_POLICY, POLICIES_DIRECTORY, loadPolicy,
+  heritagePublicGoalTerms, originAuthorizer, policyFrom
 } from "@cua/policy"
-import { proposeAmendment, scrubberFor } from "@cua/replay"
 import { automationOwnedSession } from "@cua/session"
 import { playwrightSurface } from "@cua/surface"
 import { Effect, Layer, Result, Schema } from "effect"
@@ -71,36 +68,36 @@ export const driveDiscoveryRun = (options: Parameters<typeof planDiscoveryRun>[0
     if (Result.isFailure(policy)) throw new Error(policy.failure.message)
     const baseUrl = (yield* serve({ port: 0 })).origin
     const sessionId = randomUUID()
-    const secrets = discoveredSecrets()
     say(`model: ${MODEL}; capability: ${CAPABILITY}@${plan.version}; evidence: ${plan.out}`)
-    const trajectory = yield* discover({
+    const workflow = yield* discoveryRun({
       goal: GOAL, entry: "/", baseUrl, runId: "discovery", sessionId,
-      secrets, bounds: DEFAULT_BOUNDS, publicGoalTerms: heritagePublicGoalTerms, modelName: MODEL, providerName: DEFAULT_PROVIDER
-    }).pipe(Effect.provide(Layer.mergeAll(
+      evidence: { root: plan.out, allowUnredactedScreenshots: true,
+        policy: "Every discovered parameter is sensitive; raw goals are never persisted." },
+      compilation: { capability: CAPABILITY, version: plan.version,
+        product: "Heritage Core Member Services (MSS 4.02.11)" },
+      bounds: DEFAULT_BOUNDS, publicGoalTerms: heritagePublicGoalTerms, modelName: MODEL, providerName: DEFAULT_PROVIDER
+    })
+    const result = yield* workflow.execute.pipe(Effect.provide(Layer.mergeAll(
       playwrightSurface({ headless: true, authorizeOrigin: originAuthorizer(policy.success) }),
       policyFrom(policy.success),
       automationOwnedSession(sessionId),
-      evidenceFiles({
-        root: plan.out, runId: "discovery", sessionId, scrubber: secrets.registry, allowUnredactedScreenshots: true,
-        policy: "Every discovered parameter is sensitive; raw goals are never persisted."
-      }),
       providerFor({ provider: DEFAULT_PROVIDER, model: MODEL })
     )))
-    if (trajectory.conclusion.conclusion !== "reached") {
-      throw new Error(`Discovery stopped: ${trajectory.conclusion.conclusion}; evidence: ${plan.out}`)
+    if (result.diagnostics.conclusion !== "reached") {
+      throw new Error(`Discovery stopped: ${result.diagnostics.conclusion}; evidence: ${plan.out}`)
     }
-    say(`Discovery reached the goal in ${trajectory.steps.length} steps; compiling the recorded flow.`)
-    const compilation = serializeCompilation(trajectory, {
-      capability: CAPABILITY, version: plan.version, publicGoalTerms: heritagePublicGoalTerms,
-      product: "Heritage Core Member Services (MSS 4.02.11)"
-    })
-    if (Result.isFailure(compilation)) throw new Error(compilation.failure.message)
-    const written = writeArtifact(plan.artifactsRoot, compilation.success.artifact)
+    if (result.compilation.status !== "compiled") {
+      const reasons = result.compilation.status === "refused" ? `: ${result.compilation.reasons.join("; ")}` : ""
+      throw new Error(`Discovery compilation was not stored (${result.compilation.status})${reasons}`)
+    }
+    say(`Discovery reached the goal in ${result.diagnostics.steps.length} steps and compiled the recorded flow.`)
+    const compilation = result.compilation.stored
+    const written = writeArtifact(plan.artifactsRoot, compilation.artifact)
     if (Result.isFailure(written)) throw new Error(written.failure.message)
     const stored = loadArtifact(plan.artifactsRoot, CAPABILITY, plan.version)
     if (Result.isFailure(stored)) throw new Error(stored.failure.message)
     copyFileSync(written.success, join(plan.out, `${plan.version}.yaml`))
-    writeFileSync(join(plan.out, "compilation.json"), JSON.stringify(compilation.success, null, 2) + "\n", { flag: "wx" })
+    writeFileSync(join(plan.out, "compilation.json"), JSON.stringify(compilation, null, 2) + "\n", { flag: "wx" })
 
     writeSourceReceipt(plan.out, plan.artifactsRoot)
     return yield* resumeDiscoveryEvidence(plan.out)
@@ -201,19 +198,14 @@ export const resumeDiscoveryEvidence = (directory: string) => Effect.gen(functio
     cpSync(episode.evidenceDirectory, join(completionOut, "intervention"), { recursive: true, errorOnExist: true, force: false })
     const record = episode.snapshot.resolved[0]
     if (record === undefined || record.actions.length !== 0) throw new Error("Expected an observational intervention record")
-    const inputs = prepareInputs(stored.success.capability, stored.success.inputs, { memberId: "88888" },
-      declassifierFor(sensitivityPolicy, stored.success.capability))
-    if (Result.isFailure(inputs)) throw new Error(inputs.failure.message)
-    const proposal = proposeAmendment({
-      artifact: stored.success, record, scrub: scrubberFor(inputs.success), version: plan.learnedVersion
-    })
+    const learning = episode.learning[0]
+    if (learning === undefined) throw new Error("Expected captured learning")
+    const proposal = learning.amendment({ directory: plan.artifactsRoot, version: plan.learnedVersion })
     if (proposal._tag !== "Amended") throw new Error(`Learning did not produce an amendment: ${proposal._tag}`)
-    say(`The observed intervention produced a ${proposal.learnedClass} amendment; saving and replaying it.`)
-    const learnedWritten = writeArtifact(plan.artifactsRoot, proposal.amended)
-    if (Result.isFailure(learnedWritten)) throw new Error(learnedWritten.failure.message)
+    say(`The observed intervention produced a ${proposal.learnedClass} amendment; replaying its saved version.`)
     const learned = loadArtifact(plan.artifactsRoot, CAPABILITY, plan.learnedVersion)
     if (Result.isFailure(learned)) throw new Error(learned.failure.message)
-    copyFileSync(learnedWritten.success, join(completionOut, `${plan.learnedVersion}.yaml`))
+    copyFileSync(proposal.path, join(completionOut, `${plan.learnedVersion}.yaml`))
     writeFileSync(join(completionOut, "amendment.diff"), proposal.diff + "\n", { flag: "wx" })
     const exceptional = yield* replay({
       artifact: learned.success, inputs: { memberId: "88888" }, runId: "replay-learned-outcome"
@@ -248,22 +240,17 @@ export const resumeDiscoveryEvidence = (directory: string) => Effect.gen(functio
       cpSync(episode.evidenceDirectory, join(completionOut, `learn-${sample.name}`), { recursive: true, errorOnExist: true, force: false })
       const record = episode.snapshot.resolved[0]
       if (record === undefined) throw new Error("Expected a completed checkpoint intervention")
-      const inputs = prepareInputs(finalArtifact.capability, finalArtifact.inputs, { memberId: sample.input },
-        declassifierFor(sensitivityPolicy, finalArtifact.capability))
-      if (Result.isFailure(inputs)) throw new Error(inputs.failure.message)
-      const amended = proposeAmendment({
-        artifact: finalArtifact, record, scrub: scrubberFor(inputs.success), confirmedOutcome: sample
-      })
+      const learning = episode.learning[0]
+      if (learning === undefined) throw new Error("Expected captured checkpoint learning")
+      const amended = learning.amendment({ directory: plan.artifactsRoot, confirmedOutcome: sample })
       if (amended._tag !== "Amended") throw new Error(`Checkpoint learning refused: ${amended._tag}`)
-      const saved = writeArtifact(plan.artifactsRoot, amended.amended)
-      if (Result.isFailure(saved)) throw new Error(saved.failure.message)
       const loaded = loadArtifact(plan.artifactsRoot, CAPABILITY, amended.amended.version)
       if (Result.isFailure(loaded)) throw new Error(loaded.failure.message)
       finalArtifact = loaded.success
-      copyFileSync(saved.success, join(completionOut, `${finalArtifact.version}.yaml`))
+      copyFileSync(amended.path, join(completionOut, `${finalArtifact.version}.yaml`))
       writeFileSync(join(completionOut, `${sample.name}.diff`), amended.diff + "\n", { flag: "wx" })
       checkpointLessons.push({ code: sample.code, version: finalArtifact.version,
-        artifact: `${finalArtifact.version}.yaml`, sha256: hash(saved.success),
+        artifact: `${finalArtifact.version}.yaml`, sha256: hash(amended.path),
         intervention: `learn-${sample.name}/events.jsonl`, diff: `${sample.name}.diff` })
     }
     const finalReplays: Array<{ name: string; events: string; result: string; code?: string }> = []
@@ -290,7 +277,7 @@ export const resumeDiscoveryEvidence = (directory: string) => Effect.gen(functio
       compiled: { path: writtenPath, copy: `${plan.version}.yaml`, sha256: hash(writtenPath) },
       replay: { events: "replay/events.jsonl", result: happy.result.result, outputs },
       learning: { events: "intervention/events.jsonl", operator: "scripted demonstration over real HTTP session handoff", learnedClass: proposal.learnedClass },
-      amended: { path: learnedWritten.success, copy: `${plan.learnedVersion}.yaml`, sha256: hash(learnedWritten.success), diff: "amendment.diff" },
+      amended: { path: proposal.path, copy: `${plan.learnedVersion}.yaml`, sha256: hash(proposal.path), diff: "amendment.diff" },
       exceptionalReplay: { events: "replay-learned-outcome/events.jsonl", result: exceptional.result.result, code: exceptional.result.code },
       amendedHappyReplay: { events: "replay-learned-success/events.jsonl", result: learnedHappy.result.result },
       checkpointLessons,

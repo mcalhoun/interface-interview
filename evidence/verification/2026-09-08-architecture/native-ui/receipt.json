@@ -1,0 +1,18 @@
+{
+  "provenance": "Codex operated the real local operator page and the existing headed Google Chrome for Testing window through native accessibility UI tools. This is agent-performed UI verification, not a recording of a person at a keyboard.",
+  "sessionId": "642c0364-8a8d-431c-be60-ca7dbbf7ca76",
+  "owners": [
+    "automation",
+    "paused",
+    "operator",
+    "resume_requested",
+    "automation"
+  ],
+  "result": "success",
+  "availableBalance": "2730.11 USD",
+  "currentBalance": "2905.60 USD",
+  "postReturnCheckpoint": "open-account held",
+  "screenshots": "Explicit synthetic fixture opt-in; pixels are not redacted.",
+  "events": "run/events.jsonl",
+  "sourceTiming": "Verified after the Checkpoint refactor e77b16c, while Discovery and privacy work were being completed. The adjacent automated proof verifies final committed source."
+}

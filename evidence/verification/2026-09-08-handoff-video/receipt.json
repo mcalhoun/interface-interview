@@ -1,0 +1,151 @@
+{
+  "sourceCommit": "146b9b3b0c8ee709db46b3baf1a0c390529c1779",
+  "provenance": "Scripted Operator uses the real operator web form and the same Chromium Surface Adapter used by Replay. No person at a keyboard is claimed. Browser capture options are instrumented; no application, Policy, Session or Replay behavior is replaced.",
+  "privacy": "Synthetic fixture values only. Video pixels are unredacted. No audio or desktop capture. Operator token supplied through request headers and omitted from receipts.",
+  "applicationStartedAt": 1788885823828,
+  "operatorStartedAt": 1788885826563,
+  "marks": [
+    {
+      "at": 1788885826609,
+      "text": "Replay paused at the supervisor hold. The operator request includes the stopping context."
+    },
+    {
+      "at": 1788885833178,
+      "text": "The Operator owns the original Session. Automation cannot act."
+    },
+    {
+      "at": 1788885836224,
+      "text": "A competing Replay was refused with control_lost."
+    },
+    {
+      "at": 1788885841018,
+      "text": "The Operator enters synthetic supervisor values in the same application Session."
+    },
+    {
+      "at": 1788885846096,
+      "text": "Authorize releases the hold. Both balances are now visible."
+    },
+    {
+      "at": 1788885849659,
+      "text": "The request records observed field changes and the confirmed action. Future runs must ask a person."
+    },
+    {
+      "at": 1788885854699,
+      "text": "Control returns to automation. Replay verifies the account screen before extracting balances."
+    },
+    {
+      "at": 1788885861263,
+      "text": "Verified success: available 2730.11 USD; current 2905.60 USD. One Session throughout."
+    }
+  ],
+  "owners": [
+    {
+      "at": "2026-09-08T16:43:43.618Z",
+      "owner": "automation",
+      "by": "the session opened"
+    },
+    {
+      "at": "2026-09-08T16:43:46.528Z",
+      "owner": "paused",
+      "by": "automation stopped at step open-account"
+    },
+    {
+      "at": "2026-09-08T16:43:53.174Z",
+      "owner": "operator",
+      "by": "demo.operator took control"
+    },
+    {
+      "at": "2026-09-08T16:44:14.692Z",
+      "owner": "resume_requested",
+      "by": "demo.operator returned control as resolved"
+    },
+    {
+      "at": "2026-09-08T16:44:14.694Z",
+      "owner": "automation",
+      "by": "the run took control back and resumed"
+    }
+  ],
+  "sessionId": "session-hil-video",
+  "result": {
+    "result": "success",
+    "capability": "member.account-balance",
+    "version": "1.1.0",
+    "runId": "hil-video",
+    "sessionId": "session-hil-video",
+    "evidenceDirectory": "/var/folders/n7/58y6vxbj30vd6gjq4pk1d55m0000gn/T/cua-handoff-6gBBGk/hil-video",
+    "steps": [
+      {
+        "id": "open-member-search",
+        "intent": "Land on the Member Services search screen with an empty search form.",
+        "action": "navigate",
+        "checkpoint": "held"
+      },
+      {
+        "id": "enter-member-number",
+        "intent": "Type the member number into the search panel's own number field.",
+        "action": "fill",
+        "checkpoint": "held"
+      },
+      {
+        "id": "run-member-search",
+        "intent": "Submit the search and arrive at the member's record.",
+        "action": "click",
+        "checkpoint": "held"
+      },
+      {
+        "id": "open-account",
+        "intent": "Open the account the caller asked for, whichever of them that is.",
+        "action": "selectFromList",
+        "checkpoint": "held"
+      },
+      {
+        "id": "read-available-balance",
+        "intent": "Read the available balance out of the account panel.",
+        "action": "extract",
+        "checkpoint": "held",
+        "read": "$2,730.11"
+      },
+      {
+        "id": "read-current-balance",
+        "intent": "Read the current ledger balance out of the same panel.",
+        "action": "extract",
+        "checkpoint": "held",
+        "read": "$2,905.60"
+      }
+    ],
+    "outputs": {
+      "availableBalance": {
+        "type": "money",
+        "value": {
+          "amount": 2730.11,
+          "currency": "USD"
+        }
+      },
+      "currentBalance": {
+        "type": "money",
+        "value": {
+          "amount": 2905.6,
+          "currency": "USD"
+        }
+      }
+    }
+  },
+  "events": "run/events.jsonl",
+  "applicationVideoSha256": "9c2235b6ebf9c8743f5acd40d1231f3fd5696ad3237dba20c2b837e413d0468d",
+  "operatorVideoSha256": "c44150d774f01929bbfaad0fdefcf3d827116c7bf6c40698f1cf59ed7bff15d2",
+  "video": {
+    "url": "https://github.com/user-attachments/assets/bd44bf29-4424-434d-be28-df105e95caa3",
+    "sha256": "137e1b3432e7afe0051f02176bfdd240642511ae1ea3cc3a1fff8d3eca999a1f",
+    "bytes": 1815428,
+    "durationSeconds": 39.72,
+    "width": 2000,
+    "height": 1080,
+    "codec": "H.264",
+    "audio": false,
+    "uploadedWith": "gh pr create --attach",
+    "pullRequest": "https://github.com/mcalhoun/interface-interview/pull/2",
+    "remoteContentMatchesLocal": true
+  },
+  "composition": "Two real browser recordings aligned to page-creation timestamps, at original speed. Added labels and event-derived captions. Final frames held for five seconds to read the verified result. No UI states fabricated.",
+  "competingReplayEvidence": "competing-replay/events.jsonl"
+}

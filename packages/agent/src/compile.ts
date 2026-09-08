@@ -78,6 +78,7 @@ import {
   bakedInLiterals,
   currencyOf,
   formatArtifact,
+  carriesSensitiveText,
   parseArtifact,
   requiresHumanCode,
   toSurfaceTarget
@@ -852,16 +853,8 @@ export const compileArtifact = (
   const stored = parseArtifact(`${options.capability}@${options.version}`, yaml)
   if (Result.isFailure(stored)) return refuse(stored.failure.problems)
 
-  const containsPrivateValue = (value: unknown): boolean => {
-    if (typeof value === "string") return scrubPrivate(value) !== value
-    if (Array.isArray(value)) return value.some(containsPrivateValue)
-    if (value !== null && typeof value === "object") {
-      return Object.entries(value).some(([key, item]) => containsPrivateValue(key) || containsPrivateValue(item))
-    }
-    return false
-  }
   const reasons = [
-    ...(containsPrivateValue(stored.success)
+    ...(carriesSensitiveText(stored.success, scrubPrivate)
       ? ["the artifact contains registered private runtime data. Keep run-specific values behind caller-supplied parameter references."] : []),
     ...goalEchoes(stored.success, goalToUse(trajectory.goal)),
     ...typedValuesInFixedText(stored.success, trajectory),

@@ -42,12 +42,8 @@ import { modelAdvisor } from "@cua/agent"
 import {
   OVERRIDES_DIRECTORY,
   applyOverride,
-  loadOverride,
-  prepareInputs,
-  writeOverride
+  loadOverride
 } from "@cua/artifact"
-import { declassifierFor, sensitivityPolicy } from "@cua/policy"
-import { proposeOverride, scrubberFor } from "@cua/replay"
 import { Effect, Result } from "effect"
 import { attendedReplay } from "./handoff-harness.ts"
 import { replay, shippedArtifact } from "./replay-harness.ts"
@@ -165,22 +161,14 @@ const program = Effect.gen(function* () {
   // -----------------------------------------------------------------------
   // 3. What the confirmation turns into, and where it goes.
   // -----------------------------------------------------------------------
-  const prepared = prepareInputs(
-    base.capability,
-    base.inputs,
-    { memberId: MEMBER },
-    declassifierFor(sensitivityPolicy, base.capability)
-  )
-  if (Result.isFailure(prepared)) throw new Error(prepared.failure.message)
-
   const existing = loadOverride(OVERRIDES_DIRECTORY, TENANT, CAPABILITY)
   if (Result.isFailure(existing)) throw new Error(existing.failure.message)
 
-  const proposed = proposeOverride({
-    artifact: base,
+  const learning = episode.learning[0]
+  if (learning === undefined) throw new Error("no captured learning")
+  const proposed = learning.override({
+    directory: OVERRIDES_DIRECTORY,
     tenant: TENANT,
-    record: closed,
-    scrub: scrubberFor(prepared.success),
     ...(existing.success === undefined ? {} : { existing: existing.success })
   })
 
@@ -196,12 +184,7 @@ const program = Effect.gen(function* () {
   let override
   if (proposed._tag === "Confirmed") {
     say(`  CONFIRMED  ${proposed.because}`)
-    const stored = writeOverride(OVERRIDES_DIRECTORY, proposed.override)
-    say(
-      Result.isSuccess(stored)
-        ? `  written to ${stored.success}`
-        : `  not stored: ${stored.failure.message}`
-    )
+    say(`  written to ${proposed.path}`)
     override = proposed.override
   } else if (proposed._tag === "Refused" && existing.success !== undefined) {
     say(`  ALREADY CONFIRMED  ${proposed.refusal.message}`)

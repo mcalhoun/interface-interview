@@ -1,31 +1,8 @@
 /**
- * The Discovery agent: the one place in this system where a model drives.
- *
- * Given a Goal in a sentence and a place to start, it observes a live Surface,
- * decides one action, has that action checked by Policy, executes it, and
- * observes again — until the Goal is met or a stopping condition fires. What it
- * produces is a `Trajectory`, which the compiler turns into a reviewable
- * Capability Artifact.
- *
- * Read in this order:
- *
- *   `Vocabulary.ts`   what the model may propose, and why the toolkit cannot act
- *   `Provenance.ts`   where a typed value came from, and the checks with teeth
- *   `Selection.ts`    the one mistake that would silently break multi-tenant reuse
- *   `Stuck.ts`        knowing when to stop, which matters as much as finishing
- *   `loop.ts`         observe -> decide -> check -> act
- *   `Trajectory.ts`   the compiler's private input
- *
- * Three claims this package is built to make checkable rather than assert:
- *
- *   - **No screenshots reach the decision loop** (ADR-0001). `prompt.ts` builds
- *     text and has no branch that could attach an image. Screenshots are captured
- *     every step and written to Evidence for a person.
- *   - **The provider is a Layer swap.** `provider.ts` is the only file that names
- *     OpenAI; the loop imports `LanguageModel` and nothing else.
- *   - **The toolkit is a vocabulary, not an executor.** Tool-call resolution is
- *     disabled and every handler dies, so a proposal reaches the Surface only
- *     through the Policy gate in `loop.ts`.
+ * Discovery owns the private Goal, secret registry and compiler ordering.
+ * `discoveryRun` supplies shared Evidence and an execution that returns safe
+ * diagnostics and an optional checked compilation. The low-level loop and
+ * Trajectory remain internal compiler/test seams.
  */
 
 export type { GoalDerivedValue, MistaggedValue, ProvenancedValue } from "./Provenance.ts"
@@ -71,8 +48,7 @@ export type {
   DiscoveredSelection,
   DiscoveryConclusion,
   DiscoveryStep,
-  StepOutcome,
-  Trajectory
+  StepOutcome
 } from "./Trajectory.ts"
 export { isCompilable, literalsTyped, parameterNames } from "./Trajectory.ts"
 
@@ -113,12 +89,12 @@ export {
 export type { CompileOptions, StoredCompilation } from "./compile.ts"
 export {
   CompilationRefused,
-  compileArtifact,
-  serializeCompilation,
   PRODUCT_UNIDENTIFIED,
   shapeOf,
   strategyFor
 } from "./compile.ts"
 
-export type { DiscoveryOptions } from "./loop.ts"
-export { DiscoveryFailed, discover } from "./loop.ts"
+export { DiscoveryFailed } from "./loop.ts"
+
+export type { DiscoveryRunOptions, DiscoveryDiagnostics, DiscoveryCompilation, DiscoveryResult } from "./discovery.ts"
+export { discoveryRun } from "./discovery.ts"

@@ -200,8 +200,6 @@ export const proposeOverride = (request: OverrideRequest): ProposedOverride => {
   }
 }
 
-const withoutTrailingStop = (sentence: string): string => sentence.trim().replace(/\.$/, "")
-
 /**
  * How the correspondence was found: the run that failed, and the consultation.
  *
@@ -230,7 +228,7 @@ const discoveredFor = (
       `${confidence.toFixed(2)}. The proposal is at ` +
       `${record.intervention.proposal?.proposalRef ?? "(unrecorded)"} in that run's evidence.`,
     ``,
-    `In its own words: ${JSON.stringify(withoutTrailingStop(rationale))}`,
+    `In its own words: ${JSON.stringify(rationale)}`,
     ``,
     `ADR-0005: the consultation could name a control and could not press one. Nothing was ` +
       `acted on, and this document exists because a person then agreed with it.`
@@ -248,6 +246,6 @@ const confirmedFor = (record: InterventionRecord): string => {
     `Asked "${THE_PROPOSAL_QUESTION}", they answered yes.`,
     ``,
     `What they said about it: ` +
-      `${JSON.stringify(withoutTrailingStop(record.detail ?? "(nothing recorded)"))}`
+      `${JSON.stringify(record.detail ?? "(nothing recorded)")}`
   ].join("\n")
 }

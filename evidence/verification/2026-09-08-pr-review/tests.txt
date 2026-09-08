@@ -1,0 +1,9 @@
+$ bun run --bun vitest run
+
+ RUN  v4.1.11 <repository-root>
+
+
+ Test Files  56 passed (56)
+      Tests  553 passed (553)
+   Start at  13:40:34
+   Duration  24.86s (transform 2.65s, setup 0ms, import 21.89s, tests 273.53s, environment 9ms)

@@ -33,12 +33,9 @@ import { copyFileSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import {
   ARTIFACTS_DIRECTORY,
-  loadArtifact,
-  prepareInputs,
-  writeArtifact
+  diffArtifacts,
+  loadArtifact
 } from "@cua/artifact"
-import { declassifierFor, sensitivityPolicy } from "@cua/policy"
-import { proposeAmendment, scrubberFor } from "@cua/replay"
 import { Effect, Result } from "effect"
 import { attendedReplay } from "./handoff-harness.ts"
 import { replay, shippedArtifact } from "./replay-harness.ts"
@@ -119,34 +116,22 @@ const program = Effect.gen(function* () {
   // -----------------------------------------------------------------------
   // 2. What the episode taught, and the new version it cuts.
   // -----------------------------------------------------------------------
-  const prepared = prepareInputs(
-    before.capability,
-    before.inputs,
-    { memberId: RESTRICTED },
-    declassifierFor(sensitivityPolicy, before.capability)
-  )
-  if (Result.isFailure(prepared)) throw new Error(prepared.failure.message)
-
-  const proposal = proposeAmendment({
-    artifact: before,
-    record: closed,
-    scrub: scrubberFor(prepared.success),
-    version: TO
-  })
+  const learning = episode.learning[0]
+  if (learning === undefined) throw new Error("no captured learning")
+  const saved = learning.amendment({ directory: ARTIFACTS_DIRECTORY, version: TO })
+  const proposal = saved._tag === "NotStored" ? saved.proposal : saved
   if (proposal._tag !== "Amended") {
     throw new Error(`expected an amendment, got ${proposal._tag}: ${JSON.stringify(proposal)}`)
   }
   say(`  LEARNED ${proposal.amended.capability}@${proposal.amended.version} (${proposal.learnedClass})`)
   say(`    ${proposal.because}`)
 
-  const stored = writeArtifact(ARTIFACTS_DIRECTORY, proposal.amended)
-  say(
-    Result.isSuccess(stored)
-      ? `  written to ${stored.success}`
-      : `  not stored: ${stored.failure.message}`
-  )
+  say(saved._tag === "Amended" ? `  written to ${saved.path}`
+    : saved._tag === "NotStored" ? `  not stored: ${saved.failure.message}` : "  nothing stored")
 
-  writeFileSync(join(OUT, `${FROM}-to-${TO}.diff`), `${proposal.diff}\n`)
+  const learned = loadArtifact(ARTIFACTS_DIRECTORY, CAPABILITY, TO)
+  if (Result.isFailure(learned)) throw new Error(learned.failure.message)
+  writeFileSync(join(OUT, `${FROM}-to-${TO}.diff`), `${diffArtifacts(before, learned.success)}\n`)
   copyFileSync(
     join(episode.evidenceDirectory, "events.jsonl"),
     join(OUT, "intervention-run.events.jsonl")
@@ -157,9 +142,6 @@ const program = Effect.gen(function* () {
   // -----------------------------------------------------------------------
   // 3. The same member again, at the learned version, with nobody watching.
   // -----------------------------------------------------------------------
-  const learned = loadArtifact(ARTIFACTS_DIRECTORY, CAPABILITY, TO)
-  if (Result.isFailure(learned)) throw new Error(learned.failure.message)
-
   say(`replaying ${CAPABILITY}@${TO} for member ${RESTRICTED}, unattended...`)
   const after = yield* replay({
     artifact: learned.success,

@@ -1,0 +1,37 @@
+{
+  "sourceCommit": "5fabc36a95daf55e3c045d3dc67d9a64ff99cec4",
+  "sourceFileCount": 182,
+  "sourceManifestSha256": "a702e9e04c7c73fdb46def1475ade88bf58b2c797207dcc0334367126130a755",
+  "fullSuite": {
+    "command": "bun run test",
+    "filesPassed": 55,
+    "testsPassed": 547,
+    "exitCode": 0
+  },
+  "typecheck": {
+    "command": "bun run typecheck",
+    "exitCode": 0,
+    "provenance": "Task3 worker ran against unchanged final source before commit aa06518; root commit adds documentation and the already-tested stronger handoff assertion."
+  },
+  "demo": {
+    "command": "env -u OPENAI_API_KEY bun run demo",
+    "exitCode": 0,
+    "actsCompleted": 8,
+    "model": "scripted; no model key supplied",
+    "textEvidenceFilesScanned": 39,
+    "syntheticPngsExcluded": 22,
+    "knownValueLeaksFound": 0
+  },
+  "handoff": {
+    "command": "CUA_HANDOFF_EVIDENCE=evidence/verification/2026-09-08-architecture bun run verify:handoff",
+    "testsPassed": 2,
+    "exitCode": 0
+  },
+  "review": {
+    "learning": "pass, original quoted-secret counterexamples now refuse without writing",
+    "checkpoint": "pass; reviewer reran six direct tests",
+    "discovery": "pass; reviewer reran 15 focused tests and 5550 overlap cases",
+    "integration": "pass on aa06518 plus root documentation and handoff assertion"
+  },
+  "privacy": "All three retained handoff event logs contain none of the tested raw synthetic member/supervisor values. Screenshots use explicit synthetic fixture opt-in and have unredacted pixels."
+}

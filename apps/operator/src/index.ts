@@ -557,8 +557,7 @@ const whereToWork = (url: string): string =>
 const theOrder = (held: boolean): string =>
   `<h2>What to do, in order</h2>
 <ol>
-<li${held ? ' class="done"' : ""}>Take control of the session. Until you do, the
-  automation still owns it and may act on it.</li>
+<li${held ? ' class="done"' : ""}>Take control of the session. Automation is paused and cannot act.</li>
 <li>Do the work in ${escape(BROWSER_APPLICATION)}. Nothing you do there needs to be
   typed in here: the session watches the screen, and any value you type into it is
   redacted from this run's evidence from the moment it appears.</li>

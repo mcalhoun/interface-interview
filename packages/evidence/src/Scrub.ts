@@ -71,14 +71,15 @@ export const noScrubbing: Scrubber = (text) => text
  * the shorter one first leaves the tail of the longer one behind in the clear.
  * Sorting by descending length removes that whole class of near-miss.
  *
- * **Encoded forms too, and there are two of them.** Heritage Core puts values in
+ * **Encoded forms too.** Heritage Core puts values in
  * query strings, so a value containing a space or an `&` arrives there encoded
  * and survives a literal search. `encodeURIComponent` is one spelling; the other
  * is `application/x-www-form-urlencoded`, which is what a browser submits a GET
  * form as — and it differs in exactly one place, writing a space as `+` where
  * percent-encoding writes `%20`. Every Heritage Core screen this system drives
  * is a GET form, so that is the spelling the URL bar actually shows. Both are
- * added as needles whenever they differ from the plain text.
+ * added as needles whenever they differ from the plain text. JSON-quoted prose
+ * is decoded, scrubbed and encoded again, including nested quotations.
  *
  * Today's member numbers have no spaces and the two spellings coincide for them.
  * `operatorPassword` is the value where it already matters, and the next
@@ -113,11 +114,59 @@ export const scrubbing = (values: Iterable<SensitiveText>): Scrubber => {
   needles.sort((left, right) => right.find.length - left.find.length)
 
   if (needles.length === 0) return noScrubbing
-  return (text) => {
-    let scrubbed = text
-    for (const needle of needles) scrubbed = scrubbed.replaceAll(needle.find, needle.replace)
-    return scrubbed
+  const scrub: Scrubber = (text) => {
+    type Replacement = { readonly start: number; readonly end: number; readonly text: string }
+    const raw: Replacement[] = []
+    // Choose against the original text, longest first. Never scan a placeholder
+    // inserted by an earlier replacement as though it were another secret.
+    for (const needle of needles) {
+      let start = text.indexOf(needle.find)
+      while (start !== -1) {
+        const end = start + needle.find.length
+        if (!raw.some((span) => start < span.end && end > span.start)) {
+          raw.push({ start, end, text: needle.replace })
+        }
+        start = text.indexOf(needle.find, end)
+      }
+    }
+    const replacements = [...raw]
+    // Every quote start is considered, including after an unmatched prose quote.
+    // Compare decoded and raw replacements before choosing overlapping spans.
+    for (const match of text.matchAll(/(?=("(?:\\[\s\S]|[^"\\])*"))/gu)) {
+      const literal = match[1]
+      if (literal === undefined) continue
+      const start = match.index
+      const end = start + literal.length
+      if (raw.some((span) => span.start <= start && span.end >= end)) continue
+      let decoded: unknown
+      try { decoded = JSON.parse(literal) } catch { continue }
+      if (typeof decoded !== "string") continue
+      const safe = scrub(decoded)
+      if (safe === decoded) continue
+      replacements.push({ start, end, text: JSON.stringify(safe) })
+    }
+    replacements.sort((left, right) => left.start - right.start || right.end - left.end)
+    const merged: Replacement[] = []
+    for (const span of replacements) {
+      const previous = merged.at(-1)
+      if (previous === undefined || span.start >= previous.end) merged.push(span)
+      else if (span.end > previous.end) {
+        // Crossing spans cannot each retain their surrounding prose safely.
+        // Redact their whole union rather than leave either secret's tail.
+        merged[merged.length - 1] = {
+          start: previous.start, end: span.end, text: placeholderFor("overlapping-values")
+        }
+      }
+    }
+    let result = ""
+    let copiedUntil = 0
+    for (const span of merged) {
+      result += text.slice(copiedUntil, span.start) + span.text
+      copiedUntil = span.end
+    }
+    return result + text.slice(copiedUntil)
   }
+  return scrub
 }
 
 // ---------------------------------------------------------------------------

@@ -96,6 +96,7 @@ import {
   type Assertion,
   type Checkpoint,
   type ResolvedInputs,
+  type Step,
   type ValueRef,
   describeAssertion,
   describeBranch,
@@ -105,10 +106,13 @@ import type {
   SurfaceAdapterService,
   SurfaceState,
   SurfaceUnavailable,
-  Target,
   TargetFailure
 } from "@cua/surface"
-import { describeMatch, nodeText, normalise } from "@cua/surface"
+import { describeMatch, describeTarget, nodeText, normalise } from "@cua/surface"
+import type { Evidence, EvidenceUnwritable } from "@cua/evidence"
+import type { Policy } from "@cua/policy"
+import type { Session } from "@cua/session"
+import type { ReplayFailure } from "./ReplayResult.ts"
 
 /** How long a Checkpoint has to come true when the Artifact does not say. */
 export const DEFAULT_CHECKPOINT_MILLIS = 5_000
@@ -148,59 +152,94 @@ export type CheckpointOutcome =
       readonly observed: string
     } & Observed)
 
-/**
- * All of the Surface a Checkpoint may touch by itself.
- *
- * Deliberately not `SurfaceAdapterService`. `observe` and `resolveTarget` are
- * perception: they look, and looking needs no permission. Everything in the
- * Action vocabulary is missing from this type on purpose, so a Checkpoint cannot
- * reach the adapter's acting methods even by accident — which matters because a
- * Checkpoint is the one part of Replay that is *about* touching the live system
- * without being a Step.
- */
-export interface Perception {
-  readonly observe: SurfaceAdapterService["observe"]
-  readonly resolveTarget: SurfaceAdapterService["resolveTarget"]
-}
-
+/** Run dependencies stay together for ordinary verification and recovery detection. */
 export interface EvaluationContext {
-  readonly surface: Perception
-  /**
-   * Reads a control's text, for a `targetReads` assertion.
-   *
-   * Supplied by the caller rather than taken off the adapter, because reading a
-   * control *is* an `extract` and every `extract` passes Policy first. The engine
-   * builds this function only after the gate has allowed every read the
-   * Checkpoint declares, so a reader that exists is a reader that was permitted.
-   * Nothing here can construct one.
-   */
-  readonly read: (target: Target) => Effect.Effect<string, TargetFailure>
+  readonly surface: SurfaceAdapterService
+  readonly policy: Policy["Service"]
+  readonly session: Session["Service"]
+  readonly evidence: Evidence["Service"]
   readonly inputs: ResolvedInputs
   readonly readings: StepReadings
 }
+
+type CheckpointStep = Pick<Step, "id" | "intent">
+type EvaluationFailure = SurfaceUnavailable | ReplayFailure | EvidenceUnwritable
+
+/** Each call observes and authorizes the page it actually evaluates. */
+export const createCheckpointEvaluator = (context: EvaluationContext) => ({
+  evaluate: (step: CheckpointStep, checkpoint: Checkpoint) => evaluate(context, step, checkpoint),
+  detect: (step: CheckpointStep, assertions: ReadonlyArray<Assertion>) =>
+    evaluate(context, step, {
+      description: "the screen matches a declared recoverable condition",
+      expect: assertions,
+      withinMillis: 0
+    }).pipe(Effect.map((outcome) => outcome.verdict === "held"))
+})
+
+/** Session ownership is checked on every poll, including polls on the same page. */
+const permitReads = (
+  context: EvaluationContext,
+  step: CheckpointStep,
+  checkpoint: Checkpoint,
+  state: SurfaceState,
+  authorise: boolean
+): Effect.Effect<void, ReplayFailure | EvidenceUnwritable> =>
+  Effect.gen(function* () {
+    for (const assertion of assertionsOf(checkpoint)) {
+      if (assertion.assert !== "targetReads") continue
+      const subject = describeTarget(toSurfaceTarget(assertion.target))
+      const at = { stepId: step.id, stepIntent: step.intent }
+      yield* context.session.claim(`extract ${subject}`).pipe(Effect.catch((lost) =>
+        Effect.fail<ReplayFailure>({
+          reason: "control_lost", ...at,
+          expected: "automation to hold the session",
+          observed: `control belongs to ${lost.owner}`, owner: lost.owner
+        })
+      ))
+      if (!authorise) continue
+      const verdict = yield* context.policy.authorise({
+        type: "extract", subject, stepId: step.id, mode: "replay", page: state.url
+      })
+      yield* context.evidence.record({
+        kind: "policy.check", stepId: step.id, action: "extract", subject,
+        verdict: verdict.verdict, reason: verdict.reason, policy: verdict.policy, risk: verdict.risk,
+        ...(verdict.origin === undefined ? {} : { origin: verdict.origin })
+      })
+      if (verdict.verdict === "deny") return yield* Effect.fail<ReplayFailure>({
+        reason: "policy_violation", ...at,
+        expected: `policy ${verdict.policy} to permit extract`, observed: verdict.reason,
+        action: "extract", subject
+      })
+    }
+  })
 
 /**
  * Polls until the intended state holds, a declared outcome branch matches, or the
  * Checkpoint's bound expires.
  *
- * Fails only when the Surface itself is unreachable. Neither of the other two
- * verdicts is an error channel: "the intended state was not reached" and "the
- * domain answered something else" are both information the caller acts on, and a
- * Business Outcome in particular must never travel as an exception — the moment
- * it does, every `catch` upstream starts treating a legitimate answer as a fault.
+ * Surface, permission and Evidence failures stop evaluation. A failed assertion
+ * and a declared Business Outcome are verdicts for the caller to handle. They
+ * never enter the error channel, where recovery could mistake a domain answer
+ * for a fault.
  */
-export const evaluate = (
+const evaluate = (
   context: EvaluationContext,
+  step: CheckpointStep,
   checkpoint: Checkpoint
-): Effect.Effect<CheckpointOutcome, SurfaceUnavailable> =>
+): Effect.Effect<CheckpointOutcome, EvaluationFailure> =>
   Effect.gen(function* () {
     const bound = checkpoint.withinMillis ?? DEFAULT_CHECKPOINT_MILLIS
     const startedAt = Date.now()
+    // One Policy record per declared read and page in this evaluation.
+    // A new call or a changed page always asks again.
+    let permittedPage: string | undefined
 
     // A first pass runs before any sleeping, so a Checkpoint over a state that is
     // already true costs nothing. Most of them are.
     while (true) {
       const state = yield* context.surface.observe
+      yield* permitReads(context, step, checkpoint, state, permittedPage !== state.url)
+      permittedPage = state.url
       const firstFailure = yield* firstUnmet(context, checkpoint.expect, state)
 
       if (firstFailure === undefined) {
@@ -231,23 +270,8 @@ export const evaluate = (
     }
   })
 
-/**
- * Every Assertion `evaluate` may put to the screen: `expect`, and the `when` of
- * every declared outcome branch.
- *
- * This exists so the engine's `authorisedReader` can be given the whole set
- * rather than half of it. A `targetReads` sitting in an outcome branch reads a
- * live control exactly as one in `expect` does, and `evaluate` calls it through
- * the same `context.read`. Authorising only `expect` would leave that read
- * reaching the adapter with no `policy.check` in front of it and no deny path —
- * the same bypass the authorization gate closes at the Checkpoint boundary, reopened one
- * level in.
- *
- * **Keep this the definition of "what evaluation can look at".** If a later
- * change gives a Checkpoint another place to hold Assertions, it goes here, and
- * the gate widens with it rather than being remembered separately.
- */
-export const assertionsOf = (checkpoint: Checkpoint): ReadonlyArray<Assertion> => [
+/** Include every place evaluation can read a control before checking any assertion. */
+const assertionsOf = (checkpoint: Checkpoint): ReadonlyArray<Assertion> => [
   ...checkpoint.expect,
   ...(checkpoint.orOutcome ?? []).flatMap((branch) => branch.when)
 ]
@@ -324,7 +348,7 @@ const check = (
       if (wanted === undefined) {
         return Effect.succeed("the artifact referred to a value this run does not have")
       }
-      return context.read(toSurfaceTarget(assertion.target)).pipe(
+      return context.surface.extract(toSurfaceTarget(assertion.target)).pipe(
         Effect.map((read) => (read.trim() === wanted ? undefined : `it reads ${JSON.stringify(read)}`)),
         Effect.catch(resolutionProblem(state))
       )

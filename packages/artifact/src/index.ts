@@ -161,3 +161,5 @@ export { toYaml } from "./yaml.ts"
 
 export type { ValueRef } from "./Value.ts"
 export { describeValueRef, ValueRef as ValueRefSchema } from "./Value.ts"
+
+export { carriesSensitiveText } from "./privacy.ts"

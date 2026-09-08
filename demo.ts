@@ -41,17 +41,15 @@
 
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { compileArtifact, modelAdvisor } from "@cua/agent"
+import { modelAdvisor } from "@cua/agent"
 import {
   ARTIFACTS_DIRECTORY,
   OVERRIDES_DIRECTORY,
   describeOutputValue,
-  formatArtifact,
-  prepareInputs
+  formatArtifact
 } from "@cua/artifact"
-import { declassifierFor, heritagePublicGoalTerms, sensitivityPolicy } from "@cua/policy"
-import { type Advisor, type ReplayResult, proposeAmendment, scrubberFor } from "@cua/replay"
-import { Effect, Result } from "effect"
+import { type Advisor, type ReplayResult } from "@cua/replay"
+import { Effect } from "effect"
 import { runDiscovery } from "./apps/demo/src/support/discovery-harness.ts"
 import { GOAL, readsTheScreen } from "./apps/demo/src/support/discovery-script.ts"
 import { attendedReplay } from "./apps/demo/src/support/handoff-harness.ts"
@@ -232,52 +230,40 @@ const main = async (): Promise<void> => {
   note(NO_MODEL)
 
   const discovery = await Effect.runPromise(
-    runDiscovery({ goal: GOAL, model: respondingModel(readsTheScreen) })
+    runDiscovery({ goal: GOAL, model: respondingModel(readsTheScreen),
+      compilation: { capability: "member.account-balance.demo", version: "1.0.0",
+        product: "Heritage Core Member Services (MSS 4.02.11)" } })
   )
   const discoveryEvidence = collect(discovery.evidenceDirectory, "01-discovery")
 
-  const conclusion = discovery.trajectory.conclusion
+  const conclusion = discovery.diagnostics.conclusion
   say(
-    conclusion.conclusion === "reached"
-      ? `  GOAL REACHED in ${discovery.trajectory.steps.length} steps: ${conclusion.summary}`
-      : `  the run stopped without reaching the goal: ${conclusion.conclusion}`
+    conclusion === "reached"
+      ? `  GOAL REACHED in ${discovery.diagnostics.steps.length} steps: ${discovery.diagnostics.summary}`
+      : `  the run stopped without reaching the goal: ${conclusion}`
   )
   say()
   say("  steps the model chose, from a seven-word vocabulary:")
-  for (const step of discovery.trajectory.steps) {
+  for (const step of discovery.diagnostics.steps) {
     say(`    ${step.id}  ${step.intent}`)
   }
   say()
-  say("  parameters it inferred from the goal, with nobody declaring a schema:")
-  for (const parameter of discovery.trajectory.parameters) {
-    say(`    ${parameter.name}  (sensitive: ${parameter.sensitive}; used by ${parameter.usedBy.join(", ")})`)
+  if (discovery.compilation.status !== "compiled") {
+    throw new Error("The demo's Discovery run did not produce a checked compilation")
   }
-  for (const selection of discovery.trajectory.selections) {
-    say()
-    say(`  the selection rule it discovered for ${selection.parameter}:`)
-    say(`    values read off the live screen: ${selection.values.map((value) => JSON.stringify(value)).join(", ")}`)
-    say(`    default recorded:               ${JSON.stringify(selection.default)}   <- the goal's own word`)
-    say(`    label it matched:               ${JSON.stringify(selection.matched ?? "")}   <- this tenant's word, NOT recorded`)
+  const artifact = discovery.compilation.stored.artifact
+  say("  parameters inferred from the goal:")
+  for (const [name, parameter] of Object.entries(artifact.inputs)) {
+    say(`    ${name}  (sensitive: ${parameter.sensitive})`)
+    if (parameter.type === "enum") {
+      say(`    values read off the live screen: ${(parameter.values ?? []).map((value) => JSON.stringify(value)).join(", ")}`)
+      say(`    default recorded: ${JSON.stringify(parameter.default)}`)
+    }
   }
-  say()
-  note([
-    "Which of those two words gets recorded is the whole multi-tenant argument.",
-    "Recording \"Primary Savings\" would bind the capability to this institution's",
-    "label table. Recording \"savings\" makes act 7 free."
-  ])
   landed(discoveryEvidence)
 
-  const compiled = compileArtifact(discovery.trajectory, {
-    capability: "member.account-balance.demo",
-    publicGoalTerms: heritagePublicGoalTerms,
-    version: "1.0.0",
-    product: "Heritage Core Member Services (MSS 4.02.11)"
-  })
-  if (Result.isFailure(compiled)) {
-    throw new Error(`the demo's discovery run would not compile: ${compiled.failure.message}`)
-  }
   const compiledPath = join(discoveryEvidence, "compiled-artifact.yaml")
-  writeFileSync(compiledPath, formatArtifact(compiled.success))
+  writeFileSync(compiledPath, formatArtifact(artifact))
   say()
   say(`  compiled to ${compiledPath}`)
   note([
@@ -288,7 +274,7 @@ const main = async (): Promise<void> => {
   ])
 
   const fromDiscovery = await Effect.runPromise(
-    replay({ artifact: compiled.success, inputs: { memberId: "12345" }, runId: "compiled-replay" })
+    replay({ artifact, inputs: { memberId: "12345" }, runId: "compiled-replay" })
   )
   collect(fromDiscovery.evidenceDirectory, "01-discovery-replayed")
   say(`  and replayed, unedited, by the engine that has never seen a model:`)
@@ -483,35 +469,21 @@ const main = async (): Promise<void> => {
 
   const record = episode.snapshot.resolved[0]
   if (record === undefined) throw new Error("the demo's intervention closed without a record")
-  const prepared = prepareInputs(
-    before.capability,
-    before.inputs,
-    { memberId: "77777" },
-    declassifierFor(sensitivityPolicy, before.capability)
-  )
-  if (Result.isFailure(prepared)) throw new Error(prepared.failure.message)
-
-  const amendment = proposeAmendment({
-    artifact: before,
-    record,
-    scrub: scrubberFor(prepared.success),
-    version: "1.2.0"
-  })
+  const learning = episode.learning[0]
+  if (learning === undefined) throw new Error("the demo's intervention has no captured learning")
+  const amendment = learning.amendment({ directory: join(episodeEvidence, "artifacts"), version: "1.2.0" })
+  if (amendment._tag !== "Amended") throw new Error(`The learned version was not stored: ${amendment._tag}`)
   say()
-  if (amendment._tag === "Amended") {
-    say(`  LEARNED  ${amendment.amended.capability}@${amendment.amended.version} (${amendment.learnedClass})`)
-    say(`    ${amendment.because}`)
-    writeFileSync(join(episodeEvidence, "proposed-1.1.0-to-1.2.0.diff"), `${amendment.diff}\n`)
-    say(`    diff written to ${join(episodeEvidence, "proposed-1.1.0-to-1.2.0.diff")}`)
-  } else {
-    say(`  the episode taught nothing storable: ${amendment._tag}`)
-  }
+  say(`  LEARNED  ${amendment.amended.capability}@${amendment.amended.version} (${amendment.learnedClass})`)
+  say(`    ${amendment.because}`)
+  say(`    written to ${amendment.path}`)
+  writeFileSync(join(episodeEvidence, "proposed-1.1.0-to-1.2.0.diff"), `${amendment.diff}\n`)
+  say(`    diff written to ${join(episodeEvidence, "proposed-1.1.0-to-1.2.0.diff")}`)
   say()
   note([
-    "The demo stops one step short of storing it. artifacts/ already holds 1.2.0,",
-    "cut by exactly this episode when the repository was built, and the store is",
-    "append-only: writing it again is refused rather than replaced. Act 5 shows the",
-    "committed version and the diff a reviewer approves."
+    "This run saved its learned version under its own evidence directory.",
+    "artifacts/ already holds 1.2.0 from the earlier intervention. Act 5 shows",
+    "that committed version and the diff a reviewer approves."
   ])
 
   // -------------------------------------------------------------------------

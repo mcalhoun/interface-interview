@@ -1,9 +1,8 @@
 import { it } from "@effect/vitest"
 import { Effect, Result } from "effect"
 import { expect } from "vitest"
-import { compileArtifact } from "@cua/agent"
 import { declareRequiresHuman, formatArtifact, parseArtifact, prepareInputs } from "@cua/artifact"
-import { declassifierFor, heritagePublicGoalTerms, sensitivityPolicy } from "@cua/policy"
+import { declassifierFor, sensitivityPolicy } from "@cua/policy"
 import { proposeAmendment, scrubberFor } from "@cua/replay"
 import { serve } from "@cua/legacy-core"
 import { runDiscovery } from "../apps/demo/src/support/discovery-harness.ts"
@@ -13,12 +12,13 @@ import { attendedReplay } from "../apps/demo/src/support/handoff-harness.ts"
 import { replay } from "../apps/demo/src/support/replay-harness.ts"
 
 const discoverArtifact = Effect.gen(function* () {
-  const { trajectory } = yield* runDiscovery({ goal: GOAL, model: respondingModel(readsTheScreen) })
-  const compiled = compileArtifact(trajectory, {
-    capability: "member.account-balance", version: "1.0.0", publicGoalTerms: heritagePublicGoalTerms
+  const result = yield* runDiscovery({
+    goal: GOAL, model: respondingModel(readsTheScreen),
+    compilation: { capability: "member.account-balance", version: "1.0.0" }
   })
-  if (Result.isFailure(compiled)) throw compiled.failure
-  return compiled.success
+  expect(result.compilation.status).toBe("compiled")
+  if (result.compilation.status !== "compiled") throw new Error("discovery did not compile the capability")
+  return result.compilation.stored.artifact
 })
 
 it.live("the same discovered capability learns missing-member and validation answers from attended checkpoints", () => Effect.gen(function* () {

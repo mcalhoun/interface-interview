@@ -60,7 +60,7 @@ import { Result, Schema } from "effect"
 import { noMatchCode, noMatchOutcome } from "./Action.ts"
 import { OutcomeCode, type OutcomeDeclaration } from "./BusinessOutcomes.ts"
 import type { CapabilityArtifact, Step } from "./CapabilityArtifact.ts"
-import { formatArtifact } from "./parse.ts"
+import { carriesSensitiveText } from "./privacy.ts"
 import { type RequiresHumanDeclaration, requiresHumanCode } from "./RequiresHuman.ts"
 
 /**
@@ -436,10 +436,9 @@ export const declareRequiresHuman = (
  * The last gate both Amendments pass, and the only one that reads the finished
  * document.
  *
- * The scan is over the *finished document*, not over the fields that went into
- * it. Prose is assembled from several places, and a check that looked at each one
- * separately would miss a value that only exists once they are joined.
- * The compiler applies the same check to the finished document.
+ * Inspect the finished document's string values and keys before serialization.
+ * Generated prose includes quoted Operator text, so its JSON string literals
+ * must also be checked after decoding.
  *
  * Shared rather than repeated, so there is one answer to "what does an Amendment
  * refuse to carry" no matter which kind is being written.
@@ -462,34 +461,14 @@ const carriesNothingSensitive = (
     )
   }
 
-  const yaml = formatArtifact(amended)
-  const scrubbed = options.scrub(yaml)
-  if (scrubbed !== yaml) {
+  if (carriesSensitiveText(amended, options.scrub)) {
     return refuse(
-      `the amended document would carry, on ${countChangedLines(yaml, scrubbed)} line(s), a ` +
+      `the amended document would carry a ` +
         `value this run treats as sensitive. An artifact outlives the run it was learned from ` +
         `and carries no runtime data (ADR-0008). Rewrite the intervention detail without it`
     )
   }
   return Result.succeed(amended)
-}
-
-/**
- * How many lines the scrubber rewrote.
- *
- * Never which, and never what. A refusal about a leaked identifier that contains
- * the identifier is a leak produced by the leak check, and it lands in a
- * terminal, a CI log and a ticket. Counting the two copies against each other
- * means working the number out never requires holding the value.
- */
-const countChangedLines = (before: string, after: string): number => {
-  const left = before.split("\n")
-  const right = after.split("\n")
-  let changed = 0
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    if (left[index] !== right[index]) changed += 1
-  }
-  return changed
 }
 
 /** `1.0.0` -> `1.1.0`. The version an Amendment cuts unless told otherwise. */

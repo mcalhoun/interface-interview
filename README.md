@@ -11,9 +11,84 @@ member data. Its nested tables, ambiguous captions, full page loads and unnamed
 iframe exercise legacy targeting. The adapter observes accessibility structure;
 artifacts contain no CSS selectors or browser references.
 
-[REPORT.md](REPORT.md) explains the design and cuts under the assignment's seven
-headings. [CONTEXT.md](CONTEXT.md) defines the vocabulary. [SPEC.md](SPEC.md) is the
-original plan; [docs/adr/](docs/adr/) records the architecture decisions.
+## How this solves the assignment
+
+The assignment asks for a backend that learns to operate an application with no
+API, saves that knowledge as a reusable capability, and executes it reliably for
+later callers. Our concrete task is to look up a member, open their savings
+account and return its available and current balances. Heritage Core lets us
+exercise that flow and its exceptional states without using real banking data.
+
+The complete path works as follows:
+
+1. A caller supplies a natural-language goal and an application entry point.
+   Discovery observes the live accessibility tree, asks the model for the next
+   action, checks Policy and executes it through the browser adapter. Step and
+   time limits, repeated unproductive states and dead ends bound the run.
+2. After success, the compiler turns the observed actions into a versioned YAML
+   capability. It records typed inputs, typed outputs, target descriptions,
+   robustness reasoning and a Checkpoint for every Step. The member number
+   becomes a required `memberId` input. Balances become money outputs with an
+   amount and currency. The saved document contains the flow, not the model
+   conversation.
+3. A later caller invokes that capability by name with a fresh `memberId`.
+   Replay resolves controls from the current accessibility tree, supplies the
+   input and checks each resulting state. Ordinary Replay has no model service
+   dependency. A successful click alone cannot establish success.
+4. When the application answers differently, Replay checks declared business
+   outcomes and recovery rules. A missing member returns `MEMBER_NOT_FOUND`;
+   a known transient condition can recover; an ambiguous control stops with
+   the Step, expected state and observed state. One successful discovery does
+   not invent handling for exceptions it never encountered.
+5. If the run needs a person, it pauses the same browser Session and raises an
+   Intervention with the stopping context. The Operator takes ownership, works
+   in that window and returns control. Automation cannot act while the Operator
+   owns it. Replay verifies the returned screen before continuing. Confirmed
+   learning can create a new Artifact version or a Tenant Override; it cannot
+   overwrite an existing Artifact or bypass the run's privacy checks.
+
+The retained [live discovery and replay bundle](evidence/discovery/live-2026-09-08T14-45-52-190Z-132a40d2/manifest.json)
+links a genuine `gpt-4.1` run to the exact
+[compiled capability](artifacts/member.account-balance.discovered/1.5.0.yaml).
+Later recorded interventions extend that capability through version `1.8.0`
+with verified business outcomes. The
+[handoff proof](evidence/verification/2026-09-08-architecture/README.md)
+includes successful and blocked returns plus an agent-operated native UI run.
+These establish different parts of the project. The repeatable demo uses
+scripted model decisions and Operator judgment; the retained discovery bundle
+provides the required live-model evidence.
+
+### Core requirement coverage
+
+The section numbers below follow the assignment PDF.
+
+| Requirement | How we implemented it | Where to inspect it |
+| --- | --- | --- |
+| 3.1 Goal-driven agent loop | A bounded observe, decide and act loop drives real Chromium through accessibility roles, names and regions. The fixture includes nested tables, ambiguous captions and an unnamed iframe. | [Discovery workflow](packages/agent/src/discovery.ts), [agent loop](packages/agent/src/loop.ts) |
+| 3.2 Structured capability | Immutable YAML versions declare inputs, outputs, ordered actions, target strategies and Checkpoints. Schema checks reject invalid references. Compilation checks private values before discarding the run's private context. | [Artifact schema](packages/artifact/src/CapabilityArtifact.ts), [saved example](artifacts/member.account-balance.discovered/1.5.0.yaml) |
+| 3.3 Deterministic replay and errors | Replay follows the saved flow without model decisions. Checkpoint owns observation and permitted reads. Replay distinguishes business outcomes from failures, tries declared recovery and requests intervention when needed. | [Replay engine](packages/replay/src/engine.ts), [result contract](packages/replay/src/ReplayResult.ts), [Checkpoint](packages/replay/src/checkpoint.ts) |
+| 3.4 Safety and policy | Policy allows specific origins and action types, and risky actions require a written justification. The browser checks frames and network destinations, including redirects. A live secret registry protects text Evidence and learned documents, including quoted values. | [Deployment policy](policies/default.yaml), [text redaction](packages/evidence/src/Scrub.ts), [run-bound learning](packages/replay/src/learning.ts) |
+| 3.5 Evidence and observability | Structured events record actions, decisions, checkpoints, outcomes and ownership changes. Accessibility observations provide failure context. Synthetic fixture runs also retain screenshots. | [Verification bundle](evidence/verification/2026-09-08-architecture/README.md), [Evidence writer](packages/evidence/src/EvidenceWriter.ts) |
+| 3.6 Human escalation and handoff | A token-protected local interface exposes the request and transfers the original live Session to the Operator. It records observed field changes and confirmed actions. Return requires screen verification; an unresolved request stops the run. | [Manual walkthrough](docs/human-handoff.md), [acceptance tests](test/human-handoff-acceptance.test.ts) |
+| 3.7 Heterogeneity and tenant reuse | Artifacts describe logical controls while the Surface Adapter owns browser details. Deployment supplies the origin. A confirmed override handles a second tenant's changed controls against a specific base version. Desktop execution has a documented adapter design but is not implemented. | [Adapter contract](packages/surface/src/SurfaceAdapter.ts), [tenant demonstration](test/second-tenant-and-discovered-override.test.ts), [extension design](REPORT.md#heterogeneity--multi-tenant) |
+
+Runtime schemas validate the capability contract. TypeScript and Effect make
+service dependencies explicit, including the separation between Discovery's model and
+Replay's deterministic execution. A single process and file storage are enough
+to demonstrate the full flow. Queues, distributed ownership and production
+storage would add operational work without testing the core design decisions.
+
+This is a working local implementation with stated limits. Policy currently
+works at origin and action-type granularity, not individual routes. Known-value
+scrubbing cannot identify every possible secret on an unfamiliar screen, and
+screenshot masking is unimplemented. External application runs disable binary
+capture. The [evidence and limits](#evidence-and-its-limits) section distinguishes
+implemented behavior, scripted demonstrations and future work.
+
+[REPORT.md](REPORT.md) gives the fuller rationale and cuts under the assignment's
+seven required headings. [CONTEXT.md](CONTEXT.md) defines the vocabulary.
+[SPEC.md](SPEC.md) is the original plan; [docs/adr/](docs/adr/) records the
+architecture decisions.
 
 ## Setup
 
@@ -63,7 +138,8 @@ repeating this example after it has already written a document.
 `discover --json` writes a checked compilation envelope to standard output.
 Human-readable status goes to standard error. Private-data compiler checks run
 inside discovery, while the raw goal and parameter values are still in memory.
-The exported artifact is separate from the scrubbed diagnostic trajectory.
+The workflow returns scrubbed diagnostics separately from its checked artifact;
+its private trajectory stays inside Discovery.
 `compile` validates the staged artifact and applies the requested public naming
 metadata. It rejects legacy raw-trajectory input. The envelope's marker is not a
 signature, and it does not establish reviewer approval or let another process
@@ -155,6 +231,22 @@ must therefore be explicitly allowed.
 
 ## Transfer control to a person
 
+[Watch the 40-second handoff recording](https://github.com/user-attachments/assets/bd44bf29-4424-434d-be28-df105e95caa3).
+It shows the application and operator interface side by side: Replay pauses,
+the Operator takes the same Session, releases the supervisor hold and returns
+control, then Replay verifies the screen and returns both balances.
+
+[![Watch the handoff video: the original account session and completed ownership history](evidence/verification/2026-09-08-handoff-video/preview.png)](https://github.com/user-attachments/assets/bd44bf29-4424-434d-be28-df105e95caa3)
+
+The recording uses real Chromium and the real operator form with scripted
+Operator actions. Only synthetic fixture values appear. The
+[recording receipt and event logs](evidence/verification/2026-09-08-handoff-video/README.md)
+identify the source revision, verify ownership exclusion and link the uploaded
+video. The video is attached to [PR #2](https://github.com/mcalhoun/interface-interview/pull/2)
+using GitHub CLI's `--attach` feature.
+
+For the repeatable manual demo, run `bun run demo:handoff`. Follow the [human handoff walkthrough](docs/human-handoff.md) for the exact controls and synthetic supervisor values. `bun run verify:handoff` checks the same-session transfer, ownership exclusion, recorded actions, verified completion and blocked return in real Chromium. Its Operator is scripted.
+
 ```bash
 bun run replay member.account-balance --memberId 77777 \
   --version 1.1.0 --headed --handoff --noAmend
@@ -238,8 +330,14 @@ proposals for tests; they do not replace the required live-model demonstration.
 
 ## Evidence and its limits
 
-The [September 8 verification report](evidence/verification/2026-09-08-final/README.md)
-records 509 passing tests, a clean installation and model-free replay checks.
+The [latest verification report](evidence/verification/2026-09-08-architecture/README.md)
+records 547 passing tests across 55 files, a passing typecheck, the eight-act
+demo without a model key and the completed and blocked handoff proofs. Its
+source manifest identifies the tested implementation.
+
+The [earlier September 8 verification report](evidence/verification/2026-09-08-final/README.md)
+records the preceding 509-test suite, a clean installation and model-free replay
+checks. It remains evidence for that earlier source state.
 
 The [fresh discovery bundle](evidence/discovery/live-2026-09-08T14-45-52-190Z-132a40d2/manifest.json)
 links a genuine `gpt-4.1` run to its exact compiled `1.5.0` artifact and replay.
