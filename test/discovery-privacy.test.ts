@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
-import { runDiscovery } from "../apps/demo/src/support/discovery-harness.ts"
+import { runDiscovery } from "./support/private-discovery-harness.ts"
 import { scriptedModel, respondingModel } from "../apps/demo/src/support/scripted-model.ts"
 import { GOAL, readsTheScreen } from "../apps/demo/src/support/discovery-script.ts"
 

@@ -24,8 +24,8 @@ import { join } from "node:path"
 import { it } from "@effect/vitest"
 import { Effect, Redacted, Result } from "effect"
 import { describe, expect } from "vitest"
-import type { Trajectory } from "@cua/agent"
-import { compileArtifact, serializeCompilation, shapeOf, strategyFor } from "@cua/agent"
+import type { Trajectory } from "../packages/agent/src/Trajectory.ts"
+import { compileArtifact, serializeCompilation, shapeOf, strategyFor } from "../packages/agent/src/compile.ts"
 import {
   ARTIFACTS_DIRECTORY,
   formatArtifact,
@@ -38,7 +38,7 @@ import {
 import type { CapabilityArtifact } from "@cua/artifact"
 import { respondingModel } from "../apps/demo/src/support/scripted-model.ts"
 import { GOAL, readsTheScreen } from "../apps/demo/src/support/discovery-script.ts"
-import { runDiscovery } from "../apps/demo/src/support/discovery-harness.ts"
+import { runDiscovery } from "./support/private-discovery-harness.ts"
 import { replay } from "../apps/demo/src/support/replay-harness.ts"
 
 const MEMBER_ID = "12345"

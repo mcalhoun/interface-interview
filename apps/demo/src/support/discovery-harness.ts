@@ -16,10 +16,9 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { discoveredSecrets, discover, DEFAULT_BOUNDS } from "@cua/agent"
-import type { StuckBounds, Trajectory } from "@cua/agent"
+import { discoveryRun, DEFAULT_BOUNDS } from "@cua/agent"
+import type { StuckBounds, DiscoveryResult, CompileOptions } from "@cua/agent"
 import type { EvidenceEvent } from "@cua/evidence"
-import { evidenceFiles } from "@cua/evidence"
 import { serve } from "@cua/legacy-core"
 import type { CompiledPolicy } from "@cua/policy"
 import { DEFAULT_POLICY, POLICIES_DIRECTORY, loadPolicy, policyFrom } from "@cua/policy"
@@ -37,13 +36,13 @@ export const shippedPolicy = (name: string = DEFAULT_POLICY): CompiledPolicy => 
   return policy.success
 }
 
-export interface DiscoveryRun {
-  readonly trajectory: Trajectory
+export interface DiscoveryRun extends DiscoveryResult {
   readonly events: ReadonlyArray<EvidenceEvent>
   readonly evidenceDirectory: string
 }
 
 export interface DiscoveryHarnessOptions {
+  readonly compilation?: Omit<CompileOptions, "publicGoalTerms">
   readonly publicGoalTerms?: ReadonlyArray<string>
   readonly goal: string
   readonly model: Layer.Layer<LanguageModel.LanguageModel>
@@ -68,7 +67,6 @@ export const runDiscovery = (
       const baseUrl = (yield* serve({ port: 0 })).origin
       const root = mkdtempSync(join(tmpdir(), "cua-discovery-"))
       const runId = `test-${randomUUID().slice(0, 8)}`
-      const secrets = discoveredSecrets()
 
       const real = playwrightSurface({ headless: true, authorizeOrigin: originAuthorizer(options.policy ?? shippedPolicy()) }) as unknown as Layer.Layer<
         SurfaceAdapter,
@@ -80,27 +78,23 @@ export const runDiscovery = (
       const services = Layer.mergeAll(
         surface,
         policyFrom(options.policy ?? shippedPolicy()),
-        evidenceFiles({
-          root,
-          runId,
-          sessionId: runId,
-          scrubber: secrets.registry, allowUnredactedScreenshots: true
-        }),
         options.model,
         automationOwnedSession(runId)
       )
 
-      const trajectory = yield* discover({
+      const workflow = yield* discoveryRun({
         goal: options.goal,
         entry: options.entry ?? "/",
         baseUrl,
         runId,
         sessionId: runId,
-        secrets,
+        evidence: { root, allowUnredactedScreenshots: true },
+        ...(options.compilation === undefined ? {} : { compilation: options.compilation }),
         bounds: { ...DEFAULT_BOUNDS, ...options.bounds },
         publicGoalTerms: options.publicGoalTerms ?? heritagePublicGoalTerms,
         modelName: "scripted", providerName: "scripted"
-      }).pipe(Effect.provide(services))
+      })
+      const result = yield* workflow.execute.pipe(Effect.provide(services))
 
       const directory = join(root, runId)
       const events = readFileSync(join(directory, "events.jsonl"), "utf8")
@@ -108,7 +102,7 @@ export const runDiscovery = (
         .filter((line) => line.trim() !== "")
         .map((line) => JSON.parse(line) as EvidenceEvent)
 
-      return { trajectory, events, evidenceDirectory: directory }
+      return { ...result, events, evidenceDirectory: directory }
     })
   ) as Effect.Effect<DiscoveryRun, unknown, never>
 

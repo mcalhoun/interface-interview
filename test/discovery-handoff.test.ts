@@ -2,11 +2,10 @@ import { mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { it } from "@effect/vitest"
-import { discover, discoveredSecrets } from "@cua/agent"
-import { evidenceFiles } from "@cua/evidence"
+import { discoveryRun } from "@cua/agent"
 import { serve } from "@cua/legacy-core"
 import { serveOperator } from "@cua/operator"
-import { originAuthorizer, policyFrom } from "@cua/policy"
+import { heritagePublicGoalTerms, originAuthorizer, policyFrom } from "@cua/policy"
 import { Session, SessionControl, handoffSession, sessionControl } from "@cua/session"
 import { SurfaceAdapter, playwrightSurface } from "@cua/surface"
 import { Effect, Fiber, Layer } from "effect"
@@ -19,13 +18,17 @@ it.live("discovery hands over its live browser, guards ownership, records action
   Effect.scoped(Effect.gen(function* () {
     const core = yield* serve({ port: 0 })
     const root = mkdtempSync(join(tmpdir(), "cua-discovery-handoff-"))
-    const secrets = discoveredSecrets()
     const policy = shippedPolicy()
-    const evidence = evidenceFiles({ root, runId: "run", sessionId: "same-session", scrubber: secrets.registry })
+    const workflow = yield* discoveryRun({
+      goal: "Look up the savings account balance of member 12345",
+      entry: "/", baseUrl: core.origin, runId: "run", sessionId: "same-session",
+      publicGoalTerms: heritagePublicGoalTerms, modelName: "scripted", providerName: "test",
+      evidence: { root }, compilation: { capability: "member.audit", version: "1.0.0", product: "Operator value 43210" }
+    })
     const layers = Layer.mergeAll(
       playwrightSurface({ authorizeOrigin: originAuthorizer(policy) }),
       policyFrom(policy),
-      handoffSession.pipe(Layer.provideMerge(sessionControl({ sessionId: "same-session", waitMillis: 5_000 }).pipe(Layer.provideMerge(evidence)))),
+      handoffSession.pipe(Layer.provideMerge(sessionControl({ sessionId: "same-session", waitMillis: 5_000 }).pipe(Layer.provideMerge(workflow.evidence)))),
       respondingModel((prompt, turn) => turn === 0 ? {
         name: "escalate",
         params: { code: "OPERATOR_CHECK", detail: "Check member 12345 before proceeding", rationale: "Need a person" }
@@ -36,11 +39,7 @@ it.live("discovery hands over its live browser, guards ownership, records action
       const session = yield* Session
       const surface = yield* SurfaceAdapter
       const operator = yield* serveOperator({ control, port: 0 })
-      const running = yield* Effect.forkChild(discover({
-        goal: "Look up the savings account balance of member 12345",
-        entry: "/", baseUrl: core.origin, runId: "run", sessionId: "same-session",
-        secrets, modelName: "scripted", providerName: "test"
-      }))
+      const running = yield* Effect.forkChild(workflow.execute)
       let paused = false
       for (let attempt = 0; attempt < 40; attempt += 1) {
         if ((yield* control.snapshot).owner === "paused") { paused = true; break }
@@ -66,9 +65,10 @@ it.live("discovery hands over its live browser, guards ownership, records action
       expect((yield* post("/return", {
         operator: "reviewer", classification: "resolved", detail: "Checked and cleared the input", actionTaken: "true"
       })).status).toBe(303)
-      const trajectory = yield* Fiber.join(running)
-      expect(trajectory.conclusion.conclusion).toBe("reached")
-      expect(trajectory.sessionId).toBe("same-session")
+      const result = yield* Fiber.join(running)
+      expect(result.diagnostics.conclusion).toBe("reached")
+      expect(result.diagnostics.sessionId).toBe("same-session")
+      expect(result.compilation.status).toBe("refused")
       const snapshot = yield* control.snapshot
       expect(snapshot.owner).toBe("automation")
       expect(snapshot.resolved).toHaveLength(1)
@@ -79,5 +79,7 @@ it.live("discovery hands over its live browser, guards ownership, records action
       expect(log).toContain("intervention.resolve")
       expect(log).not.toContain("12345")
       expect(log).not.toContain("43210")
+      expect(JSON.stringify(result)).not.toContain("43210")
+      expect(JSON.stringify(result)).not.toContain("12345")
     }).pipe(Effect.provide(layers))
   })), 30_000)

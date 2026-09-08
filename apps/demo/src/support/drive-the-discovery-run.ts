@@ -9,14 +9,12 @@ import { createHash, randomUUID } from "node:crypto"
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import {
-  DEFAULT_BOUNDS, DEFAULT_PROVIDER, discover, discoveredSecrets, providerFor,
-  serializeCompilation
+  DEFAULT_BOUNDS, DEFAULT_PROVIDER, discoveryRun, providerFor
 } from "@cua/agent"
 import {
   ARTIFACTS_DIRECTORY, CapabilityArtifactSchema, describeOutputValue, formatArtifact, listVersions, loadArtifact,
   nextMinorVersion, writeArtifact
 } from "@cua/artifact"
-import { evidenceFiles } from "@cua/evidence"
 import { serve } from "@cua/legacy-core"
 import {
   DEFAULT_POLICY, POLICIES_DIRECTORY, loadPolicy,
@@ -70,36 +68,33 @@ export const driveDiscoveryRun = (options: Parameters<typeof planDiscoveryRun>[0
     if (Result.isFailure(policy)) throw new Error(policy.failure.message)
     const baseUrl = (yield* serve({ port: 0 })).origin
     const sessionId = randomUUID()
-    const secrets = discoveredSecrets()
     say(`model: ${MODEL}; capability: ${CAPABILITY}@${plan.version}; evidence: ${plan.out}`)
-    const trajectory = yield* discover({
+    const workflow = yield* discoveryRun({
       goal: GOAL, entry: "/", baseUrl, runId: "discovery", sessionId,
-      secrets, bounds: DEFAULT_BOUNDS, publicGoalTerms: heritagePublicGoalTerms, modelName: MODEL, providerName: DEFAULT_PROVIDER
-    }).pipe(Effect.provide(Layer.mergeAll(
+      evidence: { root: plan.out, allowUnredactedScreenshots: true,
+        policy: "Every discovered parameter is sensitive; raw goals are never persisted." },
+      compilation: { capability: CAPABILITY, version: plan.version,
+        product: "Heritage Core Member Services (MSS 4.02.11)" },
+      bounds: DEFAULT_BOUNDS, publicGoalTerms: heritagePublicGoalTerms, modelName: MODEL, providerName: DEFAULT_PROVIDER
+    })
+    const result = yield* workflow.execute.pipe(Effect.provide(Layer.mergeAll(
       playwrightSurface({ headless: true, authorizeOrigin: originAuthorizer(policy.success) }),
       policyFrom(policy.success),
       automationOwnedSession(sessionId),
-      evidenceFiles({
-        root: plan.out, runId: "discovery", sessionId, scrubber: secrets.registry, allowUnredactedScreenshots: true,
-        policy: "Every discovered parameter is sensitive; raw goals are never persisted."
-      }),
       providerFor({ provider: DEFAULT_PROVIDER, model: MODEL })
     )))
-    if (trajectory.conclusion.conclusion !== "reached") {
-      throw new Error(`Discovery stopped: ${trajectory.conclusion.conclusion}; evidence: ${plan.out}`)
+    if (result.diagnostics.conclusion !== "reached") {
+      throw new Error(`Discovery stopped: ${result.diagnostics.conclusion}; evidence: ${plan.out}`)
     }
-    say(`Discovery reached the goal in ${trajectory.steps.length} steps; compiling the recorded flow.`)
-    const compilation = serializeCompilation(trajectory, {
-      capability: CAPABILITY, version: plan.version, publicGoalTerms: heritagePublicGoalTerms,
-      product: "Heritage Core Member Services (MSS 4.02.11)"
-    })
-    if (Result.isFailure(compilation)) throw new Error(compilation.failure.message)
-    const written = writeArtifact(plan.artifactsRoot, compilation.success.artifact)
+    if (result.compilation.status !== "compiled") throw new Error("Discovery compilation was refused")
+    say(`Discovery reached the goal in ${result.diagnostics.steps.length} steps and compiled the recorded flow.`)
+    const compilation = result.compilation.stored
+    const written = writeArtifact(plan.artifactsRoot, compilation.artifact)
     if (Result.isFailure(written)) throw new Error(written.failure.message)
     const stored = loadArtifact(plan.artifactsRoot, CAPABILITY, plan.version)
     if (Result.isFailure(stored)) throw new Error(stored.failure.message)
     copyFileSync(written.success, join(plan.out, `${plan.version}.yaml`))
-    writeFileSync(join(plan.out, "compilation.json"), JSON.stringify(compilation.success, null, 2) + "\n", { flag: "wx" })
+    writeFileSync(join(plan.out, "compilation.json"), JSON.stringify(compilation, null, 2) + "\n", { flag: "wx" })
 
     writeSourceReceipt(plan.out, plan.artifactsRoot)
     return yield* resumeDiscoveryEvidence(plan.out)

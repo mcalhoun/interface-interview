@@ -24,24 +24,21 @@ import { heritagePublicGoalTerms, originAuthorizer } from "@cua/policy"
  */
 
 import { randomUUID } from "node:crypto"
-import { goalDiagnosticScrubber } from "@cua/agent"
 import {
   DEFAULT_BOUNDS,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   PROVIDER_NAMES,
-  discover,
-  discoveredSecrets,
-  serializeCompilation,
+  discoveryRun,
   isProviderName,
   providerFor
 } from "@cua/agent"
-import type { Trajectory } from "@cua/agent"
+import type { DiscoveryDiagnostics } from "@cua/agent"
 import { ARTIFACTS_DIRECTORY, writeArtifact } from "@cua/artifact"
 import { serve } from "@cua/legacy-core"
 import { DEFAULT_OPERATOR_PORT, serveOperator } from "@cua/operator"
 import { DEFAULT_HANDOFF_WAIT_MILLIS, SessionControl, automationOwnedSession, handoffSession, sessionControl } from "@cua/session"
-import { evidenceFiles } from "@cua/evidence"
+import { Evidence } from "@cua/evidence"
 import {
   DEFAULT_POLICY,
   POLICIES_DIRECTORY,
@@ -89,19 +86,12 @@ const usage = (): string =>
   ].join("\n")
 
 
-const report = (trajectory: Trajectory, goal: string, scrubSecrets: (text: string) => string): Effect.Effect<void> => {
-  const scrubGoal = goalDiagnosticScrubber(goal, heritagePublicGoalTerms)
-  const scrub = (text: string) => scrubGoal(scrubSecrets(text))
-  const conclusion = trajectory.conclusion
-  const summary = conclusion.conclusion === "reached" ? conclusion.summary
-    : conclusion.conclusion === "stuck" ? conclusion.trigger.detail : conclusion.reason
-  return Console.log(scrub([
-    `${conclusion.conclusion.toUpperCase()} in ${trajectory.steps.length} steps`,
-    summary,
-    ...trajectory.steps.map((step) => `  ${step.id}: ${step.intent}`),
-    `evidence: ${trajectory.evidenceDirectory}`
-  ].join("\n")))
-}
+const report = (diagnostics: DiscoveryDiagnostics): Effect.Effect<void> => Console.log([
+  `${diagnostics.conclusion.toUpperCase()} in ${diagnostics.steps.length} steps`,
+  diagnostics.summary,
+  ...diagnostics.steps.map((step) => `  ${step.id}: ${step.intent}`),
+  `evidence: ${diagnostics.evidenceDirectory}`
+].join("\n"))
 
 const program = Effect.gen(function*() {
   const argv = commandArguments({ switches: ['headed', 'json', 'help', 'handoff'], options: ['entry', 'baseUrl', 'policy', 'model', 'provider', 'maxSteps', 'maxSeconds', 'emit', 'artifactVersion', 'product', 'operatorPort', 'handoffWait'], maxPositionals: 1 })
@@ -151,10 +141,6 @@ const program = Effect.gen(function*() {
     ...(maxSeconds !== undefined ? { maxMillis: maxSeconds * 1000 } : {})
   }
 
-  // The scrubber that grows as the model discovers values. Built here so the
-  // Evidence Layer and the loop share one — see redaction.ts.
-  const secrets = discoveredSecrets()
-
   yield* Console.error(`model: ${model} (${provider}); policy: ${policy.success.name}`)
 
   const common = Layer.mergeAll(
@@ -162,64 +148,65 @@ const program = Effect.gen(function*() {
     policyFrom(policy.success),
     providerFor({ provider, model })
   )
-  const evidence = evidenceFiles({
-    root: EVIDENCE_ROOT, runId, sessionId, scrubber: secrets.registry,
-    allowUnredactedScreenshots: argv.options["baseUrl"] === undefined,
-    policy: "Sensitive goal and parameter values are removed from persisted diagnostics."
+  const asJson = argv.switches.has("json")
+  const emitAs = argv.options["emit"]
+  const workflow = yield* discoveryRun({
+    goal, entry, baseUrl, runId, sessionId, bounds,
+    modelName: model, providerName: provider, publicGoalTerms: heritagePublicGoalTerms,
+    evidence: {
+      root: EVIDENCE_ROOT,
+      allowUnredactedScreenshots: argv.options["baseUrl"] === undefined,
+      policy: "Sensitive goal and parameter values are removed from persisted diagnostics."
+    },
+    ...(asJson || emitAs !== undefined ? { compilation: {
+      capability: emitAs ?? "discovered.capability",
+      version: argv.options["artifactVersion"] ?? "1.0.0",
+      ...(argv.options["product"] === undefined ? {} : { product: argv.options["product"] })
+    } } : {})
   })
-  const execution = discover({
-    goal, entry, baseUrl, runId, sessionId, secrets, bounds,
-    modelName: model, providerName: provider, publicGoalTerms: heritagePublicGoalTerms
-  })
+  const execution = workflow.execute
   const controlled = sessionControl({
     sessionId, waitMillis: handoffWait === undefined ? DEFAULT_HANDOFF_WAIT_MILLIS : handoffWait * 1000,
-    announce: (intervention, operatorUrl) => Console.error([
-      `PAUSED: ${goalDiagnosticScrubber(goal, heritagePublicGoalTerms)(secrets.scrubber(intervention.reason))}`,
+    announce: (intervention, operatorUrl) => Effect.gen(function* () {
+      const evidence = yield* Evidence
+      yield* Console.error([
+      `PAUSED: ${evidence.scrub(intervention.reason)}`,
       `  take control at ${operatorUrl}`,
       argv.switches.has("headed") ? "  use the existing Playwright browser window" : "  restart with --headed for direct browser interaction"
     ].join("\n"))
-  }).pipe(Layer.provideMerge(evidence))
-  const trajectory = argv.switches.has("handoff")
+    }).pipe(Effect.provide(workflow.evidence))
+  }).pipe(Layer.provideMerge(workflow.evidence))
+  const result = argv.switches.has("handoff")
     ? yield* Effect.gen(function* () {
       const control = yield* SessionControl
       const operator = yield* serveOperator({ control, port: operatorPort })
       yield* Console.error(`operator interface: ${operator.url}`)
       return yield* execution
     }).pipe(Effect.provide(Layer.mergeAll(common, handoffSession.pipe(Layer.provideMerge(controlled)))))
-    : yield* execution.pipe(Effect.provide(Layer.mergeAll(common, evidence, automationOwnedSession(sessionId))))
+    : yield* execution.pipe(Effect.provide(Layer.mergeAll(common, automationOwnedSession(sessionId))))
 
-  const asJson = argv.switches.has("json")
-  const emitAs = argv.options["emit"]
-  if (trajectory.conclusion.conclusion === "reached" && (asJson || emitAs !== undefined)) {
-    const compiled = serializeCompilation(trajectory, {
-      publicGoalTerms: heritagePublicGoalTerms,
-      capability: emitAs ?? "discovered.capability",
-      version: argv.options["artifactVersion"] ?? "1.0.0",
-      ...(argv.options["product"] === undefined ? {} : { product: argv.options["product"] })
-    })
-    if (Result.isFailure(compiled)) {
-      yield* Console.error("compilation refused; see the redacted discovery evidence")
-      for (const reason of compiled.failure.reasons) yield* Console.error(goalDiagnosticScrubber(goal, heritagePublicGoalTerms)(secrets.scrubber(reason)))
-      process.exitCode = 1
-    } else {
-      if (emitAs !== undefined) {
-        const written = writeArtifact(ARTIFACTS_DIRECTORY, compiled.success.artifact)
-        if (Result.isFailure(written)) {
-          yield* Console.error(written.failure.message)
-          process.exitCode = 1
-        } else yield* Console.error(`artifact: ${written.success}`)
-      }
-      if (asJson) yield* Console.log(JSON.stringify(compiled.success, undefined, 2))
+  if (result.compilation.status === "refused") {
+    yield* Console.error("compilation refused; see the redacted discovery evidence")
+    for (const reason of result.compilation.reasons) yield* Console.error(reason)
+    process.exitCode = 1
+  } else if (result.compilation.status === "compiled") {
+    if (emitAs !== undefined) {
+      const written = writeArtifact(ARTIFACTS_DIRECTORY, result.compilation.stored.artifact)
+      if (Result.isFailure(written)) {
+        yield* Console.error(written.failure.message)
+        process.exitCode = 1
+      } else yield* Console.error(`artifact: ${written.success}`)
     }
+    if (asJson) yield* Console.log(JSON.stringify(result.compilation.stored, undefined, 2))
   }
-  if (!asJson) yield* report(trajectory, goal, secrets.scrubber)
-  else if (trajectory.conclusion.conclusion !== "reached") {
-    yield* Console.log(JSON.stringify(trajectory, undefined, 2))
+  if (!asJson) yield* report(result.diagnostics)
+  else if (result.diagnostics.conclusion !== "reached") {
+    yield* Console.log(JSON.stringify(result.diagnostics, undefined, 2))
   }
 
   // Stuck is not a crash — it is the loop doing its job — but it is not a
   // completed one either, and a caller scripting this needs to be able to tell.
-  if (trajectory.conclusion.conclusion !== "reached") process.exitCode = 1
+  if (result.diagnostics.conclusion !== "reached") process.exitCode = 1
 })
 
 Effect.runPromise(Effect.scoped(program)).catch(() => {
