@@ -231,6 +231,20 @@ must therefore be explicitly allowed.
 
 ## Transfer control to a person
 
+[Watch the 40-second handoff recording](https://github.com/user-attachments/assets/bd44bf29-4424-434d-be28-df105e95caa3).
+It shows the application and operator interface side by side: Replay pauses,
+the Operator takes the same Session, releases the supervisor hold and returns
+control, then Replay verifies the screen and returns both balances.
+
+[![Watch the handoff video: the original account session and completed ownership history](evidence/verification/2026-09-08-handoff-video/preview.png)](https://github.com/user-attachments/assets/bd44bf29-4424-434d-be28-df105e95caa3)
+
+The recording uses real Chromium and the real operator form with scripted
+Operator actions. Only synthetic fixture values appear. The
+[recording receipt and event logs](evidence/verification/2026-09-08-handoff-video/README.md)
+identify the source revision, verify ownership exclusion and link the uploaded
+video. The video is attached to [PR #2](https://github.com/mcalhoun/interface-interview/pull/2)
+using GitHub CLI's `--attach` feature.
+
 For the repeatable manual demo, run `bun run demo:handoff`. Follow the [human handoff walkthrough](docs/human-handoff.md) for the exact controls and synthetic supervisor values. `bun run verify:handoff` checks the same-session transfer, ownership exclusion, recorded actions, verified completion and blocked return in real Chromium. Its Operator is scripted.
 
 ```bash

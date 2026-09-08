@@ -1,0 +1,23 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 2000
+PlayResY: 1080
+WrapStyle: 0
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Title,Arial,29,&H00FFFFFF,&H00FFFFFF,&H00221B12,&H00221B12,-1,0,0,0,100,100,0,0,1,0,0,8,20,20,7,1
+Style: Label,Arial,22,&H00DDDDDD,&H00DDDDDD,&H00221B12,&H00221B12,0,0,0,0,100,100,0,0,1,0,0,8,20,20,44,1
+Style: Caption,Arial,27,&H00FFFFFF,&H00FFFFFF,&H00221B12,&H00221B12,0,0,0,0,100,100,0,0,1,0,0,2,90,90,28,1
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:39.70,Title,,0,0,0,,Human handoff | Real Chromium session | Synthetic fixture | Scripted Operator
+Dialogue: 0,0:00:00.00,0:00:39.70,Label,,0,0,0,,{\pos(500,45)}Application: the same session throughout
+Dialogue: 0,0:00:00.00,0:00:39.70,Label,,0,0,0,,{\pos(1500,45)}Operator interface: ownership and recorded actions
+Dialogue: 0,0:00:00.05,0:00:06.62,Caption,,0,0,0,,Replay paused at the supervisor hold. The operator request includes the stopping context.
+Dialogue: 0,0:00:06.62,0:00:09.66,Caption,,0,0,0,,The Operator owns the original Session. Automation cannot act.
+Dialogue: 0,0:00:09.66,0:00:14.46,Caption,,0,0,0,,A competing Replay was refused with control_lost.
+Dialogue: 0,0:00:14.46,0:00:19.53,Caption,,0,0,0,,The Operator enters synthetic supervisor values in the same application Session.
+Dialogue: 0,0:00:19.53,0:00:23.10,Caption,,0,0,0,,Authorize releases the hold. Both balances are now visible.
+Dialogue: 0,0:00:23.10,0:00:28.14,Caption,,0,0,0,,The request records observed field changes and the confirmed action. Future runs must ask a person.
+Dialogue: 0,0:00:28.14,0:00:34.70,Caption,,0,0,0,,Control returns to automation. Replay verifies the account screen before extracting balances.
+Dialogue: 0,0:00:34.70,0:00:39.70,Caption,,0,0,0,,Verified success: available 2730.11 USD; current 2905.60 USD. One Session throughout.
