@@ -18,7 +18,7 @@
  *      Nothing is pressed on a model's say-so at any point.
  *   4. **A delta, not a copy.** The stored override changes one field of one
  *      step, records how it was discovered and who confirmed it, and leaves
- *      `artifacts/` untouched.
+ *      `config/capabilities/` untouched.
  *   5. **Both institutions, afterwards.** The same capability, the same version,
  *      the same two balances.
  *
@@ -548,7 +548,7 @@ describe("the override is a scoped delta against the base capability", () => {
     expect(Result.isFailure(missing)).toBe(true)
   })
 
-  it("nothing under artifacts/ was written by any of this", () => {
+  it("nothing under config/capabilities/ was written by any of this", () => {
     // The vendor-level capability stays single-sourced (SPEC user story 55), and
     // the cheapest way to check it is to look.
     expect(listVersions(ARTIFACTS_DIRECTORY, CAPABILITY)).toEqual(["1.2.0", "1.1.0", "1.0.0"])

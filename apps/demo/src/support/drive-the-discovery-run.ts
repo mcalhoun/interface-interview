@@ -131,9 +131,14 @@ const verifiedSource = (directory: string, artifactsRoot: string) => {
   return { version, stored, path, sha256: hash(path) }
 }
 
+// Retained receipts name the former default store. Resolve its new location
+// without changing the recorded path or relaxing the artifact digest checks.
+const receiptStore = (recorded: string): string =>
+  recorded === "artifacts" && !existsSync(recorded) ? ARTIFACTS_DIRECTORY : recorded
+
 /** Older interrupted runs can acquire a receipt only after the same checks. */
-const writeSourceReceipt = (directory: string, artifactsRoot = ARTIFACTS_DIRECTORY) => {
-  const verified = verifiedSource(directory, artifactsRoot)
+const writeSourceReceipt = (directory: string, artifactsRoot = ARTIFACTS_DIRECTORY, lookupRoot = artifactsRoot) => {
+  const verified = verifiedSource(directory, lookupRoot)
   const path = join(directory, "source.json")
   if (existsSync(path)) {
     const receipt = Schema.decodeUnknownSync(SourceReceipt)(JSON.parse(readFileSync(path, "utf8")))
@@ -150,10 +155,11 @@ const writeSourceReceipt = (directory: string, artifactsRoot = ARTIFACTS_DIRECTO
 /** Append a fresh deterministic completion attempt; never rediscover or overwrite. */
 export const resumeDiscoveryEvidence = (directory: string) => Effect.gen(function* () {
     const receiptPath = join(directory, "source.json")
-    const artifactsRoot = existsSync(receiptPath)
+    const recordedArtifactsRoot = existsSync(receiptPath)
       ? Schema.decodeUnknownSync(SourceReceipt)(JSON.parse(readFileSync(receiptPath, "utf8"))).artifactsRoot
       : ARTIFACTS_DIRECTORY
-    const receipt = writeSourceReceipt(directory, artifactsRoot)
+    const artifactsRoot = receiptStore(recordedArtifactsRoot)
+    const receipt = writeSourceReceipt(directory, recordedArtifactsRoot, artifactsRoot)
     if (existsSync(join(directory, "manifest.json"))) {
       say(`Discovery evidence is already complete: ${directory}`)
       return

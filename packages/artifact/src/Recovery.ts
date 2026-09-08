@@ -2,7 +2,7 @@
  * Recoverable Conditions: the transient states a Capability declares it knows how
  * to get past on its own.
  *
- * CONTEXT.md: "A transient state the system knows how to get past on its own. A
+ * docs/glossary.md: "A transient state the system knows how to get past on its own. A
  * slow load, a dismissable interstitial, an expired session. The run continues
  * afterwards." SPEC's classification table calls the recoverable class
  * *declarable*, learned from what a person did during an Intervention that put

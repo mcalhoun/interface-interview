@@ -7,7 +7,7 @@
  * the tests use, and here for the reason ticket 14's driver exists: **the
  * override this repository ships has to be the output of a run, not a document
  * somebody typed.** ADR-0006 says tenant overrides are discovered and confirmed,
- * never hand-written, and a hand-written file in `overrides/` would make that
+ * never hand-written, and a hand-written file in `config/tenant-overrides/` would make that
  * sentence false in the most visible way available.
  *
  * Four runs, in order, and the shape of them is the whole argument:
@@ -31,7 +31,7 @@
  *
  * It writes:
  *
- *   - `overrides/community-cu/member.account-balance.yaml`, if it is not there
+ *   - `config/tenant-overrides/community-cu/member.account-balance.yaml`, if it is not there
  *     already (a second run refuses to change a confirmed entry and says so);
  *   - the evidence for all four runs under `evidence/tenant/community-cu/`.
  */
@@ -194,7 +194,7 @@ const program = Effect.gen(function* () {
       `expected a confirmed override, got ${proposed._tag}: ${JSON.stringify(proposed)}`
     )
   }
-  say(`  artifacts/${CAPABILITY}/ was not written to`)
+  say(`  config/capabilities/${CAPABILITY}/ was not written to`)
 
   // -----------------------------------------------------------------------
   // 4. The same capability, both institutions, with the delta in force.

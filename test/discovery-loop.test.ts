@@ -2,7 +2,7 @@
  * The Discovery loop, driving a real browser.
  *
  * Everything below the model is real: a real Chromium, the real Heritage Core
- * fixture, the shipped `policies/default.yaml`, Evidence on disk. Only the
+ * fixture, the shipped `config/policies/default.yaml`, Evidence on disk. Only the
  * judgement is scripted, and `apps/demo/src/support/scripted-model.ts` argues why (SPEC
  * records a live-model test as a deliberate cut: slow, costly, non-deterministic).
  *

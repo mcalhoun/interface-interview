@@ -2,7 +2,7 @@
  * A Tenant Override: the scoped delta, and the only shape of difference it can
  * express.
  *
- * CONTEXT.md: "A scoped delta against a Capability Artifact, covering a
+ * docs/glossary.md: "A scoped delta against a Capability Artifact, covering a
  * difference a Tenant's Surface presents that matching cannot absorb.
  * Discovered through the Recovery Ladder, never hand-written."
  *
@@ -17,7 +17,7 @@
  * one set of versions, one review; a Tenant's file says only what is different
  * about that Tenant.
  *
- * Nothing under `artifacts/` changes when an Override is written. That is the
+ * Nothing under `config/capabilities/` changes when an Override is written. That is the
  * property, and it is visible on disk rather than argued for: the override lives
  * in its own tree and names the base version it was discovered against.
  *
@@ -134,7 +134,7 @@ const namedTarget = (step: Step) =>
 /**
  * Applies a Tenant's delta to the base Capability, in memory.
  *
- * The result is never written to `artifacts/`. It is the document *this run*
+ * The result is never written to `config/capabilities/`. It is the document *this run*
  * executes, assembled from the vendor's version plus the institution's
  * differences, and the two halves stay separately reviewable on disk.
  *

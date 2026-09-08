@@ -95,7 +95,7 @@ The adapter handles the member-field variation and the inline balance panel.
 Account selection matches the caller's words against the live account labels, so
 "Savings" still finds "Regular Savings." It does not guess that "Find" means
 "Search." That mismatch stops replay until a confirmed
-[tenant override](overrides/community-cu/member.account-balance.yaml) supplies the
+[tenant override](config/tenant-overrides/community-cu/member.account-balance.yaml) supplies the
 replacement button name. The override names its base capability version, `1.2.0`,
 and leaves that shared artifact unchanged.
 
@@ -118,8 +118,8 @@ To replay against Community CU with its saved override:
 bun run replay member.account-balance --memberId 12345 --tenant community-cu
 ```
 
-The [tenant definitions](apps/legacy-core/src/tenants.ts) and
-[member records](apps/legacy-core/src/members.ts) contain the fixture data.
+The [tenant definitions](apps/banking/src/tenants.ts) and
+[member records](apps/banking/src/members.ts) contain the fixture data.
 
 ## Try the exceptional states
 
@@ -195,7 +195,7 @@ bun run replay member.account-balance.local --version 1.0.0 --memberId 12345 --j
 ```
 
 Run replay after discovery succeeds. Discovery calls the model, drives Chromium
-and compiles the observed flow into a YAML capability under `artifacts/`.
+and compiles the observed flow into a YAML capability under `config/capabilities/`.
 The retained live run used `gpt-4.1`; a fresh model run can choose different steps
 or fail to compile. Artifact versions are immutable, so use a new name or version
 when repeating the command.
@@ -269,9 +269,9 @@ extension of that boundary, not an implemented adapter.
 | Assignment section | Implementation to inspect |
 | --- | --- |
 | 3.1 Goal-driven loop | [Discovery](packages/agent/src/discovery.ts) and [agent loop](packages/agent/src/loop.ts) |
-| 3.2 Structured capability | [Artifact schema](packages/artifact/src/CapabilityArtifact.ts) and [compiled example](artifacts/member.account-balance.discovered/1.5.0.yaml) |
+| 3.2 Structured capability | [Artifact schema](packages/artifact/src/CapabilityArtifact.ts) and [compiled example](config/capabilities/member.account-balance.discovered/1.5.0.yaml) |
 | 3.3 Replay and errors | [Replay engine](packages/replay/src/engine.ts), [result contract](packages/replay/src/ReplayResult.ts) and [checkpoints](packages/replay/src/checkpoint.ts) |
-| 3.4 Safety and policy | [Default policy](policies/default.yaml), [text redaction](packages/evidence/src/Scrub.ts) and [learning checks](packages/replay/src/learning.ts) |
+| 3.4 Safety and policy | [Default policy](config/policies/default.yaml), [text redaction](packages/evidence/src/Scrub.ts) and [learning checks](packages/replay/src/learning.ts) |
 | 3.5 Evidence | [Evidence writer](packages/evidence/src/EvidenceWriter.ts) and the proof bundles below |
 | 3.6 Human handoff | [Operator walkthrough](docs/human-handoff.md) and [acceptance tests](test/human-handoff-acceptance.test.ts) |
 | 3.7 Heterogeneity and tenant reuse | [Adapter contract](packages/surface/src/SurfaceAdapter.ts), [tenant tests](test/second-tenant-and-discovered-override.test.ts) and [design report](REPORT.md#heterogeneity--multi-tenant) |
@@ -323,6 +323,8 @@ The driver refuses artifact and evidence collisions. If a later verification
 stage fails, `--resume <bundle-directory>` verifies the saved artifact and its
 compilation receipt before appending a completion attempt. Generated evidence
 is normally gitignored; retained submission bundles were explicitly added.
+Historical logs and receipts retain their recorded paths and hashes. The
+[evidence index](evidence/README.txt) maps those paths to the current layout.
 
 ## Safety boundaries and remaining work
 
@@ -346,12 +348,16 @@ points and tradeoffs.
 
 ## Find your way around the repository
 
+`apps/` contains runnable programs, and `packages/` contains the automation code
+those programs share. `config/` holds saved capabilities, tenant overrides and
+policies. Tests, documentation and recorded proof each have their own directory.
+
 | Path | Contents |
 | --- | --- |
 | `apps/cli/` | Discovery, compilation and replay commands |
-| `apps/legacy-core/` | Fictional banking application, tenants and member data |
+| `apps/banking/` | Fictional banking application, tenants and member data |
 | `apps/operator/` | Local interface for taking and returning control |
-| `apps/demo/` | Demo helpers and evidence drivers |
+| `apps/demo/` | Demo entry point, helpers and evidence drivers |
 | `packages/agent/` | Discovery loop, compiler, model provider and assisted classification |
 | `packages/replay/` | Replay, checkpoints, recovery and learning |
 | `packages/surface/` | Accessibility observation, target resolution and browser actions |
@@ -359,10 +365,13 @@ points and tradeoffs.
 | `packages/session/` | Session ownership and interventions |
 | `packages/policy/` | Allowed actions, origins and sensitivity rules |
 | `packages/evidence/` | Structured events and text redaction |
-| `artifacts/`, `overrides/`, `policies/` | Saved capabilities, tenant changes and deployment rules |
+| `config/capabilities/` | Saved, versioned automation flows |
+| `config/tenant-overrides/` | Confirmed changes for a specific tenant |
+| `config/policies/` | Allowed origins, actions and data handling rules |
 | `test/` | Automated checks |
+| `docs/` | Glossary, specification, handoff guide and architecture decisions |
 | `evidence/` | Retained runs, receipts, logs and verification reports |
 
-[CONTEXT.md](CONTEXT.md) defines the project vocabulary.
-[SPEC.md](SPEC.md) records the original implementation plan.
+[The glossary](docs/glossary.md) defines the project vocabulary.
+[The specification](docs/specification.md) records the original implementation plan.
 [docs/adr/](docs/adr/) records the architecture decisions.

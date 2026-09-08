@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -59,8 +59,8 @@ describe("resuming recorded discovery", () => {
     const artifactsRoot = join(root, "artifacts")
     const directory = join(root, "run")
     const capability = "member.account-balance.discovered"
-    const yaml = readFileSync(join("artifacts", capability, "1.0.0.yaml"), "utf8")
-    const artifact = loadArtifact("artifacts", capability, "1.0.0")
+    const yaml = readFileSync(join("config/capabilities", capability, "1.0.0.yaml"), "utf8")
+    const artifact = loadArtifact("config/capabilities", capability, "1.0.0")
     if (Result.isFailure(artifact)) throw artifact.failure
     mkdirSync(join(artifactsRoot, capability), { recursive: true })
     mkdirSync(directory)
@@ -79,4 +79,26 @@ describe("resuming recorded discovery", () => {
     writeFileSync(join(directory, "source.json"), JSON.stringify({ format: "discovery-source-v1", artifactsRoot, version: "1.0.0", sha256: "wrong" }))
     await expect(Effect.runPromise(resumeDiscoveryEvidence(directory))).rejects.toThrow("digest changed")
   })
+})
+
+it("resolves the recorded default store after relocation without changing receipt bytes", async () => {
+  const { Effect } = await import("effect")
+  const { resumeDiscoveryEvidence } = await import("../apps/demo/src/support/drive-the-discovery-run.ts")
+  const original = "evidence/discovery/live-2026-09-08T14-45-52-190Z-132a40d2"
+  const directory = mkdtempSync(join(tmpdir(), "cua-relocated-discovery-"))
+  try {
+    for (const name of ["source.json", "compilation.json", "manifest.json"]) {
+      copyFileSync(join(original, name), join(directory, name))
+    }
+    const copy = join(directory, "1.5.0.yaml")
+    copyFileSync("config/capabilities/member.account-balance.discovered/1.5.0.yaml", copy)
+    await Effect.runPromise(resumeDiscoveryEvidence(directory))
+    for (const name of ["source.json", "compilation.json", "manifest.json"]) {
+      expect(readFileSync(join(directory, name), "utf8")).toBe(readFileSync(join(original, name), "utf8"))
+    }
+    writeFileSync(copy, readFileSync(copy, "utf8") + "\n# tampered copy\n")
+    await expect(Effect.runPromise(resumeDiscoveryEvidence(directory))).rejects.toThrow("source mismatch")
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 })

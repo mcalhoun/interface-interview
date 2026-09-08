@@ -1,7 +1,7 @@
 /**
  * Where Capability Artifacts live on disk, and how a version is resolved.
  *
- * One file per version under `artifacts/<capability>/<version>.yaml`, never
+ * One file per version under `config/capabilities/<capability>/<version>.yaml`, never
  * rewritten. SPEC's reasoning: immutability is what makes "reviewable before
  * production use" demonstrable, because a reviewer can diff `1.0.0` against
  * `1.1.0` and see one outcome entry added. A single mutable file with git history
@@ -28,7 +28,7 @@ import { type TenantOverride, formatOverride, parseOverride } from "./Override.t
 import { ArtifactInvalid, formatArtifact, parseArtifact } from "./parse.ts"
 
 /** The repository's artifact directory, relative to the workspace root. */
-export const ARTIFACTS_DIRECTORY = "artifacts"
+export const ARTIFACTS_DIRECTORY = "config/capabilities"
 
 /**
  * What a version file is called: three numbers, and nothing else.
@@ -215,15 +215,15 @@ export const listCapabilities = (directory: string): ReadonlyArray<string> => {
 // ---------------------------------------------------------------------------
 
 /**
- * Where a Tenant's deltas live: `overrides/<tenant>/<capability>.yaml`.
+ * Where a Tenant's deltas live: `config/tenant-overrides/<tenant>/<capability>.yaml`.
  *
- * A separate tree from `artifacts/`, deliberately. SPEC user story 55 asks for
+ * A separate tree from `config/capabilities/`, deliberately. SPEC user story 55 asks for
  * the vendor-level capability to stay single-sourced, and the cheapest way to
  * make that checkable is for a reviewer to be able to see that no file under
- * `artifacts/` moved when a tenant was onboarded. Nesting the overrides inside a
+ * `config/capabilities/` moved when a tenant was onboarded. Nesting the overrides inside a
  * capability's directory would have been tidier and would have cost exactly that.
  */
-export const OVERRIDES_DIRECTORY = "overrides"
+export const OVERRIDES_DIRECTORY = "config/tenant-overrides"
 
 const overridePath = (directory: string, tenant: string, capability: string): string =>
   join(directory, tenant, `${capability}.yaml`)

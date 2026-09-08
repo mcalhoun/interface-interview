@@ -177,14 +177,14 @@ version.
 The files in this directory were not produced by step 2, and that is worth being
 straight about. Releasing the hold means acting in the live browser window, and
 there was no person available to do it in the environment this was built in. So
-they came from `test/support/drive-the-supervisor-hold.ts`, which is step 2 with
+they came from `apps/demo/src/support/drive-the-supervisor-hold.ts`, which is step 2 with
 a scripted operator and everything else real: one Heritage Core, one Chromium,
 one Session, the shipped policy, the operator interface over HTTP, the real
 evidence writer with the real scrubber. The "person" fills the two fields and
 presses Authorize in the automation's own browser window, which is what ADR-0009
 says a handoff is. Rerun it with:
 
-    bun run test/support/drive-the-supervisor-hold.ts
+    bun run apps/demo/src/support/drive-the-supervisor-hold.ts
 
 
 What this is not

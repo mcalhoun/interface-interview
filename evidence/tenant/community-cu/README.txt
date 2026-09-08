@@ -1,6 +1,6 @@
 One capability, two institutions running the same vendor product.
 
-Produced by: bun run test/support/drive-the-tenant-override.ts
+Produced by: bun run apps/demo/src/support/drive-the-tenant-override.ts
 Base capability: member.account-balance@1.2.0, unchanged by any of this.
 
 SPEC's second-tenant table, and what each row actually cost:

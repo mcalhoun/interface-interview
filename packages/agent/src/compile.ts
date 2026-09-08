@@ -53,7 +53,7 @@
  * nothing was observed, the compiler refuses rather than inventing:
  *
  *   - a Step whose success nothing could confirm is refused, not given a
- *     checkpoint that always passes. CONTEXT.md defines a Step as an Action
+ *     checkpoint that always passes. docs/glossary.md defines a Step as an Action
  *     paired with the Checkpoint that confirms it landed, and a vacuous
  *     Checkpoint is how "the action did not throw" becomes the success criterion
  *     again.

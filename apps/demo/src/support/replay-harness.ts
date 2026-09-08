@@ -57,7 +57,7 @@ export const shippedArtifact = (
 }
 
 /**
- * A Policy from `policies/`, the same files a run in production would use.
+ * A Policy from `config/policies/`, the same files a run in production would use.
  *
  * Every replay test runs under a real shipped Policy rather than a permissive
  * stand-in, which is the point: the tracer bullet passing means it passes the
@@ -87,7 +87,7 @@ export const replay = (options: {
   readonly artifact: CapabilityArtifact
   readonly inputs: Readonly<Record<string, string>>
   readonly runId?: string
-  /** Which Policy is in force. Defaults to the shipped `policies/default.yaml`. */
+  /** Which Policy is in force. Defaults to the shipped `config/policies/default.yaml`. */
   readonly policy?: CompiledPolicy
   /**
    * The tenant installation to run against, overriding the in-process fixture.

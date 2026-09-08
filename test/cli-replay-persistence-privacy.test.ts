@@ -75,7 +75,7 @@ it.live("CLI override persistence retains secrets registered from the live scree
       }).pipe(Effect.provideService(Console.Console, { ...console, error: capture, log: capture }))
       yield* Effect.promise(async () => { await operated })
       expect(operated).toBeDefined()
-      expect(existsSync(join("overrides", tenant, `${capability}.yaml`))).toBe(false)
+      expect(existsSync(join("config/tenant-overrides", tenant, `${capability}.yaml`))).toBe(false)
       expect(messages.join("\n")).toContain("OVERRIDE REFUSED")
       expect(messages.join("\n")).not.toContain(secret)
       const directory = readdirSync("evidence/replay").find((name) => name.startsWith(capability))
@@ -87,7 +87,7 @@ it.live("CLI override persistence retains secrets registered from the live scree
       }
     } finally {
       process.exitCode = priorExitCode
-      rmSync(join("overrides", tenant), { recursive: true, force: true })
+      rmSync(join("config/tenant-overrides", tenant), { recursive: true, force: true })
       for (const directory of readdirSync("evidence/replay").filter((name) => name.startsWith(capability))) {
         rmSync(join("evidence/replay", directory), { recursive: true, force: true })
       }

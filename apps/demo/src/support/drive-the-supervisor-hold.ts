@@ -23,7 +23,7 @@
  *
  * It writes:
  *
- *   - `artifacts/member.account-balance/1.2.0.yaml`, if it is not there already
+ *   - `config/capabilities/member.account-balance/1.2.0.yaml`, if it is not there already
  *     (an Artifact store is immutable; a second run refuses and says so);
  *   - the evidence for both runs, and the 1.1.0 → 1.2.0 diff, under
  *     `evidence/learning/77777-supervisor-hold/`.

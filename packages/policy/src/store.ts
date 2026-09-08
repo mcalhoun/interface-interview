@@ -1,7 +1,7 @@
 /**
  * Where Policies live on disk, and how one becomes a service.
  *
- * `policies/<name>.yaml`, beside `artifacts/`, for the same reason: both are
+ * `config/policies/<name>.yaml`, beside `config/capabilities/`, for the same reason: both are
  * documents a reviewer reads, and a reviewer should be able to find every
  * statement of what the system may do by listing one directory.
  *
@@ -28,7 +28,7 @@ import { Policy } from "./Policy.ts"
 import { type CompiledPolicy, PolicyInvalid, parsePolicy } from "./PolicyDocument.ts"
 
 /** The repository's policy directory, relative to the workspace root. */
-export const POLICIES_DIRECTORY = "policies"
+export const POLICIES_DIRECTORY = "config/policies"
 
 /** The Policy in force when nothing says otherwise. */
 export const DEFAULT_POLICY = "default"

@@ -15,7 +15,7 @@
  *
  * ## Where the decisions actually live
  *
- * In `policies/*.yaml`, not here. A reviewer asking "what is this system allowed
+ * In `config/policies/*.yaml`, not here. A reviewer asking "what is this system allowed
  * to do" should be able to answer it by reading one page of YAML — which origins,
  * which Action types, and, for anything irreversible, why it was permitted. This
  * module is the vocabulary that file is written in; `PolicyDocument.ts` is the
@@ -222,7 +222,7 @@ export class Policy extends Context.Service<Policy, {
    * `ActionRequest` with fields an Action has no use for or adding a member to
    * the Action vocabulary that performs no Action. A Policy that says nothing
    * about consulting denies it, like everything else this engine does not
-   * mention (ADR-0005, and `policies/default.yaml`).
+   * mention (ADR-0005, and `config/policies/default.yaml`).
    *
    * Total, for the same reason `authorise` is: a denial is a verdict the rung
    * records as Evidence and falls back from, never an exception that skips the

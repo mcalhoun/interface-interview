@@ -96,14 +96,14 @@ version.
 
 The files in this directory were not produced by step 2, and that is worth being
 straight about. There was nobody at the keyboard in the environment this was
-built in, so they came from `test/support/drive-the-checking-only-outcome.ts`,
+built in, so they came from `apps/demo/src/support/drive-the-checking-only-outcome.ts`,
 which is step 2 with a scripted operator and everything else real: one Heritage
 Core, one Chromium, one Session, the shipped policy, the operator interface over
 HTTP, the real evidence writer with the real scrubber. The "person" takes
 control, does nothing, and hands it back answering the one question. Rerun it
 with:
 
-    bun run test/support/drive-the-checking-only-outcome.ts
+    bun run apps/demo/src/support/drive-the-checking-only-outcome.ts
 
 `1.0.0-to-1.1.0.diff` is rendered from the two versions on disk rather than from
 that run's own proposal, and the driver says so when it writes it. The shipped

@@ -2,7 +2,7 @@
  * Policy: the one place that decides whether an Action may happen, and the one
  * place that decides which parameters may be written down in the clear.
  *
- * Read `policies/default.yaml` first. It is the statement of what this system may
+ * Read `config/policies/default.yaml` first. It is the statement of what this system may
  * do, and it is meant to be readable without reading any of this package.
  *
  * `Policy.ts` is the vocabulary that file is written in and the risk
