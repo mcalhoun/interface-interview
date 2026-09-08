@@ -8,10 +8,10 @@ import { expect, it } from "vitest"
 for (const existing of [true, false]) {
   it(`supervisor demo records the artifact it replays when the target version ${existing ? "exists" : "is new"}`, async () => {
     const root = mkdtempSync(join(tmpdir(), "cua-supervisor-evidence-"))
-    const store = join(root, "artifacts")
+    const store = join(root, "config/capabilities")
     const target = join(store, "member.account-balance", "1.2.0.yaml")
-    cpSync(resolve("artifacts"), store, { recursive: true })
-    cpSync(resolve("policies"), join(root, "policies"), { recursive: true })
+    cpSync(resolve("config/capabilities"), store, { recursive: true })
+    cpSync(resolve("config/policies"), join(root, "config/policies"), { recursive: true })
     const original = readFileSync(target, "utf8")
     if (!existing) rmSync(target)
     try {

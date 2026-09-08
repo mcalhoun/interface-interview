@@ -141,7 +141,7 @@ export class HandoffIncomplete extends Schema.TaggedError<HandoffIncomplete>()(
 /**
  * One change of hands.
  *
- * CONTEXT.md asks for a Control Owner that is "always answerable, never
+ * docs/glossary.md asks for a Control Owner that is "always answerable, never
  * implied", and the current owner alone does not quite deliver that: it answers
  * who holds the Session but not how it got to them. `RESUME_REQUESTED` in
  * particular is real and brief — the parked run wakes the instant its `Deferred`

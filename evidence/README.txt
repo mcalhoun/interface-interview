@@ -13,18 +13,18 @@ of them rather than take the files on trust:
       A discovery run a language model drove: gpt-4.1 through the real provider,
       the real loop, a real Chromium, the real Heritage Core fixture, the shipped
       policy, the real evidence writer. Nothing in it is scripted.
-      `artifacts/member.account-balance.discovered/1.0.0.yaml` was compiled from
+      `config/capabilities/member.account-balance.discovered/1.0.0.yaml` was compiled from
       this run, in the process that did it, and then replayed unedited. Read
       README.txt in the directory first.
 
-      Produced by: bun run test/support/drive-the-discovery-run.ts
+      Produced by: bun run apps/demo/src/support/drive-the-discovery-run.ts
 
   learning/
       The centrepiece. Two interventions, one mechanism, opposite conclusions.
       Start with learning/README.txt, then read the two diffs side by side.
 
-      Produced by: bun run test/support/drive-the-checking-only-outcome.ts
-                   bun run test/support/drive-the-supervisor-hold.ts
+      Produced by: bun run apps/demo/src/support/drive-the-checking-only-outcome.ts
+                   bun run apps/demo/src/support/drive-the-supervisor-hold.ts
 
   tenant/community-cu/
       Onboarding a second institution running the same vendor product. Four
@@ -32,7 +32,7 @@ of them rather than take the files on trust:
       confirming it, and the same capability succeeding at both institutions.
       The consultation's judgement is scripted; see NO-MODEL-DROVE-THIS.txt.
 
-      Produced by: bun run test/support/drive-the-tenant-override.ts
+      Produced by: bun run apps/demo/src/support/drive-the-tenant-override.ts
 
   assist/
       The assisted rung, with and without. Same run, same screen, and the
@@ -40,7 +40,7 @@ of them rather than take the files on trust:
       The classification is scripted so the pair shows the accepted path;
       NO-MODEL-DROVE-THIS.txt says so and gives the live command.
 
-      Produced by: bun run test/support/drive-the-assisted-rung.ts
+      Produced by: bun run apps/demo/src/support/drive-the-assisted-rung.ts
 
 `bun run demo` writes everything it produces under `demo/`, which it clears
 first. It never writes to the four directories above.
@@ -80,3 +80,29 @@ Two placeholder spellings, and they mean different things
 
   <redacted:memberId>    a value we were holding was serialised, and the
                          Redacted type stopped it. Nothing leaked.
+
+Current paths for historical evidence
+-------------------------------------
+
+Recorded events, receipts, source manifests, scripts and capability copies retain
+their original contents. Use these repository paths when inspecting the same
+files in the current checkout:
+
+  Former location                 Current location
+  artifacts/                      config/capabilities/
+  overrides/                      config/tenant-overrides/
+  policies/                       config/policies/
+  apps/legacy-core/               apps/banking/
+  demo.ts                         apps/demo/src/main.ts
+  CONTEXT.md                      docs/glossary.md
+  SPEC.md                         docs/specification.md
+  test/support/drive-the-*.ts      apps/demo/src/support/drive-the-*.ts
+
+These moves do not change saved capability bytes. The discovery resume command
+checks both the current and former default capability stores. It accepts a copy
+only when it matches the recorded digest, compilation receipt and evidence copy.
+Other custom store locations retain their recorded meaning.
+
+Historical source manifests describe their recorded revisions. Their paths and
+hashes are not rewritten to claim verification of a later checkout. Recording
+scripts are provenance copies; follow their bundle README for execution context.

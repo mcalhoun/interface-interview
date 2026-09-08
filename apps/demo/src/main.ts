@@ -16,7 +16,7 @@
  * ## What is real here, and what is not
  *
  * Real: one Chromium per run, the real Heritage Core fixture, the shipped
- * `policies/default.yaml`, the real Evidence writer with the real scrubber, the
+ * `config/policies/default.yaml`, the real Evidence writer with the real scrubber, the
  * real operator interface over HTTP, and the real amendment and override
  * mechanisms.
  *
@@ -50,12 +50,12 @@ import {
 } from "@cua/artifact"
 import { type Advisor, type ReplayResult } from "@cua/replay"
 import { Effect } from "effect"
-import { runDiscovery } from "./apps/demo/src/support/discovery-harness.ts"
-import { GOAL, readsTheScreen } from "./apps/demo/src/support/discovery-script.ts"
-import { attendedReplay } from "./apps/demo/src/support/handoff-harness.ts"
-import { replay, shippedArtifact } from "./apps/demo/src/support/replay-harness.ts"
-import { respondingModel, scriptedModel } from "./apps/demo/src/support/scripted-model.ts"
-import { UNSCANNED_EXTENSIONS, filesUnder, scanForSecrets } from "./apps/demo/src/support/secret-scan.ts"
+import { runDiscovery } from "./support/discovery-harness.ts"
+import { GOAL, readsTheScreen } from "./support/discovery-script.ts"
+import { attendedReplay } from "./support/handoff-harness.ts"
+import { replay, shippedArtifact } from "./support/replay-harness.ts"
+import { respondingModel, scriptedModel } from "./support/scripted-model.ts"
+import { UNSCANNED_EXTENSIONS, filesUnder, scanForSecrets } from "./support/secret-scan.ts"
 
 const DEMO_ROOT = join("evidence", "demo")
 const CAPABILITY = "member.account-balance"
@@ -282,7 +282,7 @@ const main = async (): Promise<void> => {
   landed(join(DEMO_ROOT, "01-discovery-replayed"))
   note([
     "The same arc, with a real model rather than this scripted one, is committed at",
-    `evidence/discovery/gpt-4.1-drove-this/. artifacts/${DISCOVERED}/1.0.0.yaml`,
+    `evidence/discovery/gpt-4.1-drove-this/. config/capabilities/${DISCOVERED}/1.0.0.yaml`,
     "was compiled from THAT run, in the process that did it, and is callable by name:",
     `  $ bun run replay ${DISCOVERED} --memberId 12345`,
     "",
@@ -482,7 +482,7 @@ const main = async (): Promise<void> => {
   say()
   note([
     "This run saved its learned version under its own evidence directory.",
-    "artifacts/ already holds 1.2.0 from the earlier intervention. Act 5 shows",
+    "config/capabilities/ already holds 1.2.0 from the earlier intervention. Act 5 shows",
     "that committed version and the diff a reviewer approves."
   ])
 
@@ -619,8 +619,8 @@ const main = async (): Promise<void> => {
   say()
   say(
     fingerprint(ARTIFACTS_DIRECTORY) === artifactsBefore
-      ? "    artifacts/ is byte-for-byte unchanged across the assisted run."
-      : "    artifacts/ CHANGED across the assisted run. That is a bug, not a feature."
+      ? "    config/capabilities/ is byte-for-byte unchanged across the assisted run."
+      : "    config/capabilities/ CHANGED across the assisted run. That is a bug, not a feature."
   )
   say()
   note([
@@ -675,7 +675,7 @@ const main = async (): Promise<void> => {
   say()
   note([
     "One entry, and the file contains none of the other three differences. It lives",
-    "under overrides/, not artifacts/, so onboarding a tenant moved no file the",
+    "under config/tenant-overrides/, not config/capabilities/, so onboarding a tenant moved no file the",
     "vendor-level capability is made of. Now the same capability at both",
     "institutions:"
   ])

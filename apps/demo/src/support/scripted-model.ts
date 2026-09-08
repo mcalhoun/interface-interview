@@ -12,7 +12,7 @@
  * So these layers stand in for the provider. They are the model half only:
  * everything below them in a test is real. The browser is a real Chromium, the
  * application is the real Heritage Core fixture, Policy is the shipped
- * `policies/default.yaml`, and Evidence really is written to disk. The one thing
+ * `config/policies/default.yaml`, and Evidence really is written to disk. The one thing
  * being simulated is the judgement, which is the one thing a test cannot assert
  * about anyway.
  *

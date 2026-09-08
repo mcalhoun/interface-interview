@@ -72,7 +72,7 @@ const usage = (): string =>
     "  --operatorPort <n> operator interface port (default: 4180)",
     "  --handoffWait <s>  how long a paused run waits for an operator",
     "  --emit <name>     on success, compile the run into a stored Capability",
-    "                    Artifact under that name and write it to artifacts/",
+    "                    Artifact under that name and write it to config/capabilities/",
     "  --artifactVersion <ver>  the version to cut with --emit (default: 1.0.0)",
     "  --product <text>  the vendor product to record with --emit; discovery",
     "                    observes an accessibility tree, not a product name",

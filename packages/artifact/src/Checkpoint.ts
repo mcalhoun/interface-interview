@@ -2,7 +2,7 @@
  * Checkpoints: the condition asserted after an Action to confirm the intended
  * state was actually reached.
  *
- * CONTEXT.md defines a Checkpoint as "distinct from the Action merely not
+ * docs/glossary.md defines a Checkpoint as "distinct from the Action merely not
  * throwing", and that distinction is the whole reason this module exists. A
  * legacy web app answers a bad search with HTTP 200 and a different screen. A
  * click that lands on the wrong control navigates somewhere perfectly valid.

@@ -78,7 +78,7 @@
  * ## And promotion still needs a person
  *
  * A proposal that is accepted returns an outcome to the *caller*. It does not
- * touch `artifacts/`. Writing a classification into a Capability goes through
+ * touch `config/capabilities/`. Writing a classification into a Capability goes through
  * `proposeAmendment`, which takes an `InterventionRecord` — a thing only a human
  * handoff produces — so there is no expression anywhere that turns an
  * `AssistReply` into a stored Artifact version. ADR-0005's "a bad model call can
@@ -222,7 +222,7 @@ export interface AssistConsultation {
    * The engine passes it through the same scrubber that writes the run's
    * Evidence, before it reaches this type. What a run's log refuses to carry,
    * its consultation refuses to send: one rule, one implementation, and the
-   * property `policies/default.yaml` claims in writing when it permits assist at
+   * property `config/policies/default.yaml` claims in writing when it permits assist at
    * all.
    */
   readonly accessibility: string

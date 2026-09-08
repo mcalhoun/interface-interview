@@ -16,13 +16,9 @@
  */
 
 import { Effect } from "effect"
-import { DEFAULT_PORT, serve } from "./server.ts"
+import { serve } from "./server.ts"
+import { optionsFromEnvironment } from "./environment.ts"
 import { DEFAULT_TENANT } from "./tenants.ts"
-
-const number = (name: string): number | undefined => {
-  const configured = Bun.env[name]
-  return configured === undefined || configured.trim() === "" ? undefined : Number(configured)
-}
 
 /** `--tenant <key>`, falling back to `TENANT`, falling back to Heritage Core. */
 const flag = (name: string): string | undefined => {
@@ -31,15 +27,13 @@ const flag = (name: string): string | undefined => {
   return supplied === undefined || supplied.startsWith("--") ? undefined : supplied
 }
 
-const port = number("PORT") ?? DEFAULT_PORT
-const expireSessionAfter = number("EXPIRE_SESSION_AFTER")
+const options = optionsFromEnvironment(Bun.env)
 const tenant = flag("tenant") ?? Bun.env["TENANT"] ?? DEFAULT_TENANT
 
 const program = Effect.gen(function* () {
   const core = yield* serve({
-    port,
-    tenant,
-    ...(expireSessionAfter === undefined ? {} : { expireSessionAfter })
+    ...options,
+    tenant
   })
   yield* Effect.log(
     `${core.tenant.institution} Member Services (tenant ${core.tenant.key}) listening on ${

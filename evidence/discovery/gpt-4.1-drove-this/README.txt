@@ -1,7 +1,7 @@
 A language model drove this run
 ===============================
 
-Produced by: bun run test/support/drive-the-discovery-run.ts
+Produced by: bun run apps/demo/src/support/drive-the-discovery-run.ts
 Model:       gpt-4.1, through @effect/ai-openai, over the OpenAI Responses API
 Goal:        "Look up the savings account balance of member 12345"
 
@@ -14,7 +14,7 @@ afterwards:
 
 Nothing here is scripted. The judgement is a real model's, the browser is a
 real headless Chromium, the application is the real Heritage Core fixture on
-an ephemeral port, the policy is the shipped policies/default.yaml, and the
+an ephemeral port, the policy is the shipped config/policies/default.yaml, and the
 evidence was written by the real writer with the real scrubber.
 
 What it shows
@@ -41,7 +41,7 @@ this directory; what entered the prompt was the accessibility tree (ADR-0001).
 What it produced
 ----------------
 
-    artifacts/member.account-balance.discovered/1.0.0.yaml
+    config/capabilities/member.account-balance.discovered/1.0.0.yaml
 
 compiled in the same process, and then replayed unedited by the engine that
 has no model in it at all:

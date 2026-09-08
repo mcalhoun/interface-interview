@@ -3,7 +3,7 @@ import { heritagePublicGoalTerms, originAuthorizer } from "@cua/policy"
  * Running a Discovery loop in a test.
  *
  * Everything below the model is real, on purpose. A real Chromium, the real
- * Heritage Core fixture on an ephemeral port, the shipped `policies/default.yaml`,
+ * Heritage Core fixture on an ephemeral port, the shipped `config/policies/default.yaml`,
  * and Evidence written to a real temporary directory. SPEC's no-stubbed-browser
  * rule applies here exactly as it does to Replay: a loop tested against a fake
  * accessibility tree would prove nothing about whether these Targets resolve on a

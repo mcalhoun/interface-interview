@@ -20,7 +20,7 @@
  *   4. **Marked**: assisted, with a confidence and a pointer into Evidence, and
  *      never confusable with the deterministic answer to the same question.
  *   5. **Policy, and the one-way rule**: a deployment that has not permitted a
- *      consultation does not get one, and no proposal reaches `artifacts/`.
+ *      consultation does not get one, and no proposal reaches `config/capabilities/`.
  */
 
 import { readdirSync, readFileSync } from "node:fs"
@@ -785,7 +785,7 @@ describe("policy checks the request, and nothing is written", () => {
 
   it.live("a proposal changes no capability on disk", () =>
     Effect.gen(function* () {
-      const before = readdirSync(join(process.cwd(), "artifacts", ACCOUNT_BALANCE)).sort()
+      const before = readdirSync(join(process.cwd(), "config/capabilities", ACCOUNT_BALANCE)).sort()
 
       const outcome = yield* replay({
         artifact: artifactBeforeLearning(),
@@ -799,7 +799,7 @@ describe("policy checks the request, and nothing is written", () => {
       // so there is no expression anywhere that turns a proposal into a stored
       // version. The write-once rule from ticket 14 holds because a model call
       // has no way to reach the store at all.
-      expect(readdirSync(join(process.cwd(), "artifacts", ACCOUNT_BALANCE)).sort()).toEqual(before)
+      expect(readdirSync(join(process.cwd(), "config/capabilities", ACCOUNT_BALANCE)).sort()).toEqual(before)
 
       // The 1.0.0 document is still the one that only names the code.
       expect(artifactBeforeLearning().outcomes?.[NO_MATCHING_ITEM]).toBeUndefined()

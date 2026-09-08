@@ -1,7 +1,7 @@
 /**
  * Confidence that a Target names exactly one control.
  *
- * Driven against the diagnostic screens in `apps/legacy-core/src/fixtures.ts`,
+ * Driven against the diagnostic screens in `apps/banking/src/fixtures.ts`,
  * in a real Chromium, because the hazards being tested are things Chromium does
  * — expose layout tables as real tables, inline two iframes into one tree, hand
  * back an aggregate name on a cell and its child runs at the same time — and a

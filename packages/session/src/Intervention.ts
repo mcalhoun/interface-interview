@@ -2,7 +2,7 @@
  * The vocabulary of an Intervention: what automation says when it stops, what an
  * Operator is shown, and what they say when they hand control back.
  *
- * CONTEXT.md defines an Intervention as "the episode in which automation stops, a
+ * docs/glossary.md defines an Intervention as "the episode in which automation stops, a
  * person takes the live Session, resolves the state, and returns control.
  * Includes the record of what they did." All four of those clauses are types
  * here, because the record is the deliverable: an Intervention nobody can read

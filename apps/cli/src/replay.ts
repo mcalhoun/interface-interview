@@ -129,7 +129,7 @@ const usage = (): string =>
     "                    confident classification returns an outcome marked",
     "                    assisted; a named control is never pressed and is only",
     "                    ever shown to whoever the run stops for. Neither writes",
-    "                    anything to artifacts/. Off by default, and denied anyway",
+    "                    anything to config/capabilities/. Off by default, and denied anyway",
     "                    by a policy with no assist: block",
     "  --operatorPort <n>       port for the operator interface (default 4180)",
     "  --handoffWait <seconds>  how long a paused run waits for someone",
@@ -225,7 +225,7 @@ const report = (
           )
           yield* Console.log(
             `            in the evidence directory below. Nothing was written to ` +
-              `artifacts/: promoting`
+              `config/capabilities/: promoting`
           )
           yield* Console.log(
             `            a proposal into a capability needs a person, through an ` +
@@ -362,7 +362,7 @@ const amend = (
  * a tenant's own file rather than in the capability, and that it is printed the
  * moment it is written.
  *
- * Nothing under `artifacts/` is touched by any path through this function. That
+ * Nothing under `config/capabilities/` is touched by any path through this function. That
  * is SPEC user story 55, and it is a property of what `declareTargetOverride` can
  * build rather than a rule anybody has to remember.
  */
@@ -411,7 +411,7 @@ const confirmOverride = (
       yield* Console.error(`  ${proposal.because}`)
       yield* Console.error(`  written to ${proposal.path}`)
       yield* Console.error(
-        `  the capability itself is unchanged: artifacts/${artifact.capability}/ has not been ` +
+        `  the capability itself is unchanged: config/capabilities/${artifact.capability}/ has not been ` +
           `written to`
       )
     }

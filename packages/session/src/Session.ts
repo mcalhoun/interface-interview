@@ -9,7 +9,7 @@
  *
  * SPEC's is `AUTOMATION → PAUSED → HUMAN → RESUME_REQUESTED → AUTOMATION`, and
  * all four states are reachable. `ControlOwner` spells the third one `operator`
- * because CONTEXT.md's word for the person is Operator; `describeOwner` renders
+ * because docs/glossary.md's word for the person is Operator; `describeOwner` renders
  * SPEC's labels for anything a person reads.
  *
  * Each arrow is a method, and each is refused rather than ignored when the

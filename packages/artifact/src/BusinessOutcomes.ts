@@ -2,7 +2,7 @@
  * The Business Outcomes a Capability knows about: its domain contract for the
  * answers that are not the happy path.
  *
- * CONTEXT.md: a Business Outcome is "an expected result of the application's own
+ * docs/glossary.md: a Business Outcome is "an expected result of the application's own
  * domain that the caller needs to know about, such as a member not existing. A
  * legitimate answer, never a failure." The brief calls confusing one for a
  * failure the most common design mistake in this problem, and this module is

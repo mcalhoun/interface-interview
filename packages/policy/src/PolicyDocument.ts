@@ -4,7 +4,7 @@
  * SPEC's Policy engine section asks for "allowlisted origins and action types,
  * with risky or irreversible actions handled conservatively by default". All
  * three of those are decisions about a deployment rather than about a program, so
- * they live in `policies/<name>.yaml` and this module is only their schema and
+ * they live in `config/policies/<name>.yaml` and this module is only their schema and
  * the checks that make a wrong one refuse to load.
  *
  * YAML for the same reason a Capability Artifact is YAML: this is an approval

@@ -144,7 +144,7 @@ That same ladder handles three problems that look different and are not: learnin
 
 Bun 1.4 as the runtime, Effect 4 (`4.0.0-rc.112`) as the application framework, Playwright 1.62 as the first surface driver, TypeScript throughout. Effect 4 is a release candidate. Its monopackage carries `unstable/ai`, `unstable/cli`, `unstable/http` and core `Schema` and `Redacted`, so the dependency surface stays small, but we verify API usage against shipped type definitions rather than recall. Playwright on Bun is confirmed working: launch, CDP, frame traversal, teardown.
 
-Seven workspace packages (`agent`, `artifact`, `replay`, `surface`, `policy`, `session`, `evidence`) plus `apps/legacy-core` and `apps/operator`. Package boundaries are the architectural claim. The stronger enforcement, though, comes from the Effect service graph: `replay` requires the `SurfaceAdapter` service and never the Playwright implementation, and the compiler checks that.
+Seven workspace packages (`agent`, `artifact`, `replay`, `surface`, `policy`, `session`, `evidence`) plus `apps/banking` and `apps/operator`. Package boundaries are the architectural claim. The stronger enforcement, though, comes from the Effect service graph: `replay` requires the `SurfaceAdapter` service and never the Playwright implementation, and the compiler checks that.
 
 Model access goes through `effect/unstable/ai/LanguageModel`. Provider choice is a `Layer` swap between `@effect/ai-anthropic` and `@effect/ai-openai`, both at matching RC versions. We hand-roll no provider abstraction.
 

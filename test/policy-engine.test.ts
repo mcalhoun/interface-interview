@@ -3,7 +3,7 @@
  *
  * Four claims, in increasing order of how much they cost to establish.
  *
- *   1. **The configuration is the policy.** The shipped `policies/*.yaml` files
+ *   1. **The configuration is the policy.** The shipped `config/policies/*.yaml` files
  *      load, say what they appear to say, and a file that permits something
  *      irreversible without a reason does not load at all. Pure, no browser.
  *   2. **Origins mean origins.** Matching happens on parsed scheme, host and

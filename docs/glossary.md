@@ -85,7 +85,7 @@ A condition that stops the run and demands a person look at the system rather th
 _Avoid_: crash, exception, fatal error
 
 **Requires-Human Outcome**:
-A state learned to permanently need a person, because resolving it demanded authority rather than perception. Recorded so Replay escalates immediately and precisely, never so it can proceed.
+A state learned to permanently need a person because resolving it required authority, or because the consequence of a control could not be determined from the screen. Recorded as `requires_human` so Replay requests a person with the reason for stopping. Learning this state does not authorize automation to proceed.
 _Avoid_: blocked, manual step, unsupported
 
 ### Escalation

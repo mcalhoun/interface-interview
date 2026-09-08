@@ -25,6 +25,13 @@
         "vitest": "4.1.11",
       },
     },
+    "apps/banking": {
+      "name": "@cua/legacy-core",
+      "version": "0.0.0",
+      "dependencies": {
+        "effect": "4.0.0-rc.112",
+      },
+    },
     "apps/cli": {
       "name": "@cua/cli",
       "version": "0.0.0",
@@ -54,13 +61,6 @@
         "@cua/replay": "workspace:*",
         "@cua/session": "workspace:*",
         "@cua/surface": "workspace:*",
-        "effect": "4.0.0-rc.112",
-      },
-    },
-    "apps/legacy-core": {
-      "name": "@cua/legacy-core",
-      "version": "0.0.0",
-      "dependencies": {
         "effect": "4.0.0-rc.112",
       },
     },
@@ -150,7 +150,7 @@
 
     "@cua/evidence": ["@cua/evidence@workspace:packages/evidence"],
 
-    "@cua/legacy-core": ["@cua/legacy-core@workspace:apps/legacy-core"],
+    "@cua/legacy-core": ["@cua/legacy-core@workspace:apps/banking"],
 
     "@cua/operator": ["@cua/operator@workspace:apps/operator"],
 

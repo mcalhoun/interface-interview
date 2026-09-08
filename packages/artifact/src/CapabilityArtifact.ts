@@ -25,7 +25,7 @@ import { type RequiresHumanDeclaration, RequiresHumanDeclarations } from "./Requ
 
 /**
  * One named unit of work, pairing an Action with the Checkpoint that confirms it
- * landed. `checkpoint` is required: CONTEXT.md defines a Step as that pair, and
+ * landed. `checkpoint` is required: docs/glossary.md defines a Step as that pair, and
  * an optional Checkpoint is how "the action did not throw" quietly becomes the
  * success criterion.
  */
