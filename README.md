@@ -155,6 +155,8 @@ must therefore be explicitly allowed.
 
 ## Transfer control to a person
 
+For the repeatable manual demo, run `bun run demo:handoff`. Follow the [human handoff walkthrough](docs/human-handoff.md) for the exact controls and synthetic supervisor values. `bun run verify:handoff` checks the same-session transfer, ownership exclusion, recorded actions, verified completion and blocked return in real Chromium. Its Operator is scripted.
+
 ```bash
 bun run replay member.account-balance --memberId 77777 \
   --version 1.1.0 --headed --handoff --noAmend
