@@ -8,11 +8,15 @@ It also asks for explicit error handling, safety rules, evidence and human
 takeover of the live session. It leaves the target application and architecture
 to the candidate.
 
-I chose to build a backend automation system and Heritage Core, a fictitious
-banking application to test it against. The automation operates Heritage Core
-through real Chromium. The example task is to find a member, open their savings
-account and return the available and current balances. All institutions, members,
-accounts and credentials in the demo are synthetic.
+I chose to build a backend automation system and a fictitious banking application
+to test it against. I configured that application for two fictional institutions,
+Heritage Core and Community CU, with different branding, control labels and
+account layouts. Both tenants run the same application code. The automation
+operates their interfaces through real Chromium.
+
+The example task is to find a member, open their savings account and return the
+available and current balances. All institutions, members, accounts and
+credentials in the demo are synthetic.
 
 Start with the local demo below. The [recorded proof](#proof-that-it-works) includes
 a genuine model-driven discovery run, its compiled capability, later replays and
@@ -63,11 +67,12 @@ Add `--headed` to watch the browser. Ordinary replay does not need a model key.
 
 ## The fictional banking system
 
-Heritage Core imitates an older back-office member-services application. Its flow
-is member search, member detail, account selection, then account detail. The pages
-use server-rendered HTML, nested tables, near-duplicate field names, full page
-loads and an unnamed iframe containing the balances. There are no test IDs or
-application API shortcuts for the automation.
+The banking application imitates an older back-office member-services system.
+Both tenants follow the same flow: member search, member detail, account selection,
+then account detail. The pages use server-rendered HTML, nested tables,
+near-duplicate field names and full page loads. Heritage Core displays balances
+in an unnamed iframe; Community CU displays them inline. There are no test IDs
+or application API shortcuts for the automation.
 
 These choices make target selection matter. The search page has a second,
 misleading member-number field. A member can have two accounts that both match
