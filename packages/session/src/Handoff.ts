@@ -323,7 +323,7 @@ const enter = (current: State, owner: ControlOwner, by: string): State => ({
  *
  * Requires `Evidence` because an Intervention that is not recorded did not
  * usefully happen: who took control, what they did and when they returned it are
- * the three questions this ticket exists to answer, and none of them can be
+ * required evidence, and none of them can be
  * reconstructed after the fact from a run that was asleep at the time.
  */
 export const sessionControl = (
@@ -388,8 +388,8 @@ export const sessionControl = (
        * Put what was captured on the record, and in the log.
        *
        * No rollback, unlike every other write here, and the difference is real:
-       * this appends to a set of field names rather than to a list `classify`
-       * counts, so a write that fails and is retried adds nothing twice. The
+       * this appends to a set of field names, so a write that fails and is
+       * retried adds nothing twice. The
        * redaction has already happened and is not undone by anything -- a needle
        * the log no longer needs is harmless, and one it needed and lost is not.
        */
@@ -700,7 +700,7 @@ export const sessionControl = (
                 missing: "say who you are; this session records a person, not a role"
               })
             )
-          : Effect.succeed(name)
+          : Effect.succeed(evidence.scrub(name))
       }
 
       const takeControl = (operator: string) =>
@@ -743,17 +743,15 @@ export const sessionControl = (
           // The appended action and its event stand or fall together. A write
           // that failed after the append would leave the action on the record
           // with nothing in the log about it, and the obvious retry would append
-          // it a second time -- which matters more here than anywhere else,
-          // because `classify` reads `actions.length` to decide whether an
-          // episode taught a business outcome or a requires-human state
-          // (ADR-0004).
+          // it a second time. These are notes, not proof of a mutation:
+          // learning reads observed changes and explicit action confirmations.
           return yield* transition(
             "record an action",
             "operator",
             (waiting) => [
               {
                 ...waiting.record,
-                actions: [...waiting.record.actions, { at: now(), detail: note.detail }]
+                actions: [...waiting.record.actions, { at: now(), detail: evidence.scrub(note.detail), kind: "note" }]
               },
               "operator",
               "(no change of hands)"
@@ -778,14 +776,15 @@ export const sessionControl = (
        * whoever picks the run up.
        */
       const reasoned = (body: ControlReturn): Effect.Effect<void, HandoffIncomplete> =>
-        body.classification === "blocked" && body.detail.trim() === ""
+        (body.classification === "blocked" || body.actionTaken === true) && body.detail.trim() === ""
           ? Effect.fail(
               new HandoffIncomplete({
                 sessionId,
                 attempted: "return control",
-                missing:
-                  "say what stopped you; a run that could not be done is only useful " +
-                  "to the next person if it says why"
+                missing: body.classification === "blocked"
+                  ? "say what stopped you; a run that could not be done is only useful " +
+                    "to the next person if it says why"
+                  : "describe the action you are confirming"
               })
             )
           : Effect.void
@@ -799,7 +798,7 @@ export const sessionControl = (
           // the resolution event, which carries the Operator's own words and is
           // therefore the last place a credential could land.
           yield* captureScreen
-          return yield* returnAs({ ...body, operator })
+          return yield* returnAs({ ...body, operator, detail: evidence.scrub(body.detail) })
         })
 
       const returnAs = (body: ControlReturn) =>
@@ -813,8 +812,11 @@ export const sessionControl = (
               returnedAt: now(),
               classification: body.classification,
               detail: body.detail,
+              actions: body.actionTaken === true
+                ? [...waiting.record.actions, { at: now(), detail: body.detail, kind: "confirmed_action" }]
+                : waiting.record.actions,
               // The answer to the one question, recorded on the episode it was
-              // asked about. Ticket 13's Amendment reads it from here, together
+              // asked about. An Amendment reads it from here, together
               // with `actions`, which is the other half of ADR-0004's table.
               nextTime: body.nextTime,
               // The second question, when there was one to ask. An absent answer
@@ -838,7 +840,7 @@ export const sessionControl = (
               stepId: record.intervention.stepId,
               operator: body.operator,
               classification: body.classification,
-              detail: body.detail,
+              detail: body.actionTaken === true ? `Confirmed action: ${body.detail}` : body.detail,
               nextTime: body.nextTime,
               confirmProposal: body.confirmProposal ?? "not_asked"
             })

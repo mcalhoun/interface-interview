@@ -4,7 +4,7 @@
  * Given a Goal in a sentence and a place to start, it observes a live Surface,
  * decides one action, has that action checked by Policy, executes it, and
  * observes again — until the Goal is met or a stopping condition fires. What it
- * produces is a `Trajectory`, which ticket 11 compiles into a reviewable
+ * produces is a `Trajectory`, which the compiler turns into a reviewable
  * Capability Artifact.
  *
  * Read in this order:
@@ -14,7 +14,7 @@
  *   `Selection.ts`    the one mistake that would silently break multi-tenant reuse
  *   `Stuck.ts`        knowing when to stop, which matters as much as finishing
  *   `loop.ts`         observe -> decide -> check -> act
- *   `Trajectory.ts`   what ticket 11 reads
+ *   `Trajectory.ts`   the compiler's private input
  *
  * Three claims this package is built to make checkable rather than assert:
  *
@@ -77,7 +77,7 @@ export type {
 export { isCompilable, literalsTyped, parameterNames } from "./Trajectory.ts"
 
 export type { DiscoveredSecrets } from "./redaction.ts"
-export { asSecret, discoveredSecrets, literalToCheck } from "./redaction.ts"
+export { asSecret, discoveredSecrets, goalDiagnosticScrubber, literalToCheck } from "./redaction.ts"
 
 export type { ObservationOptions, StepSummary } from "./prompt.ts"
 export { SYSTEM_INSTRUCTIONS, decisionPrompt, observation } from "./prompt.ts"
@@ -110,10 +110,11 @@ export {
   modelAdvisor
 } from "./assist.ts"
 
-export type { CompileOptions } from "./compile.ts"
+export type { CompileOptions, StoredCompilation } from "./compile.ts"
 export {
   CompilationRefused,
   compileArtifact,
+  serializeCompilation,
   PRODUCT_UNIDENTIFIED,
   shapeOf,
   strategyFor

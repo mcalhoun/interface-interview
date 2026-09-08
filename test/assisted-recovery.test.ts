@@ -43,8 +43,8 @@ import {
   isProposable,
   proposableOutcomes
 } from "@cua/replay"
-import { recordingModel, scriptedModel } from "./support/scripted-model.ts"
-import { ACCOUNT_BALANCE, replay, shippedArtifact, shippedPolicy } from "./support/replay-harness.ts"
+import { recordingModel, scriptedModel } from "../apps/demo/src/support/scripted-model.ts"
+import { ACCOUNT_BALANCE, replay, shippedArtifact, shippedPolicy } from "../apps/demo/src/support/replay-harness.ts"
 
 /**
  * The version whose `open-account` step still *escalates* a selection that
@@ -242,10 +242,8 @@ describe("the boundary: acting is not representable", () => {
       }
     }
 
-    // And the only module in the package that knows a model exists at all is the
-    // CLI, which is the composition root: it builds an `Advisor` and hands it in
-    // as a value. `test/replay-has-no-model.test.ts` holds the primary proof —
-    // the engine's requirement set is still exactly four services.
+    // The composition root lives in apps/cli. No module in this package can
+    // construct a model; callers supply the optional Advisor port.
     const reaching = readdirSync(replaySource)
       .filter((name) => name.endsWith(".ts"))
       .filter((name) =>
@@ -253,7 +251,7 @@ describe("the boundary: acting is not representable", () => {
           withoutComments(readFileSync(join(replaySource, name), "utf8"))
         )
       )
-    expect(reaching).toEqual(["cli.ts"])
+    expect(reaching).toEqual([])
   })
 
   /**

@@ -46,13 +46,13 @@ import { Session, automationOwnedSession } from "@cua/session"
 import { SurfaceAdapter, playwrightSurface } from "@cua/surface"
 import { replayCapability } from "@cua/replay"
 import { modelAdvisor } from "@cua/agent"
-import { scriptedModel } from "./support/scripted-model.ts"
+import { scriptedModel } from "../apps/demo/src/support/scripted-model.ts"
 import {
   ACCOUNT_BALANCE,
   replay,
   shippedArtifact,
   shippedPolicy
-} from "./support/replay-harness.ts"
+} from "../apps/demo/src/support/replay-harness.ts"
 
 const REPLAY_SOURCE = join(
   dirname(fileURLToPath(import.meta.url)),

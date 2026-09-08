@@ -23,7 +23,7 @@ export const CapabilityTarget = Schema.Struct({
    * How this control is picked out, in a couple of words:
    * `accessible-name`, `scoped-accessible-name`, `caption-label`, `text-near`.
    * Free text rather than an enum, because the ladder of strategies is still
-   * growing (ticket 05) and an enum here would have to be revised in lockstep.
+   * growing and an enum here would have to be revised in lockstep.
    */
   strategy: Schema.String,
   /** Why that strategy, and what would have to change on screen to break it. */

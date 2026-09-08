@@ -17,9 +17,8 @@
  * institution and looks perfectly correct while doing it. Nothing downstream can
  * detect it: `Primary Savings` is a legal enum value, `parseArtifact` accepts it,
  * and the failure only shows up as a `NO_MATCHING_ITEM` at a tenant nobody has
- * run against yet. Ticket 09's handoff calls this "the one mistake that would
- * silently un-do multi-tenant reuse", and it is the reason this module exists as
- * a check rather than as a sentence in a prompt.
+ * run against yet. This would silently defeat tenant reuse, so the constraint
+ * is checked here rather than left as an instruction in a prompt.
  *
  * ## The rule
  *

@@ -1,0 +1,29 @@
+{
+  "baseCommit": "60b4519da023abbec6141c0b41eb128df61ddb5a",
+  "sourceManifestSha256": "8e2d910044dc6aea66675753024bbfaed8184e64f3c67f90dd178b1575f656c8",
+  "sourceFiles": 174,
+  "tests": {
+    "files": 50,
+    "passed": 509,
+    "failed": 0
+  },
+  "typecheck": "passed",
+  "cleanFrozenInstall": "passed",
+  "cleanInstalledReplayVersion": "1.8.0",
+  "demoWithoutModelKey": "passed, eight acts",
+  "independentReview": "reproduced URL and handoff findings closed; live scrubber composition cross-checked",
+  "liveBundle": "../../discovery/live-2026-09-08T14-45-52-190Z-132a40d2/manifest.json",
+  "privacyScan": {
+    "textFiles": 35,
+    "leaks": 0,
+    "syntheticPngFilesExcluded": 17,
+    "verifiedArtifactCopies": [
+      "1.5.0.yaml",
+      "1.6.0.yaml",
+      "1.7.0.yaml",
+      "1.8.0.yaml"
+    ],
+    "credentialFileUntracked": true
+  },
+  "scope": "Local uncommitted working tree; no publication or submission performed."
+}

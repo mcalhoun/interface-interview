@@ -8,4 +8,6 @@ We looked at relaying screenshots and input through an operator page, and at att
 
 ## Consequences
 
-Control transfer is real rather than simulated. The part that carries weight is the Control Owner state machine: the adapter throws if automation acts while an Operator holds the Session. Scaling out later means putting the Session behind a broker, and nothing above that seam changes.
+Control transfer is real rather than simulated. The part that carries weight is the Control Owner state machine: session-gated automation operations fail while an Operator holds the Session. Scaling out later means putting the Session behind a broker, and nothing above that seam changes.
+
+Handoff is the control-transfer mechanism; an Intervention is the episode and its record. Ownership snapshots describe who may act, while accessibility snapshots describe the application. Returning control does not certify success: the executor verifies the resulting screen before continuing. A blocked return teaches no unattended rule.

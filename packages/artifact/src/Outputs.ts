@@ -90,7 +90,7 @@ const AMOUNT = /^(?<symbol>[^\d\s-]*)\s*(?<sign>-?)(?<digits>[\d,]+(?:\.\d{1,2})
 /**
  * The currency a reading's own rendering means, or `undefined` if it is not money.
  *
- * Ticket 11's compiler asks this of what an `extract` actually read, to decide
+ * The compiler asks this of what an `extract` actually read, to decide
  * whether the output it declares is `money` and which code to write down. It is
  * the same table `parseOutput` judges a replayed reading against, exported rather
  * than copied: a compiler that inferred `USD` from one table while the engine

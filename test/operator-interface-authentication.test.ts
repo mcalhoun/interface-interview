@@ -30,8 +30,8 @@
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
-import { attendedReplay } from "./support/handoff-harness.ts"
-import { shippedArtifact } from "./support/replay-harness.ts"
+import { attendedReplay } from "../apps/demo/src/support/handoff-harness.ts"
+import { shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
 
 const RESTRICTED = "77777"
 

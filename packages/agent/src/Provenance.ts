@@ -1,7 +1,7 @@
 /**
  * Provenance: where a value the model typed actually came from.
  *
- * This is the subtlest thing in the Discovery loop and the reason ticket 11 can
+ * Recorded provenance lets the compiler
  * derive a Capability's input schema mechanically instead of guessing at it.
  *
  * SPEC, "Parameter discovery through provenance": `fill` cannot take a bare
@@ -19,14 +19,14 @@
  * ## The checks, and why they are here rather than in the compiler
  *
  * A tag is only worth what it costs to get wrong. Nothing stops a model from
- * labelling `12345` a `constant`, and if nothing checks, ticket 11 writes a
+ * labelling `12345` a `constant`, and if nothing checks, the compiler writes a
  * member number into a stored Capability. So both directions are checked at the
  * moment the model proposes the value, against the Goal text it was given:
  *
  *   - **A `goalDerived` value must be in the Goal.** Every token of the literal
  *     has to appear in the Goal text. `12345` is; `Primary Savings` is not, when
- *     the Goal said "savings". This is the check that enforces ticket 09's
- *     warning — see `Selection.ts` — and it is the same `isTokenSubsetOf` the
+ *     the Goal said "savings". This enforces the selection constraint in
+ *     `Selection.ts`, using the same `isTokenSubsetOf` the
  *     Surface uses to match a list item, applied a third time.
  *   - **A `constant` must not be in the Goal.** This is ADR-0008's second half
  *     ("a `constant` colliding with the goal is a compile error") moved one stage

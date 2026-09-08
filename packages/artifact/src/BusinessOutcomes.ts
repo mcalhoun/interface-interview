@@ -32,7 +32,7 @@
  * caller could receive is always documented and a documented code is always
  * reachable.
  *
- * ## Seam for ticket 14 (requires-human states)
+ * ## Requires-human states
  *
  * SPEC's third class — a state learned to permanently need a person — is
  * declared the same way and lives beside this one, as `requiresHuman:` on the

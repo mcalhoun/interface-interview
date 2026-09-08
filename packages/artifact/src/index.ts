@@ -8,24 +8,6 @@
  */
 
 export type {
-  Catalog,
-  CatalogEntry,
-  CatalogEscalation,
-  CatalogOutcome,
-  CatalogParameter,
-  CatalogReturn
-} from "./catalog.ts"
-export {
-  REPLAY_COMMAND,
-  catalogEntry,
-  describeCatalog,
-  describeCatalogEntry,
-  invocationOf,
-  readCatalog,
-  readCatalogEntry
-} from "./catalog.ts"
-
-export type {
   Action,
   ActionType,
   ItemList,
@@ -42,6 +24,7 @@ export {
 export type {
   AmendmentOptions,
   LearnedBusinessOutcome,
+  LearnedCheckpointOutcome,
   LearnedClass,
   LearnedRequiresHuman
 } from "./Amendment.ts"
@@ -49,6 +32,7 @@ export {
   AmendmentRefused,
   atLeastAsStrictAs,
   classificationOf,
+  declareCheckpointOutcome,
   declareLearnedNoMatch,
   declareRequiresHuman,
   nextMinorVersion

@@ -20,7 +20,7 @@ import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
 import type { CapabilityArtifact, Step } from "@cua/artifact"
-import { replay, shippedArtifact } from "./support/replay-harness.ts"
+import { replay, shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
 
 /** The shipped capability with one step replaced. */
 const variant = (

@@ -1,0 +1,280 @@
+capability: member.account-balance.discovered
+version: 1.7.0
+title: Returns the available and current balances of a member's savings account.
+summary: |-
+  Returns the available and current balances of a member's savings account.
+
+  Compiled from discovery run discovery, whose evidence is at evidence/discovery/live-2026-09-08T14-45-52-190Z-132a40d2/discovery. Every step below is an action that run took and a check that it landed; every input below was derived from the origin the run recorded against a value it used, not declared in advance by a person. No value from that run survives in this document.
+
+  Nothing here has been reviewed yet. It declares no business outcomes and no recoverable conditions, because one successful run has demonstrated neither, and a capability learns those from what a person had to do about them.
+authored: discovered
+surface:
+  kind: web
+  product: Heritage Core Member Services (MSS 4.02.11)
+  entry: "/"
+inputs:
+  memberId:
+    type: string
+    description: >-
+      Supplied by the caller. Discovered as the value step fill-1 took from the goal, and
+      named "memberId" by the model that read it — the semantic role it plays, in a caller's
+      vocabulary rather than the screen's.
+    sensitive: true
+    required: true
+    discoveredFrom: >-
+      Derived from the provenance recorded against the value at the step that used it: the
+      discovery run tagged it as coming from the goal and named the parameter it should
+      become. No format is declared for it, deliberately — one run saw one value, and a
+      pattern inferred from a single example would reject the second caller.
+  accountType:
+    type: enum
+    description: >-
+      Which item to choose from the list on screen. The legal values below were read off that
+      list during discovery rather than written here by a human deciding what ought to be
+      allowed, and a value is legal if every word of it appears in one of them — so a shorter,
+      more portable word than the label is the right thing to pass.
+    sensitive: false
+    required: false
+    values:
+    - Primary Savings
+    - Checking
+    default: savings
+    discoveredFrom: >-
+      The goal's word 'savings' matches the 'Type' column for the 'Primary Savings' account,
+      which is labeled as 'SAVINGS'. The list offered "Primary Savings", "Checking", and the
+      default matched "Primary Savings" on the run that discovered this — which is this
+      institution's word for it and is deliberately NOT what the default records. The
+      inference was made once, by the model, at discovery time. Replay never repeats it: it
+      matches the default's tokens against whatever the live list offers.
+outputs:
+  availableBalance:
+    type: money
+    description: The available balance of the member's savings account.
+    from:
+      step: availableBalance
+    currency: USD
+  currentBalance:
+    type: money
+    description: The current balance of the member's savings account.
+    from:
+      step: currentBalance
+    currency: USD
+outcomes:
+  NO_MATCHING_ITEM:
+    title: "Nothing on offer matched: Select the savings account to view its balance."
+    summary: |-
+      The screen rendered link items in "Share and Deposit Accounts", and nothing on it carried every token of parameter accountType. That is not the automation failing to see something: the list was read in full, and what it offered is what there was.
+
+      Before this version, this state stopped the run and asked for a person. It no longer does. Somebody met it, looked at it, changed nothing, and confirmed that the application was answering rather than the capability being wrong — so it is an answer, a caller should branch on it the way they branch on any other domain result, and a run that ends here has succeeded.
+
+      What that person said about it, in their own words: "Reviewed the complete account list without acting. Only a checking account is available; no matching account can be opened"
+    discoveredFrom: |-
+      Learned from intervention session-intervention-intervention-1 (session session-intervention, run intervention, step selectFromList-3), raised at 2026-09-08T14:46:09.104Z.
+
+      demo.operator took control at 2026-09-08T14:46:09.130Z and returned it at 2026-09-08T14:46:09.133Z. Action evidence: recorded no actions on the live session.
+
+      Asked "Next time automation meets this state, should it handle it itself?", they answered yes. demo.operator took control, observed the screen, changed nothing, and confirmed that automation should treat this state as an answer next time.
+
+      ADR-0004: an operator who resolves a state without acting has demonstrated that it is terminal and observational, which is what makes it declarable. The classification comes from what they did, not from what anyone wrote in advance, and it only ever tightens from here.
+  MEMBER_NOT_FOUND:
+    title: No member exists for that number
+    summary: >-
+      The operator observed "Member Not Found", changed nothing, and confirmed that this state
+      is an application answer. No member exists for that number
+    discoveredFrom: |-
+      Learned from intervention session-learn-member-not-found-intervention-1 (session session-learn-member-not-found, run learn-member-not-found, step click-2), raised at 2026-09-08T14:46:14.969Z.
+
+      demo.operator took control at 2026-09-08T14:46:14.978Z and returned it at 2026-09-08T14:46:14.981Z. Action evidence: recorded no actions on the live session.
+
+      Asked "Next time automation meets this state, should it handle it itself?", they answered yes. demo.operator took control, observed the screen, changed nothing, and confirmed that automation should treat this state as an answer next time.
+
+      ADR-0004: an operator who resolves a state without acting has demonstrated that it is terminal and observational, which is what makes it declarable. The classification comes from what they did, not from what anyone wrote in advance, and it only ever tightens from here.
+steps:
+- id: open
+  intent: Open the application at the entry path this capability starts from.
+  action:
+    type: navigate
+    path:
+      from: constant
+      text: "/"
+  checkpoint:
+    description: "The control the next step acts on is on screen: textbox \"Member Number\"."
+    expect:
+    - assert: targetPresent
+      target:
+        role: textbox
+        name: Member Number
+        exact: true
+        strategy: accessible-name
+        robustness: >-
+          Identified by accessible-name. The adapter narrowed to it like this: 3 node(s) with role
+          textbox; 1 named exactly "Member Number". No other control on the screen answered to
+          this description, so it named exactly one thing on the run that discovered it. It is
+          described by an ARIA role, the accessible name a screen reader would announce and by
+          nothing else: there is no selector, id, class or coordinate here, so a change to the
+          markup leaves it working. What would break it is the screen saying something different —
+          a renamed control, a renamed region, or a control that stops being a textbox.
+- id: fill-1
+  intent: Enter the member number the caller asked about
+  action:
+    type: fill
+    target:
+      role: textbox
+      name: Member Number
+      exact: true
+      strategy: accessible-name
+      robustness: >-
+        Identified by accessible-name. The adapter narrowed to it like this: 3 node(s) with role
+        textbox; 1 named exactly "Member Number". No other control on the screen answered to
+        this description, so it named exactly one thing on the run that discovered it. It is
+        described by an ARIA role, the accessible name a screen reader would announce and by
+        nothing else: there is no selector, id, class or coordinate here, so a change to the
+        markup leaves it working. What would break it is the screen saying something different —
+        a renamed control, a renamed region, or a control that stops being a textbox.
+    value:
+      from: parameter
+      name: memberId
+  checkpoint:
+    description: The value is sitting in the control that was filled, and not in a neighbouring one.
+    expect:
+    - assert: targetReads
+      target:
+        role: textbox
+        name: Member Number
+        exact: true
+        strategy: accessible-name
+        robustness: >-
+          Identified by accessible-name. The adapter narrowed to it like this: 3 node(s) with role
+          textbox; 1 named exactly "Member Number". No other control on the screen answered to
+          this description, so it named exactly one thing on the run that discovered it. It is
+          described by an ARIA role, the accessible name a screen reader would announce and by
+          nothing else: there is no selector, id, class or coordinate here, so a change to the
+          markup leaves it working. What would break it is the screen saying something different —
+          a renamed control, a renamed region, or a control that stops being a textbox.
+      equals:
+        from: parameter
+        name: memberId
+- id: click-2
+  intent: Search for the member using the entered member number
+  action:
+    type: click
+    target:
+      role: button
+      name: Search
+      exact: true
+      within:
+        name: Member Number Search
+      strategy: scoped-accessible-name
+      robustness: >-
+        Identified by scoped-accessible-name. The adapter narrowed to it like this: scoped to
+        the table headed "Member Number Search"; 1 node(s) with role button; 1 named exactly
+        "Search". No other control on the screen answered to this description, so it named
+        exactly one thing on the run that discovered it. It is described by an ARIA role, the
+        accessible name a screen reader would announce, the caption of the region it sits in and
+        by nothing else: there is no selector, id, class or coordinate here, so a change to the
+        markup leaves it working. What would break it is the screen saying something different —
+        a renamed control, a renamed region, or a control that stops being a button.
+  checkpoint:
+    description: "The screen the next step chooses from is showing: \"Share and Deposit Accounts\"."
+    expect:
+    - assert: textPresent
+      text: Share and Deposit Accounts
+    orOutcome:
+    - code: MEMBER_NOT_FOUND
+      when:
+      - assert: textPresent
+        text: Member Not Found
+- id: selectFromList-3
+  intent: Select the savings account to view its balance
+  action:
+    type: selectFromList
+    list:
+      within:
+        name: Share and Deposit Accounts
+      itemRole: link
+    match:
+      against:
+        from: parameter
+        name: accountType
+      strategy: tokenSubset
+    onNoMatch:
+      outcome: NO_MATCHING_ITEM
+    onMultiple:
+      escalate: AMBIGUOUS_MATCH
+    robustness: >-
+      Matching on the account type 'SAVINGS' ensures this works even if the label changes, as
+      long as the type remains the same. Observed at discovery: scoped to the table headed
+      "Share and Deposit Accounts"; 2 link(s) on offer: "Primary Savings", "Checking"; every
+      token of the value being matched is in "Primary Savings"; scoped to the table headed
+      "Share and Deposit Accounts"; 2 node(s) with role link; 1 named exactly "Primary
+      Savings". Matching is token subset in one direction — every word of the parameter must
+      appear in the item's label — so an institution that words the same item differently
+      still matches, and two items that both match stop the run rather than one of them being
+      opened.
+  checkpoint:
+    description: "The control the next step acts on is on screen: cell labelled \"Available Balance\"."
+    expect:
+    - assert: targetPresent
+      target:
+        role: cell
+        label: Available Balance
+        strategy: caption-label
+        robustness: >-
+          Identified by caption-label. The adapter narrowed to it like this: 24 node(s) with role
+          cell; 1 captioned "Available Balance" by the preceding cell in their row. No other
+          control on the screen answered to this description, so it named exactly one thing on the
+          run that discovered it. It is described by an ARIA role, the caption cell sitting beside
+          the value and by nothing else: there is no selector, id, class or coordinate here, so a
+          change to the markup leaves it working. What would break it is the screen saying
+          something different — a renamed control, a renamed region, or a control that stops being
+          a cell.
+- id: availableBalance
+  intent: Read the available balance of the savings account for the member.
+  action:
+    type: extract
+    target:
+      role: cell
+      label: Available Balance
+      strategy: caption-label
+      robustness: >-
+        Identified by caption-label. The adapter narrowed to it like this: 24 node(s) with role
+        cell; 1 captioned "Available Balance" by the preceding cell in their row. No other
+        control on the screen answered to this description, so it named exactly one thing on the
+        run that discovered it. It is described by an ARIA role, the caption cell sitting beside
+        the value and by nothing else: there is no selector, id, class or coordinate here, so a
+        change to the markup leaves it working. What would break it is the screen saying
+        something different — a renamed control, a renamed region, or a control that stops being
+        a cell.
+  checkpoint:
+    description: >-
+      A reading came back in the shape this reading had when the capability was discovered,
+      rather than an empty cell, a placeholder or a system message.
+    expect:
+    - assert: stepRead
+      step: availableBalance
+      matches: "^\\$\\s*-?[0-9,]+\\.[0-9]{2}$"
+- id: currentBalance
+  intent: Read the current balance of the savings account for the member.
+  action:
+    type: extract
+    target:
+      role: cell
+      label: Current Balance
+      strategy: caption-label
+      robustness: >-
+        Identified by caption-label. The adapter narrowed to it like this: 24 node(s) with role
+        cell; 1 captioned "Current Balance" by the preceding cell in their row. No other control
+        on the screen answered to this description, so it named exactly one thing on the run
+        that discovered it. It is described by an ARIA role, the caption cell sitting beside the
+        value and by nothing else: there is no selector, id, class or coordinate here, so a
+        change to the markup leaves it working. What would break it is the screen saying
+        something different — a renamed control, a renamed region, or a control that stops being
+        a cell.
+  checkpoint:
+    description: >-
+      A reading came back in the shape this reading had when the capability was discovered,
+      rather than an empty cell, a placeholder or a system message.
+    expect:
+    - assert: stepRead
+      step: currentBalance
+      matches: "^\\$\\s*-?[0-9,]+\\.[0-9]{2}$"

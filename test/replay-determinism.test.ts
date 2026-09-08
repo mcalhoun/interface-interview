@@ -15,7 +15,7 @@
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
-import { replay, shippedArtifact } from "./support/replay-harness.ts"
+import { replay, shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
 
 it.live("replaying the same inputs twice produces identical outputs and steps", () =>
   Effect.gen(function* () {

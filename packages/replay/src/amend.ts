@@ -28,14 +28,14 @@
  *
  *   - `business_outcome` — an Operator observed a state and changed nothing, so
  *     the state is terminal and observational, and the Capability learns to
- *     *answer* with it. Ticket 13.
+ *     *answer* with it.
  *   - `requires_human` — an Operator resolved it by acting, and said automation
  *     should always stop here. The Capability learns to *stop better*: sooner,
- *     under a name, routed to somebody who can act. Ticket 14. It never learns to
+ *     under a name, routed to somebody who can act. It never learns to
  *     proceed, and there is no shape of change here that could teach it to.
  *   - `recoverable` — an Operator acted and said automation should do the same
  *     thing itself. Writing a remedy down is a different mechanism from either of
- *     these, and it is ticket 15's; this returns `Unchanged` naming the class.
+ *     these; no remedy is written here, so this returns `Unchanged` naming the class.
  *
  * The two it does write are not mirror images, and the difference is the whole
  * safety argument. Which of them an episode demonstrated is decided by `classify`
@@ -49,15 +49,18 @@ import {
   type CapabilityArtifact,
   type LearnedClass,
   AmendmentRefused,
+  declareCheckpointOutcome,
   declareLearnedNoMatch,
   declareRequiresHuman,
   describeItemList,
   describeValueRef,
   diffArtifacts,
-  nextMinorVersion
+  nextMinorVersion,
+  noMatchCode
 } from "@cua/artifact"
 import { type InterventionRecord, THE_QUESTION, classify } from "@cua/session"
 import { Result } from "effect"
+import { normalise, ownText, parseAccessibilityTree, walk } from "@cua/surface"
 
 /** What the run concluded about amending the Capability it just ran. */
 export type ProposedAmendment =
@@ -100,6 +103,12 @@ export interface AmendmentRequest {
   readonly scrub: (text: string) => string
   /** Defaults to the next minor of the version that ran. */
   readonly version?: string
+  /** Public checkpoint answer explicitly chosen by the operator after inspecting this episode. */
+  readonly confirmedOutcome?: {
+    readonly code: string
+    readonly title: string
+    readonly text: string
+  }
 }
 
 /**
@@ -118,7 +127,16 @@ export const proposeAmendment = (request: AmendmentRequest): ProposedAmendment =
     return { _tag: "Unchanged", why: learned.why }
   }
 
-  // Ticket 14's branch. It comes first because it is the one that must never be
+  const step = artifact.steps.find((candidate) => candidate.id === record.intervention.stepId)
+  if (
+    record.intervention.capability !== artifact.capability ||
+    record.intervention.version !== artifact.version ||
+    step === undefined
+  ) {
+    return refuseAmendment(artifact, "the intervention does not belong to this capability version and step")
+  }
+
+  // The requires-human branch. It comes first because it is the one that must never be
   // reached by accident: everything below assumes a Business Outcome is being
   // written, and a `requires_human` episode falling through to it would be the
   // one bug in this file that matters.
@@ -126,7 +144,7 @@ export const proposeAmendment = (request: AmendmentRequest): ProposedAmendment =
     return requiresHumanAmendment(request, learned.because)
   }
 
-  // Ticket 15's promotion lands as a further branch here. Named rather than
+  // Recoverable classifications have no writer here. Named rather than
   // lumped into a generic refusal, because "this episode taught a recoverable
   // state and nothing yet writes those down" is a different thing for a person to
   // read than "no".
@@ -139,14 +157,18 @@ export const proposeAmendment = (request: AmendmentRequest): ProposedAmendment =
     }
   }
 
-  const step = artifact.steps.find((candidate) => candidate.id === record.intervention.stepId)
-  if (step === undefined || step.action.type !== "selectFromList") {
-    return {
-      _tag: "Unchanged",
-      why:
-        `step ${record.intervention.stepId} is not a selection, so there is no unmatched ` +
-        `state on it to declare. A checkpoint that failed is learned about differently`
-    }
+  if (request.confirmedOutcome !== undefined) {
+    return checkpointOutcomeAmendment(request, learned.because)
+  }
+  if (
+    step.action.type !== "selectFromList" ||
+    record.intervention.failureCause?.type !== "no_matching_item" ||
+    record.intervention.failureCause.code !== noMatchCode(step.action.onNoMatch)
+  ) {
+    return refuseAmendment(
+      artifact,
+      "this intervention did not record this selection's no-matching-item failure; no unmatched state can be learned"
+    )
   }
 
   const amended = declareLearnedNoMatch(
@@ -176,6 +198,50 @@ export const proposeAmendment = (request: AmendmentRequest): ProposedAmendment =
   }
 }
 
+const refuseAmendment = (artifact: CapabilityArtifact, reason: string): ProposedAmendment => ({
+  _tag: "Refused", refusal: new AmendmentRefused({ capability: artifact.capability, reason })
+})
+
+const checkpointOutcomeAmendment = (request: AmendmentRequest, because: string): ProposedAmendment => {
+  const { artifact, record, confirmedOutcome } = request
+  const refuse = (reason: string): ProposedAmendment => ({
+    _tag: "Refused", refusal: new AmendmentRefused({ capability: artifact.capability, reason })
+  })
+  if (confirmedOutcome === undefined) return refuse("no public checkpoint answer was confirmed")
+  const step = artifact.steps.find((candidate) => candidate.id === record.intervention.stepId)
+  if (step === undefined || record.intervention.capability !== artifact.capability || record.intervention.version !== artifact.version) {
+    return refuse("the intervention does not belong to this capability version and checkpoint")
+  }
+  if (
+    record.intervention.failureCause?.type !== "checkpoint_failed" ||
+    record.intervention.reason !== `the checkpoint "${step.checkpoint.description}" did not hold`
+  ) {
+    return refuse("this intervention did not record a failed checkpoint; no checkpoint answer can be learned")
+  }
+  const text = confirmedOutcome.text.trim()
+  if (typeof request.scrub !== "function" || text === "" || /[<\[]redacted\b/i.test(text) || request.scrub(text) !== text) {
+    return refuse("the confirmed screen text is not a verifiable public assertion")
+  }
+  const visible = [...walk(parseAccessibilityTree(record.intervention.accessibility))]
+  if (!visible.some((node) => normalise(ownText(node)) === normalise(text))) {
+    return refuse("the confirmed text does not match a complete observed accessibility node")
+  }
+  const amended = declareCheckpointOutcome(artifact, {
+    version: request.version ?? nextMinorVersion(artifact.version),
+    stepId: step.id,
+    code: confirmedOutcome.code,
+    title: confirmedOutcome.title,
+    text,
+    summary: `The operator observed ${JSON.stringify(text)}, changed nothing, and confirmed that this state is an application answer. ${record.detail ?? ""}`,
+    discoveredFrom: provenanceFor(record, because)
+  }, { scrub: request.scrub })
+  if (Result.isFailure(amended)) return { _tag: "Refused", refusal: amended.failure }
+  return {
+    _tag: "Amended", amended: amended.success, learnedClass: "business_outcome", because,
+    diff: diffArtifacts(artifact, amended.success)
+  }
+}
+
 /**
  * A Checkpoint that would not hold, and an Operator who got past it with
  * authority.
@@ -196,6 +262,13 @@ const requiresHumanAmendment = (
   because: string
 ): ProposedAmendment => {
   const { artifact, record } = request
+
+  if (record.intervention.failureCause?.type !== "checkpoint_failed") {
+    return refuseAmendment(
+      artifact,
+      "this intervention did not record a failed checkpoint; no checkpoint requirement can be learned"
+    )
+  }
 
   const step = artifact.steps.find((candidate) => candidate.id === record.intervention.stepId)
   if (step === undefined) {
@@ -274,18 +347,30 @@ const summaryFor = (record: InterventionRecord, list: string, wanted: string): s
  * them is ADR-0004's reasoning applied to this episode, so a reviewer disagreeing
  * with the conclusion can see exactly which premise they are disagreeing with.
  */
+const actionEvidenceFor = (record: InterventionRecord): string => {
+  const actions = record.actions.filter((action) => action.kind !== "note")
+  const observed = [...new Set(record.observed)]
+  const evidence = [
+    ...(actions.length === 0 ? [] : [
+      `recorded ${actions.length} action(s) on the live session (${actions.map((action) => withoutTrailingStop(action.detail)).join("; ")})`
+    ]),
+    ...(observed.length === 0 ? [] : [
+      `the session observed changes in ${observed.length} field(s) or URL parameters (${observed.join(", ")})`
+    ])
+  ]
+  return evidence.length === 0 ? "recorded no actions on the live session" : evidence.join("; ")
+}
+
 const provenanceFor = (record: InterventionRecord, because: string): string => {
   const it = record.intervention
-  const actions = record.actions.length === 0
-    ? "recorded no actions on the live session"
-    : `recorded ${record.actions.length} action(s) on the live session`
+  const actions = actionEvidenceFor(record)
 
   return [
     `Learned from intervention ${it.interventionId} (session ${it.sessionId}, run ${it.runId}, ` +
       `step ${it.stepId}), raised at ${it.raisedAt}.`,
     ``,
-    `${record.operator ?? "(unnamed)"} took control at ${record.tookControlAt ?? "(unknown)"}, ` +
-      `${actions}, and returned it at ${record.returnedAt ?? "(unknown)"}.`,
+    `${record.operator ?? "(unnamed)"} took control at ${record.tookControlAt ?? "(unknown)"} ` +
+      `and returned it at ${record.returnedAt ?? "(unknown)"}. Action evidence: ${actions}.`,
     ``,
     `Asked "${THE_QUESTION}", they answered yes. ${because}.`,
     ``,
@@ -311,9 +396,9 @@ const requiresHumanTitleFor = (intent: string): string =>
 const requiresHumanSummaryFor = (record: InterventionRecord, checkpoint: string): string =>
   [
     `Automation reached this step and the checkpoint "${withoutTrailingStop(checkpoint)}" did ` +
-      `not hold. Somebody took the live session and resolved it, and resolving it took ` +
-      `${record.actions.length} action(s) on that session — not a longer wait, not a second ` +
-      `look, and not a better description of a control. That is what makes this a permissions ` +
+      `not hold. Somebody took the live session and resolved it. Action evidence: ` +
+      `${actionEvidenceFor(record)}. They confirmed that automation should always stop for ` +
+      `a person here. That is what makes this a permissions ` +
       `problem rather than a user interface one (ADR-0004).`,
     ``,
     `From this version on, a run that meets this state stops under a code and says this, ` +
@@ -346,18 +431,14 @@ const requiresHumanSummaryFor = (record: InterventionRecord, checkpoint: string)
  */
 const requiresHumanProvenanceFor = (record: InterventionRecord, because: string): string => {
   const it = record.intervention
-  const actions = record.actions.length === 0
-    ? "recorded no actions on the live session"
-    : `recorded ${record.actions.length} action(s) on the live session (${
-      record.actions.map((action) => withoutTrailingStop(action.detail)).join("; ")
-    })`
+  const actions = actionEvidenceFor(record)
 
   return [
     `Learned from intervention ${it.interventionId} (session ${it.sessionId}, run ${it.runId}, ` +
       `step ${it.stepId}), raised at ${it.raisedAt}.`,
     ``,
-    `${record.operator ?? "(unnamed)"} took control at ${record.tookControlAt ?? "(unknown)"}, ` +
-      `${actions}, and returned it at ${record.returnedAt ?? "(unknown)"}.`,
+    `${record.operator ?? "(unnamed)"} took control at ${record.tookControlAt ?? "(unknown)"} ` +
+      `and returned it at ${record.returnedAt ?? "(unknown)"}. Action evidence: ${actions}.`,
     ``,
     `Asked "${THE_QUESTION}", they answered no: automation should always stop here. ` +
       `${because}.`,

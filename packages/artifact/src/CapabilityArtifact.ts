@@ -1,42 +1,17 @@
 /**
- * The Capability Artifact: the typed, versioned, human-readable document
- * describing how a Capability is carried out.
+ * The typed, versioned document shared by Discovery, Replay and artifact review.
  *
- * This schema is the centre of the system. Discovery compiles into it (ticket
- * 11), Replay executes it, a reviewer approves it, and every later ticket adds a
- * field rather than a mechanism. The ordering — Replay before Discovery — exists
- * so that the schema is provably executable before anything starts generating
- * one.
+ * Every step carries intent and a checkpoint; every Target records a strategy
+ * and robustness argument. Inputs describe type, sensitivity and provenance.
+ * Outputs name the extraction step. Entry paths contain no deployment origin,
+ * so the same vendor-level capability can run against several institutions.
  *
- * ## What the shape has to earn
+ * YAML keeps prose and version diffs readable. The schema and parser validate
+ * references before either storing or executing a document.
  *
- * A reviewer must be able to read one of these and know what the Capability does,
- * what it needs, what it returns and how it verifies itself, without opening any
- * source. That is SPEC user stories 11 to 19, and it is why:
- *
- *   - every Step carries a required `intent` and a required `checkpoint`;
- *   - every Target carries a required `strategy` and `robustness` argument;
- *   - inputs declare type, sensitivity and how Discovery arrived at them;
- *   - outputs declare a type and which Step reads them;
- *   - the Artifact carries no origin, so the same document serves every Tenant.
- *
- * ## Format
- *
- * YAML, parsed with `Bun.YAML` (built in, so no dependency) and then decoded
- * through this schema, which is where the real validation lives. YAML because an
- * Artifact is a review document: `robustness` is a paragraph of prose, and a
- * diff between `1.0.0` and `1.1.0` has to be readable by the person approving it.
- * JSON turns both of those into escaped one-liners.
- *
- * ## Seams
- *
- *   - ticket 04 added `outcomes:` here and a branch to `Checkpoint`; ticket 06
- *     added `recoverable:`. Both are optional sections, and the order they are
- *     consulted in when a Checkpoint does not hold is documented on
- *     `Checkpoint.ts` — outcomes always before recovery.
- *   - ticket 14 adds `requiresHuman:` entries, write-once.
- *   - ticket 16 adds Tenant Overrides as scoped deltas *against* this document,
- *     never as edits to it.
+ * Optional outcomes are evaluated before recoverable conditions. Requires-human
+ * entries cannot be downgraded, and tenant overrides are scoped deltas against
+ * an immutable base version.
  */
 
 import { Schema } from "effect"
@@ -86,14 +61,13 @@ export const CapabilityArtifact = Schema.Struct({
   capability: Schema.String,
   /** Semantic version. Artifacts are immutable; a change is a new version. */
   version: Schema.String,
-  /** One line, for a catalog listing. */
+  /** One-line capability summary. */
   title: Schema.String,
   /** What this Capability does and what a caller should expect, in prose. */
   summary: Schema.String,
   /**
-   * How this document came to exist. `hand-written` is honest about the one in
-   * this repository at 1.0.0: ticket 03 wrote it by hand so that ticket 11's
-   * compiler has an executable target to emit.
+   * How this document came to exist. `hand-written` distinguishes authored
+   * fixtures from documents compiled from live discovery.
    */
   authored: Schema.Literals(["hand-written", "discovered"]),
   surface: SurfaceDeclaration,
@@ -151,7 +125,7 @@ export const recoverableConditions = (
   artifact: CapabilityArtifact
 ): ReadonlyArray<RecoverableCondition> => artifact.recoverable ?? []
 
-/** `member.account-balance@1.0.0`, the way Evidence and the catalog name a run. */
+/** `member.account-balance@1.0.0`, the way Evidence identifies a capability version. */
 export const capabilityRef = (artifact: CapabilityArtifact): string =>
   `${artifact.capability}@${artifact.version}`
 

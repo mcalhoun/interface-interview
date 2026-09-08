@@ -1,15 +1,15 @@
 /**
  * The member book Heritage Core serves from.
  *
- * | Number  | What the screen does                            | Added at  |
- * | ------- | ----------------------------------------------- | --------- |
- * | `12345` | A normal member with two accounts               | ticket 01 |
- * | `22222` | Accounts labelled `Regular Savings`             | ticket 09 |
- * | `33333` | Two savings accounts, so selection is ambiguous | ticket 09 |
- * | `55555` | Slow load behind a transient overlay            | ticket 06 |
- * | `77777` | Savings held pending supervisor authorisation   | ticket 12 |
- * | `99999` | Not on file: the Member Not Found screen        | ticket 04 |
- * | `88888` | Checking only, no savings                       | ticket 13 |
+ * | Number  | What the screen does                            |
+ * | ------- | ----------------------------------------------- |
+ * | `12345` | A normal member with two accounts               |
+ * | `22222` | Accounts labelled `Regular Savings`             |
+ * | `33333` | Two savings accounts, so selection is ambiguous |
+ * | `55555` | Slow load behind a transient overlay            |
+ * | `77777` | Savings held pending supervisor authorisation   |
+ * | `99999` | Not on file: the Member Not Found screen        |
+ * | `88888` | Checking only, no savings                       |
  *
  * `22222` and `33333` differ from the happy path only in how their accounts are
  * *labelled*, which is the point: label variation is what a second Tenant
@@ -117,9 +117,7 @@ const HAPPY_PATH: Member = {
  *
  * `Regular Savings` where the happy path says `Primary Savings`, and
  * `Checking Account` where it says `Checking`. Nothing else about the screen
- * changes — which is exactly the situation ticket 16 will meet with a second
- * Tenant, arriving early so the matching rule can be shown to handle it before
- * anything is built on the assumption that it does.
+ * changes. This isolates label matching from other tenant differences.
  *
  * `savings` is a token of `Regular Savings`, so the shipped Artifact's recorded
  * default selects this member's savings account with no configuration anywhere.
@@ -207,7 +205,7 @@ const TWO_SAVINGS: Member = {
 }
 
 /**
- * Ticket 12's member: savings held, checking not.
+ * Supervisor-hold fixture: savings held, checking not.
  *
  * Everything up to and including Account Detail behaves exactly as it does for
  * `12345`. The screen that finally differs is the one inside the iframe.
@@ -249,7 +247,7 @@ const SUPERVISOR_HOLD: Member = {
 }
 
 /**
- * Ticket 13's member: a checking account, and no savings account at all.
+ * Checking-only fixture: a checking account, and no savings account at all.
  *
  * The most important thing about this record is how *ordinary* it is. Nothing is
  * held, nothing is restricted, nothing is slow, and every screen renders exactly

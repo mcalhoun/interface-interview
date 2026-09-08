@@ -39,6 +39,7 @@ import {
   REPEATABLE_JUSTIFICATION_MINIMUM,
   describeUnsafeRepeat,
   originOf,
+  originAuthorizer,
   parseOriginPattern,
   riskOf,
   unsafeRepeats
@@ -49,7 +50,7 @@ import {
   recoverableConditions
 } from "@cua/artifact"
 import { type SurfaceAdapterService, SurfaceAdapter, playwrightSurface } from "@cua/surface"
-import { replay, shippedArtifact, shippedPolicy } from "./support/replay-harness.ts"
+import { replay, shippedArtifact, shippedPolicy } from "../apps/demo/src/support/replay-harness.ts"
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -549,7 +550,7 @@ const countingSurface = (
         extract: counted("extract", inner.extract)
       } satisfies SurfaceAdapterService
     })
-  ).pipe(Layer.provide(playwrightSurface({})))
+  ).pipe(Layer.provide(playwrightSurface({ authorizeOrigin: originAuthorizer(shippedPolicy()) })))
 
 describe("the chokepoint", () => {
   it.live("lets nothing reach the adapter when the policy denies everything", () =>

@@ -1,7 +1,18 @@
-# No model in Replay, proven by service requirements
+# No model in deterministic Replay, checked by service requirements
 
-Replay must never consult a model, and we prove it structurally rather than by convention. The Replay engine's effect requires only the Surface Adapter, Policy, Evidence and Session services, so any code path reaching for the language model fails to compile. A second check over Evidence files confirms no decision event appears in a Replay run.
+The deterministic Replay engine requires Surface Adapter, Policy, Evidence and
+Session services. Its type tests reject an added LanguageModel requirement, and
+its evidence tests reject discovery decision events in an ordinary replay.
+
+Optional assisted classification is a separate, explicit path. A supplied advisor
+may internally call a model without exposing LanguageModel in the engine's own
+service requirements. An assisted outcome is marked and its consultation has
+separate evidence events. The default replay path has no such advisor.
 
 ## Consequences
 
-The guarantee cannot rot. A sentence in a README, a runtime assertion, an unset environment variable: each of those survives someone adding a model call six months from now. A type error does not. This is the concrete reason ADR-0002 was worth its cost.
+The type signature checks a useful dependency boundary, but it does not prove
+that arbitrary injected callbacks can never call a model. The guarantee for
+ordinary replay rests on both that boundary and the tested production
+composition. Evidence distinguishes deterministic execution from opt-in
+assistance, so an assisted result cannot silently count as deterministic success.

@@ -1,0 +1,30 @@
+[
+  {
+    "check": "clean-install typecheck",
+    "exit": 0
+  },
+  {
+    "check": "success",
+    "exit": 0,
+    "result": "success",
+    "version": "1.4.0"
+  },
+  {
+    "check": "NO_MATCHING_ITEM",
+    "exit": 0,
+    "result": "business_outcome",
+    "version": "1.4.0"
+  },
+  {
+    "check": "MEMBER_NOT_FOUND",
+    "exit": 0,
+    "result": "business_outcome",
+    "version": "1.4.0"
+  },
+  {
+    "check": "INPUT_VALIDATION_ERROR",
+    "exit": 0,
+    "result": "business_outcome",
+    "version": "1.4.0"
+  }
+]

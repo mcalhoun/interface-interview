@@ -25,7 +25,7 @@ import type { EvidenceEvent } from "@cua/evidence"
 import { type RecoverableCondition, recoverableConditions } from "@cua/artifact"
 import type { SurfaceState } from "@cua/surface"
 import { type CheckpointOutcome, RECOVERY_BUDGET_PER_RUN, recover } from "@cua/replay"
-import { type ReplayOutcome, replay, shippedArtifact } from "./support/replay-harness.ts"
+import { type ReplayOutcome, replay, shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
 
 /** Where the expiry toggle has to fire to land inside `open-account`. */
 const EXPIRE_BEFORE_ACCOUNT = 2

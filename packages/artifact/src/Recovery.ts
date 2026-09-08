@@ -39,7 +39,7 @@
  *
  * ## `resume`
  *
- * Two shapes, because the two conditions this ticket was written against fail
+ * Two shapes, because the supported conditions fail
  * differently:
  *
  *   - **`here`** — the remedy left the run where it needs to be, so re-evaluate
@@ -109,7 +109,7 @@ export const RecoverableCondition = Schema.Struct({
    *     Action, because the remedy runs once per attempt whatever `resume` says.
    *
    * A risky Action performed twice is a risky Action performed twice, by
-   * whichever route. Ticket 07's precedent is followed exactly: a risky thing
+   * whichever route. The action policy's rule applies: a risky thing
    * cannot be permitted silently, and the justification for permitting it travels
    * with the permission so a reviewer reads the argument next to the record of it
    * happening.

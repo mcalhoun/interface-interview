@@ -27,7 +27,7 @@
  *      sentence somebody who already solved it wrote — and never proceeds.
  *   7. No later Intervention can downgrade it, however many times it is resolved.
  *
- * The stored `1.2.0` is that run's output. `test/support/drive-the-supervisor-hold.ts`
+ * The stored `1.2.0` is that run's output. `apps/demo/src/support/drive-the-supervisor-hold.ts`
  * is what produced it, and `evidence/learning/77777-supervisor-hold/` is what it
  * wrote down.
  *
@@ -44,11 +44,9 @@ import { expect } from "vitest"
 import {
   type CapabilityArtifact,
   atLeastAsStrictAs,
-  catalogEntry,
   classificationOf,
   declareLearnedNoMatch,
   declareRequiresHuman,
-  describeCatalogEntry,
   diffArtifacts,
   formatArtifact,
   loadArtifact,
@@ -60,8 +58,8 @@ import {
 import { type InterventionRecord, type NextTimeAnswer, classify } from "@cua/session"
 import { noScrubbing } from "@cua/evidence"
 import { proposeAmendment } from "@cua/replay"
-import { attendedReplay } from "./support/handoff-harness.ts"
-import { replay, shippedArtifact } from "./support/replay-harness.ts"
+import { attendedReplay } from "../apps/demo/src/support/handoff-harness.ts"
+import { replay, shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
 
 /** Ticket 14's member: a savings account held pending supervisor authorization. */
 const RESTRICTED = "77777"
@@ -82,6 +80,7 @@ const record = (over: Partial<InterventionRecord> = {}): InterventionRecord => (
     stepId: HELD_STEP,
     stepIntent: "Open the account the caller asked for.",
     reason: 'the checkpoint "account detail is showing" did not hold',
+    failureCause: { type: "checkpoint_failed" },
     detail: "expected the Available Balance cell; observed nothing matching",
     url: "http://example.invalid/account",
     accessibility: "- table:",
@@ -92,9 +91,8 @@ const record = (over: Partial<InterventionRecord> = {}): InterventionRecord => (
   operator: "r.mensah",
   tookControlAt: "2026-08-27T00:00:10.000Z",
   actions: [{ at: "2026-08-27T00:00:15.000Z", detail: "entered supervisor override" }],
-  // What the session saw them type, by field name. Nothing in this file reads
-  // it: what a person *did* is what they said they did, and the capture is a
-  // redaction mechanism rather than an input to ADR-0004's table.
+  // What the session saw change, by field name. These are action evidence as
+  // well as the proof that credentials were registered for redaction.
   observed: ["supervisorId", "authorizationCode"],
   returnedAt: "2026-08-27T00:00:20.000Z",
   classification: "resolved",
@@ -120,7 +118,7 @@ it("derives requires-human from acting, not from the answer alone", () => {
   // observational and then declining to let automation observe it is a
   // preference, and a requires-human entry can never be downgraded afterwards,
   // so it is not written on the strength of one.
-  expect(classify(record({ actions: [] }))._tag).toBe("NothingLearned")
+  expect(classify(record({ actions: [], observed: [] }))._tag).toBe("NothingLearned")
 })
 
 it("cannot be talked into a business outcome by anybody who had to act", () => {
@@ -145,7 +143,7 @@ it("cannot be talked into a business outcome by anybody who had to act", () => {
   // done at all.
   const declarable = answers.flatMap((nextTime) =>
     [[], record().actions].flatMap((actions) => {
-      const learned = classify(record({ nextTime, actions }))
+      const learned = classify(record({ nextTime, actions, observed: [] }))
       return learned._tag === "Learned" && learned.learnedClass === "business_outcome"
         ? [{ nextTime, acted: actions.length > 0 }]
         : []
@@ -237,7 +235,13 @@ it("refuses the same downgrade however many times somebody resolves the state", 
   // should handle it. Against this document it is refused, and the reason is not
   // the episode — it is what the document already says.
   const observed = record({
+    intervention: {
+      ...record().intervention,
+      version: artifact.version,
+      failureCause: { type: "no_matching_item", code: "NO_MATCHING_ITEM" }
+    },
     actions: [],
+    observed: [],
     nextTime: "automation_handles_it",
     classification: "unresolved"
   })
@@ -402,35 +406,6 @@ it("names the state from the step, and from nothing anybody typed", () => {
   )
 })
 
-it("tells a calling agent that this capability has a state it will never handle", () => {
-  // The catalog is the agent-facing view of what exists, and an agent deciding
-  // whether to invoke this unattended needs both halves of the contract: what it
-  // may be *returned*, and where it may be stopped needing a person. Listing the
-  // first without the second would be a contract with the expensive half missing.
-  const entry = catalogEntry(afterLearning(), ["1.2.0", "1.1.0", "1.0.0"])
-
-  expect(entry.escalations).toEqual([
-    {
-      code: CODE,
-      title: afterLearning().requiresHuman?.[CODE]?.title,
-      step: HELD_STEP
-    }
-  ])
-  // And kept apart from the outcomes, which is where the write-once rule is
-  // visible even from here: a code is in one list or the other, never in both.
-  expect(entry.outcomes.map((outcome) => outcome.code)).toEqual([
-    "MEMBER_NOT_FOUND",
-    "NO_MATCHING_ITEM"
-  ])
-
-  const rendered = describeCatalogEntry(entry)
-  expect(rendered).toContain("or, stopping for a person (learned, and never automated)")
-  expect(rendered).toContain(CODE)
-
-  // The version before it says nothing of the kind, because nobody had met it.
-  expect(catalogEntry(beforeLearning(), ["1.1.0"]).escalations).toEqual([])
-})
-
 it("diffing the two versions shows an addition and nothing else at all", () => {
   const diff = diffArtifacts(beforeLearning(), afterLearning())
 
@@ -572,7 +547,8 @@ it.live(
         expect(declared?.code).toBe(CODE)
         expect(declared?.declaration.discoveredFrom).toContain(closed.intervention.interventionId)
         expect(declared?.declaration.discoveredFrom).toContain("r.mensah")
-        expect(declared?.declaration.discoveredFrom).toContain("1 action(s) on the live session")
+        expect(declared?.declaration.discoveredFrom).toContain("observed changes in 2 field(s)")
+        expect(declared?.declaration.discoveredFrom).toContain("supervisorId, authorizationCode")
         expect(declared?.declaration.discoveredFrom).toContain("they answered no")
 
         // 1.1.0 in the store is untouched.
@@ -762,8 +738,12 @@ it("is the same mechanism reaching opposite conclusions", () => {
   // say opposite things, because two people did different things to resolve what
   // they met.
   const observed = record({
-    intervention: { ...record().intervention, stepId: HELD_STEP },
+    intervention: {
+      ...record().intervention, stepId: HELD_STEP, version: "1.0.0",
+      failureCause: { type: "no_matching_item", code: "NO_MATCHING_ITEM" }
+    },
     actions: [],
+    observed: [],
     nextTime: "automation_handles_it",
     classification: "unresolved"
   })

@@ -4,9 +4,8 @@
  *
  * Everything else in this app is a pure function of the request. These three
  * behaviours are not, because a *transient* condition is by definition one that
- * answers differently the second time you ask. That is the whole reason ticket 06
- * exists: a system that retried a pure function would only ever get the same
- * answer back.
+ * answers differently the second time you ask. Retrying a pure function would
+ * only return the same answer.
  *
  * Three behaviours, deliberately failing in three different ways:
  *
@@ -31,7 +30,7 @@
  *
  * The expiry is a one-shot: signing on disarms it for good. A toggle that re-armed
  * itself would make an unrecoverable loop rather than a recoverable condition, and
- * an unrecoverable loop is a different ticket's problem.
+ * that would not test recovery.
  */
 
 /** The member whose record arrives late and behind an interstitial. */

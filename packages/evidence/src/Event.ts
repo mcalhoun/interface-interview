@@ -1,26 +1,10 @@
 /**
- * The Evidence event union: everything either execution mode can record.
+ * The event union shared by Discovery, Replay and Intervention records.
  *
- * All thirteen kinds SPEC lists are defined here, at the tracer bullet, even
- * though Replay at this point emits six of them. That is deliberate on two
- * counts. A union that grows a member per ticket is a union nothing can be
- * validated against, and — more importantly — `decide` and the `assist.*` kinds
- * have to exist *and be unreachable from Replay* for ADR-0003's second proof to
- * mean anything. "A Replay run contains no `decide` event" is only a claim worth
- * testing if `decide` is a thing that could have been written.
- *
- * SPEC, "Evidence": assisted recovery gets its own kinds rather than reusing
- * `decide`, so consulting a model during Replay can never hide behind a
- * discovery-shaped event.
- *
- * Every event carries run, session and step identifiers, so Discovery, Replay and
- * Intervention records join up (SPEC user story 63).
- *
- * The `recovery.*` kinds are the one addition to SPEC's list. They are added
- * rather than folded into the existing kinds for exactly the reason SPEC gives
- * for `assist.*` having its own: getting past a transient state unattended must
- * not be able to hide inside an ordinary `action` or a re-run `checkpoint`. See
- * the note above them.
+ * Discovery decisions have their own event kind. Optional assisted recovery uses
+ * assist.* events so a consultation cannot be mistaken for deterministic replay.
+ * Recovery events likewise distinguish a remedy from an ordinary successful step.
+ * Run, session and step identifiers link these records across the lifecycle.
  */
 
 import { Schema } from "effect"
@@ -51,6 +35,8 @@ const RunStart = event("run.start", {
   /** `replay` or `discovery`. The single most important thing about a run. */
   mode: Schema.Literals(["replay", "discovery"]),
   capability: Schema.String,
+  provider: Schema.optional(Schema.String),
+  model: Schema.optional(Schema.String),
   version: Schema.String,
   baseUrl: Schema.String,
   /**
@@ -78,7 +64,7 @@ const Observe = event("observe", {
   /**
    * The accessibility YAML as observed. This is the largest thing in the file and
    * the reason a run can be reconstructed without a screen recording; it is also
-   * the text ticket 08 scrubs.
+   * scrubbed before persistence.
    */
   accessibility: Schema.String
 })
@@ -224,7 +210,7 @@ const RecoveryResolved = event("recovery.resolved", {
 })
 
 // ---------------------------------------------------------------------------
-// The rest of the recovery ladder. Defined here, emitted by tickets 12 and 15.
+// Intervention and optional assisted-recovery events.
 // ---------------------------------------------------------------------------
 
 /**
@@ -435,7 +421,7 @@ export type EvidenceEventBody = EvidenceEvent extends infer Member
 /**
  * The kinds a Replay run may never contain.
  *
- * `assist.*` is conditional — ticket 15 enables it explicitly with `--assist` —
+ * `assist.*` is explicitly enabled with `--assist`,
  * so it is not in this list. `decide` is not conditional on anything.
  */
 export const KINDS_FORBIDDEN_IN_REPLAY: ReadonlyArray<EvidenceEvent["kind"]> = ["decide"]

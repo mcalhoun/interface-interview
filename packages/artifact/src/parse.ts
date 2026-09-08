@@ -13,7 +13,7 @@
  * are both documents that lie about the Capability's domain contract — and a
  * contract is only worth reading if something checks it.
  *
- * This is the check ticket 11's compiler has to satisfy. Emitting an Artifact
+ * This is the check the compiler has to satisfy. Emitting an Artifact
  * that fails `parseArtifact` is a compiler bug, and having the check exist first
  * is why the ordering in SPEC's build order puts Replay before Discovery.
  */
@@ -94,7 +94,7 @@ export const formatArtifact = (artifact: CapabilityArtifact): string =>
  * mistake actually takes. False positives are possible and are the trade ADR-0008
  * names: a rejected Artifact is a much better failure than a leaked identifier.
  *
- * **Ticket 11:** call this with the Goal's terms and every value the discovery
+ * Call this with the Goal's terms and every value the discovery
  * run typed, and refuse to write an Artifact that returns anything. It is
  * deliberately not part of `parseArtifact`, because reading a stored document is
  * not the moment you know what the runtime values were.
@@ -125,7 +125,7 @@ export const formatArtifact = (artifact: CapabilityArtifact): string =>
  *
  * ## What is deliberately *not* walked, and why
  *
- * `inputs.default` is by construction the Goal's own word — ticket 09's whole
+ * `inputs.default` is by construction the Goal's own word — the selection model's
  * argument is that recording the matched label there produces a capability that
  * works at one institution and looks correct doing it — so a `default` that
  * echoes a goal-derived value is the design rather than the defect. `description`

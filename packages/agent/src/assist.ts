@@ -7,7 +7,7 @@
  * acting operations at all.** It returns a proposed meaning, a confidence and a
  * rationale, and nothing else."
  *
- * ## Two vocabularies, and the difference between them is the whole ticket
+ * ## Separate discovery and assistance vocabularies
  *
  * `Vocabulary.ts` gives the Discovery model seven verbs, five of which touch a
  * Surface. It is safe because the handlers cannot execute and the loop puts every
@@ -28,7 +28,7 @@
  *
  * ## The third word, added for the second tenant, and why it does not move the line
  *
- * `proposeTarget` (ticket 16) lets a consultation say that an institution calls
+ * `proposeTarget` lets a consultation say that an institution calls
  * one control something else. It is the only tool here that mentions a control
  * at all, and the boundary survives it for three independent reasons, none of
  * them a runtime check:
@@ -87,7 +87,7 @@ import type {
 } from "@cua/replay"
 import { AssistUnavailable } from "@cua/replay"
 import { Effect, Layer, Schema } from "effect"
-import type { ConfigError } from "effect/Config"
+import { ConfigError } from "effect/Config"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 
 // ---------------------------------------------------------------------------
@@ -518,7 +518,7 @@ export const modelAdvisor = (options: AdvisorOptions): Advisor => ({
         return decoded._tag === "Failure"
           ? yield* Effect.fail(
               new AssistUnavailable({
-                reason: `the model's proposed control did not validate: ${decoded.failure}`
+                reason: "the model's proposed control did not validate"
               })
             )
           : ({
@@ -543,7 +543,7 @@ export const modelAdvisor = (options: AdvisorOptions): Advisor => ({
       if (decoded._tag === "Failure") {
         return yield* Effect.fail(
           new AssistUnavailable({
-            reason: `the model's classification did not validate: ${decoded.failure}`
+            reason: "the model's classification did not validate"
           })
         )
       }
@@ -560,7 +560,11 @@ export const modelAdvisor = (options: AdvisorOptions): Advisor => ({
         problem instanceof AssistUnavailable
           ? Effect.fail(problem)
           : Effect.fail(
-              new AssistUnavailable({ reason: `the model could not be reached: ${problem}` })
+              new AssistUnavailable({
+                reason: problem instanceof ConfigError
+                  ? "assistance is unavailable because model credentials or configuration are missing or invalid"
+                  : "the assistance model could not provide a usable response; check the provider and try again"
+              })
             )
       )
     )

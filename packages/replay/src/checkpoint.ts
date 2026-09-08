@@ -52,11 +52,11 @@
  *
  * ## The ladder below a failed Checkpoint
  *
- * Four things now happen when a Checkpoint does not hold, and the order is the
+ * The order of evaluation and escalation is the
  * semantic core of the system:
  *
  * ```
- *   expect  ->  declared Business Outcomes  ->  recovery  ->  hand off to a person
+ *   expect -> declared Business Outcomes -> recovery -> bounded assistance -> person
  * ```
  *
  * A declared outcome is what the application *means*; a Recoverable Condition is
@@ -69,8 +69,7 @@
  * The first arrow is structural: `evaluate` folds `expect` and the outcome
  * branches together and only `verdict: "failed"` leaves this module, so nothing
  * downstream can see an outcome to mistake for a fault. The rest of the ladder is
- * enforced in `engine.ts` — see `runCheckpoint` there, which is the single
- * expression the two lower rungs hang off.
+ * enforced by the recovery and handoff orchestration in `engine.ts`.
  *
  * ## What `evaluate` turned out to be for
  *
@@ -78,9 +77,8 @@
  * they are the same job:
  *
  *   1. **Verifying a Step.** What it was written for.
- *   2. **Waiting out a slow load.** A bounded poll *is* patience. Ticket 06 looked
- *      at declaring a recoverable condition for lateness and did not, because it
- *      would have been a second mechanism for waiting sitting beside this one.
+ *   2. **Waiting out a slow load.** Bounded polling already handles lateness,
+ *      without needing a separate recovery condition.
  *   3. **Detecting a Recoverable Condition, and deciding whether one cleared.**
  *      A rule's `detect` is a list of the same assertions, evaluated with a bound
  *      of zero — one look, no waiting. And a recovery decides whether it worked
@@ -110,7 +108,7 @@ import type {
   Target,
   TargetFailure
 } from "@cua/surface"
-import { describeMatch } from "@cua/surface"
+import { describeMatch, nodeText, normalise } from "@cua/surface"
 
 /** How long a Checkpoint has to come true when the Artifact does not say. */
 export const DEFAULT_CHECKPOINT_MILLIS = 5_000
@@ -158,7 +156,7 @@ export type CheckpointOutcome =
  * Action vocabulary is missing from this type on purpose, so a Checkpoint cannot
  * reach the adapter's acting methods even by accident — which matters because a
  * Checkpoint is the one part of Replay that is *about* touching the live system
- * without being a Step (ticket 07).
+ * without being a Step.
  */
 export interface Perception {
   readonly observe: SurfaceAdapterService["observe"]
@@ -242,11 +240,11 @@ export const evaluate = (
  * live control exactly as one in `expect` does, and `evaluate` calls it through
  * the same `context.read`. Authorising only `expect` would leave that read
  * reaching the adapter with no `policy.check` in front of it and no deny path —
- * the same bypass ticket 07 closed at the Checkpoint boundary, reopened one
+ * the same bypass the authorization gate closes at the Checkpoint boundary, reopened one
  * level in.
  *
  * **Keep this the definition of "what evaluation can look at".** If a later
- * ticket gives a Checkpoint a third place to hold Assertions, it goes here, and
+ * change gives a Checkpoint another place to hold Assertions, it goes here, and
  * the gate widens with it rather than being remembered separately.
  */
 export const assertionsOf = (checkpoint: Checkpoint): ReadonlyArray<Assertion> => [
@@ -290,14 +288,14 @@ const check = (
   switch (assertion.assert) {
     case "textPresent":
       return Effect.succeed(
-        state.accessibility.includes(assertion.text)
+        normalise(nodeText(state.tree)).includes(normalise(assertion.text))
           ? undefined
           : `no such text on ${describeScreen(state)}`
       )
 
     case "textAbsent":
       return Effect.succeed(
-        state.accessibility.includes(assertion.text)
+        normalise(nodeText(state.tree)).includes(normalise(assertion.text))
           ? `the text is still on ${describeScreen(state)}`
           : undefined
       )
@@ -372,7 +370,7 @@ const describeScreen = (state: SurfaceState): string =>
  * Shared with the executor so a Checkpoint and the Action it verifies can never
  * disagree about what a parameter means.
  *
- * ## UNWRAP SITE 2 OF 2 (ticket 08)
+ * ## Runtime value boundary
  *
  * A `fill` has to type real characters into a real field, and a `targetReads`
  * checkpoint has to compare against the same real characters, so somewhere the
@@ -386,8 +384,7 @@ const describeScreen = (state: SurfaceState): string =>
  * below — is a value read back off the screen, and the Evidence scrubber takes
  * that out on the way to disk.
  *
- * The other unwrap is `scrubberFor` in `redaction.ts`.
- * `test/sensitive-data.test.ts` asserts the set is exactly these two.
+ * `test/sensitive-data.test.ts` checks the permitted unwrap boundaries.
  */
 export const resolveValue = (
   context: Pick<EvaluationContext, "inputs" | "readings">,

@@ -14,12 +14,10 @@
  * the order of statements. `policyFrom` then builds the Layer from an
  * already-checked value, which is why it cannot fail.
  *
- * The failure mode this produces is the one the ticket asks for: no Policy means
+ * No Policy means
  * no run. There is no "carry on unrestricted if the file is missing" branch
  * anywhere, and there is no permissive Layer left in this package for anyone to
- * reach for. Ticket 03 shipped one as a placeholder; it is gone, because a
- * layer that says yes to everything is precisely the second path a chokepoint
- * cannot have.
+ * reach for. An unrestricted fallback would bypass the policy boundary.
  */
 
 import { readdirSync, readFileSync } from "node:fs"
@@ -69,7 +67,7 @@ export const loadPolicy = (
   return parsePolicy(path, yaml)
 }
 
-/** Every Policy stored here, for a CLI's usage text and for ticket 17's catalog. */
+/** Every Policy stored here, for CLI usage text. */
 export const listPolicies = (directory: string): ReadonlyArray<string> => {
   try {
     return readdirSync(directory)

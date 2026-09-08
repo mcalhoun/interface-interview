@@ -62,7 +62,7 @@ const html = (body: string, status = 200): Response =>
     headers: {
       "content-type": "text/html; charset=iso-8859-1",
       // A cached page would hide a full page load, and full page loads are the
-      // behaviour later tickets have to cope with. It is also what makes a
+      // behaviour the adapter must handle. It is also what makes a
       // transient condition observable: an unchanged URL has to be re-fetched.
       "cache-control": "no-store"
     }
@@ -149,6 +149,9 @@ export const router = (
         // the only case on this route that is not a domain answer.
         if (memberNumber === "") {
           return html(systemMessagePage("No member number entered.", tenant), 400)
+        }
+        if (!/^\d+$/.test(memberNumber)) {
+          return html(systemMessagePage("Member number must contain only digits.", tenant), 400)
         }
 
         const member = findMember(memberNumber)

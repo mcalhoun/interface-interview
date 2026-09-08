@@ -1,0 +1,5 @@
+model: gpt-4.1; capability: member.account-balance.discovered@1.1.0; evidence: evidence/discovery/live-2026-09-08T13-36-29-223Z-9972cdc9
+Discovery reached the goal in 4 steps; compiling the recorded flow.
+Saved member.account-balance.discovered@1.1.0; replaying the exact stored artifact.
+Fresh artifact replay succeeded; exercising its exceptional-state handoff.
+Discovery evidence run failed. Existing evidence is retained; inspect the current run's events.

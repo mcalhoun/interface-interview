@@ -23,7 +23,7 @@ import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
 import { DEFAULT_CHECKPOINT_MILLIS } from "@cua/replay"
-import { replay, shippedArtifact } from "./support/replay-harness.ts"
+import { replay, shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
 
 /** SPEC's canonical absent member: well-formed, and simply not on file. */
 const ABSENT = "99999"

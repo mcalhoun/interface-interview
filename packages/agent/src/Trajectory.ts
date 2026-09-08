@@ -2,7 +2,7 @@
  * A Trajectory: everything one Discovery run learned, in the shape the compiler
  * reads.
  *
- * **Ticket 11 consumes this.** It is the seam between "a model drove a browser"
+ * The compiler consumes this. It is the seam between "a model drove a browser"
  * and "a reviewable Capability Artifact exists", and it is deliberately a plain
  * data structure with no behaviour: the compiler should be a function of this
  * value, testable without a model, a browser or a network.
@@ -31,7 +31,7 @@
  * ## Two things the compiler must not skip
  *
  * `parseArtifact` rejects a document whose ValueRef names an undeclared input, so
- * emitting one is a compiler bug (ticket 03's note). And `bakedInLiterals` must be
+ * emitting one is a compiler bug. And `bakedInLiterals` must be
  * called with the Goal's terms and every literal this run typed, per ADR-0008 —
  * `literalsTyped` below exists to be handed straight to it.
  */
@@ -107,11 +107,13 @@ export interface DiscoveredParameter {
  * A choice made against a list, and the inference behind it.
  *
  * `default` is **the goal's own word**, never the label it matched. That is the
- * whole of ticket 09's warning and the reason `Selection.ts` exists; the field is
+ * selection constraint checked by `Selection.ts`; the field is
  * named `default` because that is the `InputDeclaration` field it becomes.
  */
 export interface DiscoveredSelection {
   readonly stepId: string
+  /** Set only by the deterministic public account-list policy after live validation. */
+  readonly declassifiedBecause?: string
   /** Becomes the enum input's name. */
   readonly parameter: string
   /** The labels read off the screen. Becomes `values`. */
@@ -153,29 +155,28 @@ export type DiscoveryConclusion =
   | { readonly conclusion: "failed"; readonly reason: string }
 
 export interface Trajectory {
-  /**
-   * The Goal, exactly as it was given. **The one field here that is not scrubbed.**
-   *
-   * Every other string a Trajectory carries — step URLs, the adapter's
-   * rationales, the readings — passes the run's scrubber on the way in, so a
-   * Trajectory can be printed or written to disk without leaking the values the
-   * run discovered. The Goal cannot join them, because ticket 11 has to hand it
-   * to `bakedInLiterals` to check that no Artifact literal echoes it, and a
-   * scrubbed Goal would make that check pass vacuously.
-   *
-   * So: a Goal is the caller's own sentence and it is theirs to handle, but
-   * anything derived from it in here is already clean. **Ticket 11: do not write
-   * this field into an Artifact, and do not put it in an Evidence event except
-   * through the writer, which scrubs.**
-   */
-  readonly goal: string
+  /** Kept in memory for the compiler's goal-echo gate; JSON holds a placeholder. */
+  readonly goal: Redacted.Redacted<string>
+  /** Diagnostic JSON is deidentified and cannot be used as executable compiler input. */
+  readonly toJSON?: () => unknown
   readonly runId: string
   readonly sessionId: string
   /** The entry path, relative. Never an origin: an Artifact records no host. */
   readonly entry: string
+  /** Query/fragment entry navigation is caller supplied on every replay. */
+  readonly entryParameter?: { readonly name: string; readonly literal: Redacted.Redacted<string> }
+  /** URL runtime values remain private compiler inputs, never stored defaults. */
+  readonly runtimeUrlValues?: ReadonlyArray<Redacted.Redacted<string>>
+  /** In-memory gate over all registered run secrets, including operator and screen values. */
+  readonly privateTextScrubber?: (text: string) => string
   readonly evidenceDirectory: string
   readonly conclusion: DiscoveryConclusion
   readonly steps: ReadonlyArray<DiscoveryStep>
+  /** Manual work between recorded actions must remain a human boundary on replay. */
+  readonly humanDependencies?: ReadonlyArray<{
+    readonly afterStep: string
+    readonly interventionId: string
+  }>
   readonly parameters: ReadonlyArray<DiscoveredParameter>
   readonly selections: ReadonlyArray<DiscoveredSelection>
   readonly outputs: ReadonlyArray<DiscoveredOutput>
@@ -192,7 +193,7 @@ export const isCompilable = (trajectory: Trajectory): boolean =>
 /**
  * Every literal this run typed, for ADR-0008's baked-in-literal check.
  *
- * Ticket 11: hand this and the Goal's own terms to `bakedInLiterals` and refuse
+ * Pass this and the Goal's own terms to `bakedInLiterals` and refuse
  * to write an Artifact that returns anything. The unwrapping happens in
  * `redaction.ts`, which is the one place in this package permitted to do it.
  */
@@ -210,11 +211,9 @@ export const parameterNames = (trajectory: Trajectory): ReadonlyArray<string> =>
  * certainly a leak: the compiler's entire job is to replace them with parameter
  * references.
  *
- * A Trajectory read back off disk carries placeholders rather than values here,
- * because the wrapper is what was serialised. That is not a hole — the Goal is
- * still intact, and every `goalDerived` literal is by construction a token subset
- * of it, so the goal-echo half of ADR-0008 catches the same mistakes without
- * needing the values at all.
+ * Diagnostic trajectories on disk are not compiler input. The portable handoff
+ * contains a staged artifact checked in memory before these private values were
+ * erased. Offline loading validates that artifact and does not repeat this gate.
  */
 export const literalsTyped = (trajectory: Trajectory): ReadonlyArray<string> =>
   trajectory.parameters.map((parameter) => literalToCheck(parameter.literal))

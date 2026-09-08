@@ -41,7 +41,7 @@
  *      run happened to use is a leak that no schema field could catch.
  *
  * Gate 1 duplicates a check `Provenance.ts` already makes at proposal time. That
- * is deliberate and ticket 10 asked for it in writing: a check that runs earlier
+ * is deliberate: a check that runs earlier
  * is not a check that runs instead. The proposal-time check exists so the model
  * gets told and re-tags; this one exists so that no path — a hand-edited
  * trajectory, a future caller assembling one, a bug in the loop — can reach the
@@ -68,6 +68,7 @@
 
 import {
   type CapabilityArtifact,
+  CapabilityArtifactSchema,
   type CapabilityTarget,
   type InputDeclaration,
   type OutputDeclaration,
@@ -78,12 +79,14 @@ import {
   currencyOf,
   formatArtifact,
   parseArtifact,
+  requiresHumanCode,
   toSurfaceTarget
 } from "@cua/artifact"
 import { type Target, TargetSchema, describeTarget, isTokenSubsetOf } from "@cua/surface"
 import { Result, Schema } from "effect"
 import { ProvenancedValue } from "./Provenance.ts"
 import type { DiscoveredSelection, DiscoveryStep, Trajectory } from "./Trajectory.ts"
+import { goalDiagnosticScrubber, goalToUse, runtimeUrlScrubber } from "./redaction.ts"
 import { isCompilable, literalsTyped } from "./Trajectory.ts"
 
 // ---------------------------------------------------------------------------
@@ -95,9 +98,11 @@ export interface CompileOptions {
    * The dotted, stable name a calling agent invokes. Supplied rather than
    * derived: naming is the one judgement in this document that belongs to a
    * person, and a name generated out of the Goal text would put the Goal's words
-   * — possibly including its values — into the catalog.
+   * — possibly including its values — into the public capability name.
    */
   readonly capability: string
+  /** Explicit caller policy; omitted means every goal term remains private. Never model supplied. */
+  readonly publicGoalTerms?: ReadonlyArray<string>
   /** Semantic version. Artifacts are immutable, so this names a file that must not exist. */
   readonly version: string
   /**
@@ -109,7 +114,7 @@ export interface CompileOptions {
    * has.
    */
   readonly product?: string
-  /** One line for a catalog listing. Defaults to what the model said it accomplished. */
+  /** One-line capability summary. Defaults to what the model said it accomplished. */
   readonly title?: string
 }
 
@@ -233,8 +238,8 @@ const robustnessFor = (target: Target, strategy: string, outcome: DiscoveryStep[
   return (
     `Identified by ${strategy}. The adapter narrowed to it like this: ${outcome.rationale}. ` +
     `${confidence} It is described by ${made.join(", ")} and by nothing else: there is no ` +
-    `selector, id, class or coordinate here, so a change to the markup leaves it working ` +
-    `(ADR-0001). What would break it is the screen saying something different — a renamed ` +
+    `selector, id, class or coordinate here, so a change to the markup leaves it working. ` +
+    `What would break it is the screen saying something different — a renamed ` +
     `control, a renamed region, or a control that stops being a ${target.role ?? "control"}.`
   )
 }
@@ -446,7 +451,9 @@ const openingStep = (trajectory: Trajectory, following: Assertion | undefined): 
     step: {
       id: "open",
       intent: "Open the application at the entry path this capability starts from.",
-      action: { type: "navigate", path: { from: "constant", text: trajectory.entry } },
+      action: { type: "navigate", path: trajectory.entryParameter === undefined
+        ? { from: "constant", text: trajectory.entry }
+        : { from: "parameter", name: trajectory.entryParameter.name } },
       checkpoint: {
         description: following === undefined
           ? "(nothing observed)"
@@ -469,11 +476,9 @@ const enumInput = (selection: DiscoveredSelection): InputDeclaration => ({
     `list during discovery rather than written here by a human deciding what ought to be ` +
     `allowed, and a value is legal if every word of it appears in one of them — so a shorter, ` +
     `more portable word than the label is the right thing to pass.`,
-  // ADR-0008. A discovered parameter is sensitive, and this document cannot
-  // declassify it: that takes a Policy allowlist entry AND an Artifact saying so
-  // in writing, which — Artifacts being immutable — means a version a person
-  // approved. See `classifySensitive`.
-  sensitive: true,
+  // A public default requires a caller policy plus the loop's live-list check.
+  // Every other discovered selection remains sensitive (ADR-0008).
+  sensitive: selection.declassifiedBecause === undefined,
   required: false,
   values: selection.values,
   // THE GOAL'S OWN WORD, never the label it matched. Recording "Primary Savings"
@@ -589,7 +594,7 @@ const goalEchoes = (artifact: CapabilityArtifact, goal: string): ReadonlyArray<s
     )
 
 /**
- * Ticket 08's backstop: a fixed literal that *contains* a value the run typed.
+ * The final literal check rejects a fixed literal that *contains* a value the run typed.
  *
  * Run one parameter at a time so a finding can say which parameter it was — and
  * so the reason can be rewritten. `bakedInLiterals` quotes the needle it found,
@@ -638,7 +643,7 @@ const typedValuesInFixedText = (
  * value is recorded on purpose, as the `default` of a declared `enum` input,
  * which is the opposite of baking a value into an action: the document says "this
  * is a parameter, and here is the word to use when the caller says nothing".
- * SPEC's selection design requires it and ticket 09's warning is about *which*
+ * SPEC's selection design requires it. The constraint is about which
  * word goes there, not whether one does. The other two gates still walk every
  * fixed literal with the selection's value included, so a `savings` that turned
  * up in a `textPresent` is still refused.
@@ -669,6 +674,19 @@ const valuesInText = (
   return reasons
 }
 
+/** Fail closed on every unknown goal term, including mixed executable targets. */
+const containsPrivateGoalData = (artifact: CapabilityArtifact, goal: string,
+  publicTerms: ReadonlyArray<string>): boolean => {
+  const publicSet = new Set(publicTerms.map((term) => term.toLowerCase()))
+  const needles = [...new Set([...(goal.match(/[\p{L}\p{N}]+/gu) ?? []), ...goal.split(/\s+/u).filter(Boolean)])]
+    .filter((term) => !publicSet.has(term.toLowerCase()))
+    .flatMap((term) => [term.toLowerCase(), encodeURIComponent(term).toLowerCase()])
+  if (needles.length === 0) return false
+  // Values and keys both matter: a model also names steps and parameters.
+  const text = JSON.stringify(artifact).toLowerCase()
+  return needles.some((needle) => text.includes(needle))
+}
+
 // ---------------------------------------------------------------------------
 // The compiler
 // ---------------------------------------------------------------------------
@@ -685,8 +703,12 @@ export const compileArtifact = (
   trajectory: Trajectory,
   options: CompileOptions
 ): Result.Result<CapabilityArtifact, CompilationRefused> => {
+  const scrubUrl = runtimeUrlScrubber(trajectory.runtimeUrlValues ?? [])
+  const scrubPrivate = (text: string) => scrubUrl(trajectory.privateTextScrubber?.(text) ?? text)
+  const scrubGoal = goalDiagnosticScrubber(goalToUse(trajectory.goal), options.publicGoalTerms ?? [])
+  const scrubReason = (text: string) => scrubGoal(scrubPrivate(text))
   const refuse = (reasons: ReadonlyArray<string>) =>
-    Result.fail(new CompilationRefused({ capability: options.capability, reasons }))
+    Result.fail(new CompilationRefused({ capability: options.capability, reasons: reasons.map(scrubReason) }))
 
   if (!isCompilable(trajectory)) {
     return refuse([
@@ -726,9 +748,45 @@ export const compileArtifact = (
     steps.push(compiled.step)
   })
 
+  const requiresHuman: Record<string, NonNullable<CapabilityArtifact["requiresHuman"]>[string]> = {}
+  for (const dependency of trajectory.humanDependencies ?? []) {
+    const index = steps.findIndex((step) => step.id === dependency.afterStep)
+    const before = steps[index]
+    const following = recorded[index]
+    const condition = following === undefined ? undefined : observableOf(following.step, following.action)
+    if (before === undefined || condition === undefined) {
+      problems.push("manual work has no subsequent recorded action to verify its result; continue discovery before compiling")
+      continue
+    }
+    // Verify the state reached after the manual gap, not a field on the page
+    // that the operator left. Captured readings remain independently checked.
+    steps[index] = {
+      ...before,
+      checkpoint: {
+        ...before.checkpoint,
+        description: `After the discovery intervention: ${describeObservable(condition)}`,
+        expect: [...before.checkpoint.expect.filter((assertion) => assertion.assert === "stepRead"), condition]
+      }
+    }
+    requiresHuman[requiresHumanCode(dependency.afterStep)] = {
+      basis: "discovery_intervention",
+      step: dependency.afterStep,
+      title: "An operator completed work between recorded actions",
+      summary: "Discovery required manual work after this action. If its checkpoint does not hold, return the same live session to an operator and verify that checkpoint before continuing. No unattended action was demonstrated for this gap.",
+      discoveredFrom: `Discovery intervention ${dependency.interventionId} in run ${trajectory.runId}.`
+    }
+  }
+
   // --- inputs, derived from provenance and from nothing else ---------------
   const chosen = new Map(trajectory.selections.map((selection) => [selection.parameter, selection]))
   const inputs: Record<string, InputDeclaration> = {}
+  if (trajectory.entryParameter !== undefined) {
+    inputs[trajectory.entryParameter.name] = {
+      type: "string", description: "The entry path, including this caller's query and fragment values.",
+      sensitive: true, required: true,
+      discoveredFrom: "The discovery entry URL contained runtime query or fragment values; supply the path on every replay."
+    }
+  }
   for (const parameter of trajectory.parameters) {
     const selection = chosen.get(parameter.name)
     inputs[parameter.name] = selection === undefined
@@ -784,6 +842,7 @@ export const compileArtifact = (
     },
     inputs,
     outputs,
+    ...(Object.keys(requiresHuman).length === 0 ? {} : { requiresHuman }),
     steps
   }
 
@@ -793,10 +852,66 @@ export const compileArtifact = (
   const stored = parseArtifact(`${options.capability}@${options.version}`, yaml)
   if (Result.isFailure(stored)) return refuse(stored.failure.problems)
 
+  const containsPrivateValue = (value: unknown): boolean => {
+    if (typeof value === "string") return scrubPrivate(value) !== value
+    if (Array.isArray(value)) return value.some(containsPrivateValue)
+    if (value !== null && typeof value === "object") {
+      return Object.entries(value).some(([key, item]) => containsPrivateValue(key) || containsPrivateValue(item))
+    }
+    return false
+  }
   const reasons = [
-    ...goalEchoes(stored.success, trajectory.goal),
+    ...(containsPrivateValue(stored.success)
+      ? ["the artifact contains registered private runtime data. Keep run-specific values behind caller-supplied parameter references."] : []),
+    ...goalEchoes(stored.success, goalToUse(trajectory.goal)),
     ...typedValuesInFixedText(stored.success, trajectory),
-    ...valuesInText(yaml, trajectory)
+    ...valuesInText(yaml, trajectory),
+    ...(containsPrivateGoalData(stored.success, goalToUse(trajectory.goal), options.publicGoalTerms ?? [])
+      ? ["the artifact contains private goal data not declassified by the caller's public-term policy. Remove that data from executable fields and prose; keep it behind a parameter reference."] : [])
   ]
   return reasons.length > 0 ? refuse(reasons) : Result.succeed(stored.success)
+}
+
+/**
+ * A staged artifact, produced only after all three in-memory compiler gates.
+ * It contains no goal or parameter literals. Loading this receipt validates the
+ * artifact schema; it cannot repeat checks against private data that was erased.
+ */
+export interface StoredCompilation {
+  readonly format: "discovery-compilation-v1"
+  readonly verification: "checked-in-memory-before-erasing-private-context"
+  readonly artifact: CapabilityArtifact
+}
+
+/**
+ * Prepare the portable CLI handoff while private compiler inputs still exist.
+ * Model prose is deidentified conservatively; executable target fields are kept
+ * intact and checked by the compiler. The parser validates the resulting file.
+ */
+export const serializeCompilation = (
+  trajectory: Trajectory,
+  options: CompileOptions
+): Result.Result<StoredCompilation, CompilationRefused> => {
+  const compiled = compileArtifact(trajectory, options)
+  if (Result.isFailure(compiled)) return Result.fail(compiled.failure)
+  const scrub = goalDiagnosticScrubber(goalToUse(trajectory.goal), options.publicGoalTerms ?? [])
+  const prose = new Set(["title", "summary", "intent", "robustness", "description", "discoveredFrom"])
+  const deidentify = (value: unknown, field?: string): unknown => {
+    if (typeof value === "string") return field !== undefined && prose.has(field) ? scrub(value) : value
+    if (Array.isArray(value)) return value.map((item) => deidentify(item, field))
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, deidentify(item, key)]))
+    }
+    return value
+  }
+  const parsed = Schema.decodeUnknownResult(CapabilityArtifactSchema)(deidentify(compiled.success))
+  if (Result.isFailure(parsed)) {
+    return Result.fail(new CompilationRefused({ capability: options.capability,
+      reasons: ["the deidentified compilation did not satisfy the artifact schema"] }))
+  }
+  return Result.succeed({
+    format: "discovery-compilation-v1",
+    verification: "checked-in-memory-before-erasing-private-context",
+    artifact: parsed.success
+  })
 }

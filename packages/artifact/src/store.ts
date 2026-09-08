@@ -9,15 +9,15 @@
  *
  * `latest` is resolved by sorting the version files rather than by an index file.
  * An index is a second source of truth for a question the directory listing
- * already answers, and it is one more thing for ticket 11's compiler to keep
+ * already answers, and it is one more thing for the compiler to keep
  * consistent.
  *
- * ## Seam for later tickets
+ * ## Storage seam
  *
  * Reading is a plain function over the filesystem today. SPEC's Out of scope
  * table names "Persistence beyond files" with "artifact and evidence writers sit
  * behind interfaces" as the seam — `loadArtifact` is that interface for reading,
- * and ticket 11 adds the writing half next to it.
+ * and `writeArtifact` is the corresponding append-only writer.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
@@ -165,7 +165,7 @@ export class ArtifactNotWritable extends Schema.TaggedError<ArtifactNotWritable>
  *     an Artifact that would fail to load cannot reach the store, and the compiler
  *     cannot leave a half-valid document behind for someone to debug later.
  *
- * Ticket 13's Amendment is a second call to this function with a higher version,
+ * An Amendment is a second call to this function with a higher version,
  * not an edit.
  */
 export const writeArtifact = (
@@ -197,7 +197,7 @@ export const writeArtifact = (
   return Result.succeed(path)
 }
 
-/** Every Capability with at least one stored version. Ticket 17's catalog reads this. */
+/** Every Capability with at least one stored version. */
 export const listCapabilities = (directory: string): ReadonlyArray<string> => {
   try {
     return readdirSync(directory, { withFileTypes: true })

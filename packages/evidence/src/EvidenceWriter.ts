@@ -3,9 +3,9 @@
  *
  * ## The single serialisation point
  *
- * Everything written passes through `record`, and `record` does exactly three
- * things in order: stamp the envelope, scrub, validate against the schema. That
- * ordering is the design.
+ * Text passes through `record`: stamp the envelope, scrub payloads, validate.
+ * Sealed schema tags and generated identifiers remain stable; they describe the
+ * event structure and cannot contain model prose.
  *
  * *Scrub* is where redaction happens. SPEC: "Text evidence, meaning
  * accessibility snapshots and event logs, passes a scrub replacing known
@@ -15,9 +15,9 @@
  * makes "keeping sensitive values out of logs by construction" (user story 59) a
  * property of the code rather than of everyone's discipline.
  *
- * **`scrubber` is a required option** (ticket 08). Not defaulted to identity, and
+ * **`scrubber` is a required option**. Not defaulted to identity, and
  * not defaulted to anything else: a default is a decision made silently at every
- * construction site that forgets, and the whole point of this ticket is that
+ * construction site that forgets, and the constructor contract means
  * forgetting should not be possible. Declaring nothing up front is spelled
  * `noSecrets()`, which a reviewer can grep for and find every instance of.
  *
@@ -57,8 +57,8 @@ export class Evidence extends Context.Service<Evidence, {
   /** Stamps, scrubs, validates and appends one event. */
   readonly record: (body: EvidenceEventBody) => Effect.Effect<void, EvidenceUnwritable>
   /**
-   * Writes a binary attachment beside the log. Not scrubbed: a screenshot's
-   * pixels are a stated limit rather than a solved problem (ADR-0010).
+   * Writes binary proof only with explicit synthetic-data opt-in. Otherwise it
+   * fails without writing bytes. Enabled screenshots remain unredacted (ADR-0010).
    */
   readonly attach: (name: string, bytes: Uint8Array) => Effect.Effect<void, EvidenceUnwritable>
   /** Everything recorded so far, for tests and for the run's own summary. */
@@ -80,6 +80,13 @@ export class Evidence extends Context.Service<Evidence, {
    */
   readonly redact: (values: Iterable<SensitiveText>) => Effect.Effect<void>
   /**
+   * Install a run-wide diagnostic filter before recording discovery events.
+   * Every holder of this service, including Session handoffs, uses it through
+   * record and scrub. It does not add goal words to the compiler's secret registry.
+   * The filter may close over caller-approved public vocabulary that grows.
+   */
+  readonly protectDiagnostics: (scrubber: Scrubber) => Effect.Effect<void>
+  /**
    * This run's live scrubber.
    *
    * Everything written to Evidence passes it already. This is here for the one
@@ -92,6 +99,9 @@ export class Evidence extends Context.Service<Evidence, {
 }>()("cua/evidence/Evidence") {}
 
 export interface EvidenceOptions {
+  /** Explicit synthetic-data exception (ADR-0010). Binary attachments are refused by default. */
+  readonly allowUnredactedScreenshots?: boolean
+
   /** e.g. `evidence/replay`. One subdirectory per run is created under it. */
   readonly root: string
   readonly runId: string
@@ -133,8 +143,9 @@ const note = (options: EvidenceOptions): string => {
   return `EVIDENCE FOR RUN ${options.runId}
 ${"=".repeat(20 + options.runId.length)}
 
-This is a demo artifact over SYNTHETIC data from the mock Heritage Core
-application. No real member data exists anywhere in this system.
+${options.allowUnredactedScreenshots === true
+    ? "This run explicitly opted into unredacted screenshots over SYNTHETIC fixture data."
+    : "Binary attachments are disabled for this run. No claim is made that the source data is synthetic."}
 
 WHAT IS REDACTED
 ----------------
@@ -145,8 +156,11 @@ point where evidence is serialised. ${
       : `Values of these parameters were replaced:\n  ${redacting.join("\n  ")}`
   }
 
-Two further kinds of value are redacted, and neither was declared by anybody
-before the run started, because neither could be:
+Discovery also removes goal terms from diagnostic text before the model's first
+proposal, except terms explicitly approved by the caller's public vocabulary.
+This protects names and credentials that the run never reaches a field to type.
+
+Two further kinds of value are redacted as they are observed:
 
   * fields a screen showed that Policy calls personal -- a member's name, a tax
     id. These are nobody's parameter; they arrive as ordinary text off the
@@ -180,17 +194,12 @@ ${options.policy ?? "Sensitivity policy: deny-first (ADR-0008)."}
 
 WHAT IS NOT REDACTED
 --------------------
-Screenshots are NOT redacted. Every *.png in this directory is stored exactly as
-captured, and they contain rendered member identifiers and account balances.
-They do not pass the scrubber and nothing masks them.
+${options.allowUnredactedScreenshots === true
+    ? "Screenshots are NOT redacted. PNG files are stored as captured under the explicit synthetic-data exception. They can contain rendered identifiers and balances."
+    : "Screenshots are disabled. No binary attachments are persisted unless the caller explicitly opts into the synthetic-data exception."}
 
-This is a stated limit, not an oversight. Redacting pixels properly means
-optical recognition of known values over a screenshot, which is a larger problem
-than this system needs to solve, and a half-implementation that missed a
-rendering would be worse than an honest gap: it would imply a protection that
-was not there. So the limit is written down here, where someone looking at the
-screenshot will see it, and the mitigation is that these files are over
-synthetic data and stay in this directory.
+Pixel redaction is not implemented. ADR-0010 permits unredacted fixture proof;
+it does not establish that screenshots of an external application are safe.
 
 See docs/adr/0010-evidence-screenshots-are-not-redacted.md.
 `
@@ -223,7 +232,8 @@ export const layer = (options: EvidenceOptions): Layer.Layer<Evidence, EvidenceU
       const directory = join(options.root, options.runId)
       const logPath = join(directory, "events.jsonl")
       const secrets = options.scrubber
-      const scrubber = secrets.scrub
+      let diagnosticFilter: Scrubber = (text) => text
+      const scrubber: Scrubber = (text) => diagnosticFilter(secrets.scrub(text))
 
       yield* Effect.try({
         try: () => {
@@ -255,13 +265,18 @@ export const layer = (options: EvidenceOptions): Layer.Layer<Evidence, EvidenceU
             seq: seq++,
             at: new Date().toISOString()
           }
-          const scrubbed = scrubDeeply(stamped, scrubber)
+          // These are sealed schema discriminants or writer-generated metadata,
+          // not user prose. Scrubbing them can destroy schema validity or joins
+          // when a private value happens to spell "action", "success" or "r1".
+          const sealed = new Set(["kind", "mode", "verdict", "risk", "result", "runId", "sessionId", "seq", "at", "provider", "model"])
+          const scrubbed = Object.fromEntries(Object.entries(stamped).map(([key, value]) =>
+            [key, sealed.has(key) ? value : scrubDeeply(value, scrubber)]))
           const checked = validate(scrubbed)
           if (Result.isFailure(checked)) {
             return Effect.fail(
               new EvidenceUnwritable({
                 path: logPath,
-                reason: `event failed schema validation: ${checked.failure}`
+                reason: "event failed schema validation"
               })
             )
           }
@@ -273,7 +288,10 @@ export const layer = (options: EvidenceOptions): Layer.Layer<Evidence, EvidenceU
         })
 
       const attach = (name: string, bytes: Uint8Array): Effect.Effect<void, EvidenceUnwritable> =>
-        Effect.try({
+        options.allowUnredactedScreenshots !== true
+          ? Effect.fail(new EvidenceUnwritable({ path: directory,
+            reason: "Binary attachments require explicit synthetic-data opt-in (ADR-0010)" }))
+          : Effect.try({
           try: () => writeFileSync(join(directory, name), bytes),
           catch: (cause) =>
             new EvidenceUnwritable({ path: join(directory, name), reason: String(cause) })
@@ -285,6 +303,7 @@ export const layer = (options: EvidenceOptions): Layer.Layer<Evidence, EvidenceU
         attach,
         written: Effect.sync(() => [...written]),
         redact: (values: Iterable<SensitiveText>) => Effect.sync(() => secrets.remember(values)),
+        protectDiagnostics: (filter: Scrubber) => Effect.sync(() => { diagnosticFilter = filter }),
         scrub: scrubber
       }
     })

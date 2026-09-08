@@ -1,14 +1,9 @@
 /**
  * Session ownership: who is currently permitted to act on the live browser.
  *
- * CONTEXT.md defines Control Owner as "always answerable, never implied". The
- * cheapest way to make that untrue is to build the engine first and add ownership
- * afterwards, because by then "who holds the session" is implied by whichever
- * function happens to be on the stack. So the Replay executor asked
- * `Session.claim` before every single Surface Action from ticket 03 onward, while
- * the answer was always yes — and the guard's failure type has been in the
- * executor's signature since then, which is why ticket 12 changed the value of a
- * field rather than the shape of every Step.
+ * Session.claim gates every automation action. Ownership is explicit rather
+ * than inferred from which function happens to be running, and refusal is part
+ * of the executor's failure contract.
  *
  * ## The state machine
  *

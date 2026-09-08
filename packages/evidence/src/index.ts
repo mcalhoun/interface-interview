@@ -14,4 +14,4 @@ export type { EvidenceOptions } from "./EvidenceWriter.ts"
 export { Evidence, EvidenceUnwritable, layer as evidenceFiles } from "./EvidenceWriter.ts"
 
 export type { Scrubber, SecretRegistry, SensitiveText } from "./Scrub.ts"
-export { noScrubbing, noSecrets, placeholderFor, scrubbing, secretRegistry } from "./Scrub.ts"
+export { noScrubbing, noSecrets, placeholderFor, scrubbing, secretRegistry, privateUrlValues } from "./Scrub.ts"

@@ -2,7 +2,7 @@
  * Heritage Core's markup.
  *
  * Every page here is deliberately hostile to automation, because this app is the
- * fixture every later ticket is tested against. The rules, all of which are load
+ * fixture the browser integration tests exercise. The rules, all of which are load
  * bearing:
  *
  *   - HTML 4.01 Transitional, `<font>` tags and `bgcolor`, nested layout tables.
@@ -54,7 +54,7 @@ export const caption = (text: string): string =>
  *
  * `tenant` defaults to Heritage Core, so every existing call site renders the
  * byte-identical page it always did. The second institution is additive rather
- * than a rewrite of the fixture every other ticket is tested against.
+ * than a rewrite of the shared fixture.
  */
 export const shell = (title: string, body: string, tenant: Tenant = HERITAGE_CORE): string => `${DOCTYPE}
 <html>
@@ -482,7 +482,7 @@ export const systemBusyPage = (
  * handling on the automation side.
  *
  * Submitting returns the operator to Member Search rather than to the screen they
- * were on. That is deliberate and it is the hard half of ticket 06: getting
+ * were on. This tests recovery of the interrupted workflow: getting
  * signed back in is easy, and getting back to where the run was is not.
  */
 export const signOnPage = (tenant: Tenant = HERITAGE_CORE): string =>

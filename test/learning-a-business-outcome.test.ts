@@ -48,8 +48,8 @@ import {
 import { type InterventionRecord, classify } from "@cua/session"
 import { noScrubbing } from "@cua/evidence"
 import { proposeAmendment } from "@cua/replay"
-import { attendedReplay } from "./support/handoff-harness.ts"
-import { replay, shippedArtifact } from "./support/replay-harness.ts"
+import { attendedReplay } from "../apps/demo/src/support/handoff-harness.ts"
+import { replay, shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
 
 /** Ticket 13's member: a checking account, and nothing else. */
 const CHECKING_ONLY = "88888"
@@ -66,6 +66,7 @@ const record = (over: Partial<InterventionRecord> = {}): InterventionRecord => (
     stepId: "open-account",
     stepIntent: "Open the account the caller asked for.",
     reason: "this step could not act",
+    failureCause: { type: "no_matching_item", code: "NO_MATCHING_ITEM" },
     detail: "nothing on offer matched",
     url: "http://example.invalid/member",
     accessibility: "- table:",
@@ -423,7 +424,7 @@ it.live(
             expect(page.body).toContain(
               "Next time automation meets this state, should it handle it itself?"
             )
-            expect(page.body).toContain("You have not recorded doing anything to this session")
+            expect(page.body).toContain("No action has been confirmed yet")
 
             // Deliberately no `/note`. Touching nothing is the evidence.
             //
@@ -623,6 +624,7 @@ it("will not turn a checkpoint failure into a business outcome", () => {
   // What this test is for is unchanged: the state the operator had to *act* to
   // resolve does not become an answer this capability may return.
   const held = record({
+    intervention: { ...record().intervention, failureCause: { type: "checkpoint_failed" } },
     actions: [{ at: "2026-08-27T00:00:15.000Z", detail: "entered supervisor override" }],
     nextTime: "always_stop_here",
     classification: "resolved"

@@ -1,3 +1,4 @@
+import { execFileSync, spawnSync } from "node:child_process"
 /**
  * The Artifact compiler: a discovery run turned into a Capability a reviewer can
  * approve and an agent can call.
@@ -17,14 +18,14 @@
  * successfully without editing", and nothing short of running it proves that.
  */
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { it } from "@effect/vitest"
 import { Effect, Redacted, Result } from "effect"
 import { describe, expect } from "vitest"
 import type { Trajectory } from "@cua/agent"
-import { compileArtifact, shapeOf, strategyFor } from "@cua/agent"
+import { compileArtifact, serializeCompilation, shapeOf, strategyFor } from "@cua/agent"
 import {
   ARTIFACTS_DIRECTORY,
   formatArtifact,
@@ -35,10 +36,10 @@ import {
   writeArtifact
 } from "@cua/artifact"
 import type { CapabilityArtifact } from "@cua/artifact"
-import { respondingModel } from "./support/scripted-model.ts"
-import { GOAL, readsTheScreen } from "./support/discovery-script.ts"
-import { runDiscovery } from "./support/discovery-harness.ts"
-import { replay } from "./support/replay-harness.ts"
+import { respondingModel } from "../apps/demo/src/support/scripted-model.ts"
+import { GOAL, readsTheScreen } from "../apps/demo/src/support/discovery-script.ts"
+import { runDiscovery } from "../apps/demo/src/support/discovery-harness.ts"
+import { replay } from "../apps/demo/src/support/replay-harness.ts"
 
 const MEMBER_ID = "12345"
 
@@ -56,7 +57,7 @@ const secret = (label: string, value: string) => Redacted.make(value, { label })
  * record on the way in, and keeps it only on the parameter, as a `Redacted`.
  */
 const trajectory = (overrides: Partial<Trajectory> = {}): Trajectory => ({
-  goal: GOAL,
+  goal: secret("goal", GOAL),
   runId: "test-run",
   sessionId: "test-session",
   entry: "/",
@@ -177,7 +178,9 @@ const trajectory = (overrides: Partial<Trajectory> = {}): Trajectory => ({
   ...overrides
 })
 
-const options = { capability: DISCOVERED, version: "1.0.0", product: "Heritage Core (MSS 4.02.11)" }
+const publicGoalTerms = ["look", "up", "the", "savings", "account", "balance", "of", "member"]
+
+const options = { publicGoalTerms, capability: DISCOVERED, version: "1.0.0", product: "Heritage Core (MSS 4.02.11)" }
 
 const compiled = (input: Trajectory = trajectory()): CapabilityArtifact => {
   const result = compileArtifact(input, options)
@@ -305,7 +308,7 @@ describe("no value from the run survives into the document", () => {
     // Both positions the mis-tag reached: the value that gets typed, and the
     // checkpoint that reads it back. A refusal names every one of them, because
     // whoever has to fix this wants the whole set.
-    expect(reasons).toHaveLength(2)
+    expect(reasons).toHaveLength(3)
     expect(reasons[0]).toContain("step fill-1's value")
     expect(reasons[1]).toContain("step fill-1's checkpoint assertion 0")
     expect(reasons[0]).toContain("echoes the goal")
@@ -549,19 +552,13 @@ describe("artifacts are immutable, versioned and resolvable", () => {
     }
   })
 
-  it("takes none of the versions an intervention teaches", () => {
-    // v1.1.0 and v1.2.0 of `member.account-balance` belong to tickets 13 and 14 —
-    // outcomes a human confirmed, each landing beside the intervention record
-    // that justified it. A compiled capability takes neither: it is a different
-    // document with a different name, discovered rather than hand-written, and
-    // storing it under the hand-written capability's name would also change what
-    // `bun run replay member.account-balance` resolves to.
-    //
-    // v1.1.0 now exists, and this test still passes untouched apart from its
-    // name, which is the thing worth noticing: it was cut by ticket 13's
-    // intervention rather than by anything in this file. What the compiler
-    // stores is unchanged, and that is what is being asserted.
-    expect(listVersions(ARTIFACTS_DIRECTORY, DISCOVERED)).toEqual(["1.0.0"])
+  it("retains the original discovered version alongside later learned versions", () => {
+    expect(listVersions(ARTIFACTS_DIRECTORY, DISCOVERED)).toContain("1.0.0")
+    const original = loadArtifact(ARTIFACTS_DIRECTORY, DISCOVERED, "1.0.0")
+    if (Result.isFailure(original)) throw new Error(original.failure.message)
+    expect(original.success.authored).toBe("discovered")
+    expect(original.success.outcomes ?? {}).toEqual({})
+    expect(original.success.capability).toBe(DISCOVERED)
   })
 
   it("ships a compiled artifact that says it was discovered and hides nothing", () => {
@@ -593,6 +590,7 @@ it.live("a run is discovered, compiled and replayed, and the balance comes back"
     // values behind the parameters still exist — so all three gates have
     // something to look for.
     const artifact = compileArtifact(discovered, {
+      publicGoalTerms,
       capability: "test.discovered-capability",
       version: "1.0.0",
       product: "Heritage Core Member Services (MSS 4.02.11)"
@@ -635,6 +633,7 @@ it.live("the compiled capability serves the account a caller asks for, at a tena
       model: respondingModel(readsTheScreen)
     })
     const artifact = compileArtifact(discovered, {
+      publicGoalTerms,
       capability: "test.discovered-capability",
       version: "1.0.0"
     })
@@ -654,3 +653,72 @@ it.live("the compiled capability serves the account a caller asks for, at a tena
       value: { amount: 1204.18, currency: "USD" }
     })
   }))
+
+
+it("rejects an untyped private goal name blended into an executable target", () => {
+  const source = trajectory({ goal: secret("goal", `${GOAL} for Morgan Ellsworth`) })
+  const poisoned = { ...source, steps: source.steps.map((step, index) => index === 0
+    ? { ...step, action: { ...step.action,
+      target: { role: "textbox", name: "Open member Morgan Ellsworth" } } }
+    : step) }
+  const result = compileArtifact(poisoned, { ...options, publicGoalTerms: [...publicGoalTerms, "for"] })
+  expect(Result.isFailure(result)).toBe(true)
+  if (Result.isFailure(result)) {
+    expect(result.failure.reasons.join(" ")).toContain("private goal")
+    expect(result.failure.reasons.join(" ")).not.toContain("Morgan")
+  }
+})
+
+it("stages a safe portable compilation after all private gates pass", () => {
+  const result = serializeCompilation(trajectory(), options)
+  expect(Result.isSuccess(result)).toBe(true)
+  if (Result.isSuccess(result)) {
+    expect(JSON.stringify(result.success)).not.toContain(MEMBER_ID)
+    expect(result.success.format).toBe("discovery-compilation-v1")
+    expect(result.success.artifact.steps.find((step) => step.id === "fill-1")?.action).toMatchObject({
+      target: { role: "textbox", name: "Member Number", within: { name: "Member Number Search" } }
+    })
+  }
+})
+
+
+it("fails closed when a caller provides no public goal vocabulary", () => {
+  const result = compileArtifact(trajectory(), { capability: DISCOVERED, version: "1.0.0" })
+  expect(Result.isFailure(result)).toBe(true)
+  if (Result.isFailure(result)) expect(result.failure.reasons.join(" ")).toContain("private goal")
+})
+
+it("loads a staged compilation from disk and clearly rejects diagnostic trajectories", () => {
+  const directory = mkdtempSync(join(tmpdir(), "cua-private-compilation-"))
+  try {
+    const result = serializeCompilation(trajectory(), options)
+    if (Result.isFailure(result)) throw new Error(result.failure.message)
+    const stagedPath = join(directory, "compilation.json")
+    writeFileSync(stagedPath, JSON.stringify(result.success))
+    const yaml = execFileSync("bun", ["run", "apps/cli/src/compile.ts", stagedPath,
+      "--dry-run"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+    expect(yaml).not.toContain(MEMBER_ID)
+    const parsed = parseArtifact("staged", yaml)
+    expect(Result.isSuccess(parsed)).toBe(true)
+    if (Result.isSuccess(parsed)) {
+      expect(parsed.success.steps.find((step) => step.id === "fill-1")?.action).toMatchObject({
+        target: { name: "Member Number", within: { name: "Member Number Search" } }
+      })
+    }
+    const diagnosticPath = join(directory, "trajectory.json")
+    writeFileSync(diagnosticPath, JSON.stringify({ format: "discovery-diagnostics-v2", goal: "<redacted:goal>" }))
+    const refused = spawnSync("bun", ["run", "apps/cli/src/compile.ts", diagnosticPath,
+      "--dry-run"], { encoding: "utf8" })
+    expect(refused.status).toBe(2)
+    expect(refused.stderr).toContain("Raw goals are no longer stored")
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+it("rejects punctuation-only private goal data in a mixed target", () => {
+  const source = trajectory({ goal: secret("goal", `${GOAL} credential !@#$`) })
+  const poisoned = { ...source, steps: source.steps.map((step, index) => index === 0
+    ? { ...step, action: { ...step.action, target: { role: "textbox", name: "Use !@#$ here" } } }
+    : step) }
+  const result = compileArtifact(poisoned, { ...options, publicGoalTerms: [...publicGoalTerms, "credential"] })
+  expect(Result.isFailure(result)).toBe(true)
+})

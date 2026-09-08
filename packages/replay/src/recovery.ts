@@ -50,7 +50,7 @@
  *     than an error to catch.
  *
  * Because the loop sleeps, every test over it must be `it.live`; under
- * `@effect/vitest`'s TestClock it hangs, the same trap tickets 02 and 03 hit.
+ * `@effect/vitest`'s TestClock it hangs, the same clock mismatch that affects other live browser tests.
  */
 
 import { Effect, Ref, Schedule } from "effect"

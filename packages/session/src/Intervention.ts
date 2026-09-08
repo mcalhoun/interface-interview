@@ -58,6 +58,12 @@ export interface InterventionRequest {
   readonly stepIntent: string
   /** One line. Why automation stopped. */
   readonly reason: string
+  /** Executor-observed cause. Older or external episodes without it cannot teach a state. */
+  readonly failureCause?:
+    | { readonly type: "no_matching_item"; readonly code: string }
+    | { readonly type: "target_missing" }
+    | { readonly type: "checkpoint_failed" }
+    | undefined
   /** The longer form: what was expected, and what was there instead. */
   readonly detail: string
   /**
@@ -153,7 +159,7 @@ export const operatorFieldLabel = (field: string): string => {
 }
 
 /**
- * One thing an Operator did while holding the Session, as they described it.
+ * A note or a confirmed action recorded while the Operator held the Session.
  *
  * Their words, and only their words. What they typed is not here and never was:
  * the Session watches the screen for that (`Watching.ts`), and what it saw is
@@ -162,6 +168,8 @@ export const operatorFieldLabel = (field: string): string => {
 export interface OperatorAction {
   readonly at: string
   readonly detail: string
+  /** Older records contain reported actions without a kind. Notes are never mutations. */
+  readonly kind?: "note" | "confirmed_action"
 }
 
 /**
@@ -203,7 +211,7 @@ export interface OperatorNote {
  * should automation do when it meets this state again -- which is about the
  * *state*, and outlives the run entirely.
  *
- * Ticket 13 deliberately did not widen this union with `business_outcome`.
+ * This union excludes `business_outcome`.
  * Folding the two together would make a state's classification a function of
  * whether one run happened to be resumable, and those are independent: member
  * `88888` is a perfectly good Business Outcome *and* an unresolvable episode,
@@ -224,9 +232,8 @@ export type ControlReturnClassification = "resolved" | "unresolved" | "blocked"
  *
  * One question is the entire learning mechanism, and it is deliberately not
  * enough on its own to say what was learned. It says what the Operator *wants*;
- * what they *did* — `actions`, and specifically whether it is empty — says which
- * kind of thing they are asking for. `classify` in `Learning.ts` is where the two
- * meet, and it is ADR-0004's table.
+ * observed changes and confirmed actions say what they *did*. Notes alone do
+ * not establish a mutation. `classify` in `Learning.ts` is where the two meet.
  *
  * `not_asked` is a real answer and not an absence. A pause that expired, or a
  * return driven by something other than the operator interface, closed without
@@ -267,6 +274,8 @@ export interface ControlReturn {
   readonly classification: ControlReturnClassification
   /** What they did, or why they could not. Free text, in their own words. */
   readonly detail: string
+  /** Explicit confirmation of an action, including clicks a field watcher cannot see. */
+  readonly actionTaken?: boolean
   /** Their answer to the one question. Required, so it can never be implied. */
   readonly nextTime: NextTimeAnswer
   /**
@@ -283,7 +292,7 @@ export interface ControlReturn {
 /**
  * The whole episode, from raise to return.
  *
- * The three checklist questions ticket 12 has to answer — who took control, what
+ * Who took control, what
  * they did, and when they returned it — are three fields on this record, and the
  * same three are written into Evidence as they happen. The record is what a
  * caller and the operator interface read; Evidence is what an auditor reads.
@@ -295,7 +304,7 @@ export interface InterventionRecord {
   readonly tookControlAt: string | undefined
   readonly actions: ReadonlyArray<OperatorAction>
   /**
-   * The fields the Session saw a value typed into while a person held it.
+   * The fields or URL parameters the Session saw change during the handoff.
    *
    * Names only, never characters. On the record so an auditor can see that a
    * credential was entered and that the scrubber was told about it, without the
@@ -330,7 +339,7 @@ export interface InterventionRecord {
  *
  * `resumed` is the only question the engine asks. Everything else about the
  * episode is in the record, and the engine deliberately does not branch on it:
- * deciding what an Operator's classification *means* is ticket 13's job, and
+ * deciding what an Operator's classification means belongs in Learning.ts, and
  * putting that decision in the executor is how it would end up implied.
  */
 export type InterventionOutcome =

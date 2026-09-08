@@ -18,7 +18,7 @@ import { join } from "node:path"
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
-import { replay, shippedArtifact } from "./support/replay-harness.ts"
+import { replay, shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
 
 it.live("returns a typed balance with amount and currency", () =>
   Effect.gen(function* () {

@@ -50,7 +50,7 @@
  *
  * ## The code, and why the mechanism will not name the state
  *
- * Ticket 13's precedent: an Intervention teaches a state's *classification*, not
+ * The naming constraint is the same for each learned class: an Intervention teaches a state's *classification*, not
  * a Capability's vocabulary. There the code already existed — the Artifact's
  * author had written `onNoMatch: { escalate: NO_MATCHING_ITEM }` — and the
  * amendment only changed what the document said that code meant.
@@ -63,7 +63,7 @@
  *
  * That is a deliberately unlovely code, and a prettier caller-facing one — an
  * `ACCOUNT_RESTRICTED` — is a hand-written version cut after the fact by somebody
- * who owns the Capability's contract. Ticket 13 said the same of
+ * who owns the Capability's contract. The same applies to
  * `ACCOUNT_TYPE_NOT_HELD`. Letting whoever is on shift supply the word would let
  * one person's ten seconds at a terminal rename a Capability's public vocabulary,
  * and the fact that it would read better is not an argument for it.
@@ -86,6 +86,8 @@ import { OutcomeCode } from "./BusinessOutcomes.ts"
  * review convention that it should be filled in.
  */
 export const RequiresHumanDeclaration = Schema.Struct({
+  /** A recorded manual gap is different from a learned requirement for domain authority. */
+  basis: Schema.optional(Schema.Literal("discovery_intervention")),
   /**
    * The Step whose Checkpoint reaches this state.
    *

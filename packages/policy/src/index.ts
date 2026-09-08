@@ -10,7 +10,7 @@
  * checks that make a wrong file refuse to load. `decide.ts` is the whole
  * decision, pure. `origins.ts` is what "an allowed origin" means.
  *
- * `Sensitivity.ts` is the parameter allowlist ticket 08 added: deny-first, so an
+ * `Sensitivity.ts` is the parameter allowlist: deny-first, so an
  * Artifact cannot declassify itself.
  */
 
@@ -56,7 +56,7 @@ export {
 export { decide, decideAssist } from "./decide.ts"
 
 export type { OriginPattern } from "./origins.ts"
-export { allowedBy, originMatches, originOf, parseOriginPattern } from "./origins.ts"
+export { allowedBy, originAuthorizer, originMatches, originOf, parseOriginPattern } from "./origins.ts"
 
 export {
   DEFAULT_POLICY,
@@ -84,3 +84,4 @@ export {
   personalLabelFor,
   sensitivityPolicy
 } from "./Sensitivity.ts"
+export { heritagePublicGoalTerms } from "./Sensitivity.ts"

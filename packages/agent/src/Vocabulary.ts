@@ -134,9 +134,8 @@ const Extract = Tool.make("extract", {
 /**
  * Choose one of the items a screen currently offers, and press it.
  *
- * The parameters here are what ticket 11 turns into an `enum` input, and the one
- * place a Discovery run can quietly destroy multi-tenant reuse. See
- * `Selection.ts` for the rule and the reason.
+ * The compiler turns these parameters into an `enum` input. Choosing the wrong
+ * default can silently defeat tenant reuse; Selection.ts checks that constraint.
  */
 const SelectFromList = Tool.make("selectFromList", {
   description:
@@ -322,7 +321,7 @@ export type DiscoveryVerb = (typeof DISCOVERY_VERBS)[number]
  * The verbs that touch a Surface, and therefore go through the Policy gate.
  *
  * A test asserts this is exactly `@cua/policy`'s `ACTION_TYPES`. Policy is the
- * backstop rather than the first line (ticket 07's note to this ticket), and the
+ * authorization boundary, and the
  * two lists drifting apart would mean either a verb the model can propose that
  * Policy can only ever deny, or — much worse — a Surface action Policy has never
  * been asked about.

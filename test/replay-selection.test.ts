@@ -28,7 +28,7 @@ import { Effect, Result } from "effect"
 import { expect } from "vitest"
 import { prepareInputs } from "@cua/artifact"
 import { isTokenSubsetOf, tokensOf } from "@cua/surface"
-import { replay, shippedArtifact } from "./support/replay-harness.ts"
+import { replay, shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
 
 /** The label-variant tenant fixture: `Regular Savings`, `Checking Account`. */
 const VARIANT_TENANT = "22222"

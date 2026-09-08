@@ -123,3 +123,7 @@ export const allowedBy = (
   patterns: ReadonlyArray<OriginPattern>,
   url: string
 ): OriginPattern | undefined => patterns.find((pattern) => originMatches(pattern, url))
+
+/** Bind the compiled allowlist at the browser boundary without a surface dependency. */
+export const originAuthorizer = (policy: { readonly origins: ReadonlyArray<OriginPattern> }) =>
+  (url: string): boolean => allowedBy(policy.origins, url) !== undefined

@@ -19,8 +19,7 @@
  * An implementation cannot ask this engine to click something because the type
  * it returns has nowhere to say so.
  *
- * The third arm is ticket 16's and is worth reading twice, because it is the one
- * that looks like it might act. It carries a control's *name*, chosen from a
+ * The target-suggestion arm carries a proposed control name rather than an action. It carries a control's *name*, chosen from a
  * closed list of what is on the screen. A name is not a Target — there is no
  * role, no scope, no ordinal — and there is no expression in the engine that
  * builds one from it. What happens to it is that it is recorded, put on the
@@ -71,8 +70,8 @@
  * ## What it may not classify
  *
  * Anything the Artifact has already learned needs a person. `classificationOf`
- * is the single lookup ticket 13 left for this, and ticket 14 is adding
- * `requiresHuman:` behind it; the filter below reads it, so a state promoted to
+ * is the shared lookup for `requiresHuman:` and business outcomes; the filter
+ * below reads it, so a state promoted to
  * authority-class stops being proposable with no change to this file. SPEC:
  * "Authority-class states are never proposable as automatable."
  *
@@ -330,13 +329,13 @@ export interface Advisor {
  *     `onNoMatch.escalate:` code, say — which the Artifact *names* but has not
  *     classified.
  *
- * The second is precisely the state ticket 13 taught by pausing for a person:
+ * The second is a state whose classification can be learned through intervention:
  * the author had already written the name down, and what an Intervention added
  * was the classification. This rung proposes that same classification one rung
  * lower, for one run, without writing it anywhere.
  *
  * Anything already learned to need authority is excluded. `classificationOf`
- * reads `requiresHuman:` before `outcomes:`, so a code ticket 14's ratchet has
+ * reads `requiresHuman:` before `outcomes:`, so a code the downgrade guard has
  * written there drops out of this list with no change to anything below.
  *
  * The engine no longer relies on that alone, and the two rules are deliberately

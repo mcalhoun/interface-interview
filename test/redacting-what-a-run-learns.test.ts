@@ -42,9 +42,9 @@ import {
   parseAccessibilityTree,
   queryValuesIn
 } from "@cua/surface"
-import { attendedReplay } from "./support/handoff-harness.ts"
-import { replay, shippedArtifact } from "./support/replay-harness.ts"
-import { describeAppearances, scanForSecrets } from "./support/secret-scan.ts"
+import { attendedReplay } from "../apps/demo/src/support/handoff-harness.ts"
+import { replay, shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
+import { describeAppearances, scanForSecrets } from "../apps/demo/src/support/secret-scan.ts"
 
 const HAPPY_PATH = "12345"
 const HAPPY_PATH_NAME = "MARGUERITE A ELLSWORTH"

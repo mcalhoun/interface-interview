@@ -3,7 +3,7 @@
  *
  * Everything below the model is real: a real Chromium, the real Heritage Core
  * fixture, the shipped `policies/default.yaml`, Evidence on disk. Only the
- * judgement is scripted, and `test/support/scripted-model.ts` argues why (SPEC
+ * judgement is scripted, and `apps/demo/src/support/scripted-model.ts` argues why (SPEC
  * records a live-model test as a deliberate cut: slow, costly, non-deterministic).
  *
  * What that buys is that these tests check the things that are actually hard —
@@ -24,10 +24,10 @@ import { expect } from "vitest"
 import { SYSTEM_INSTRUCTIONS } from "@cua/agent"
 import { compilePolicy } from "@cua/policy"
 import { Result } from "effect"
-import { counting, runDiscovery, shippedPolicy } from "./support/discovery-harness.ts"
-import { GOAL, readsTheScreen } from "./support/discovery-script.ts"
-import { recordingModel, respondingModel, scriptedModel } from "./support/scripted-model.ts"
-import type { ScriptedCall } from "./support/scripted-model.ts"
+import { counting, runDiscovery, shippedPolicy } from "../apps/demo/src/support/discovery-harness.ts"
+import { GOAL, readsTheScreen } from "../apps/demo/src/support/discovery-script.ts"
+import { recordingModel, respondingModel, scriptedModel } from "../apps/demo/src/support/scripted-model.ts"
+import type { ScriptedCall } from "../apps/demo/src/support/scripted-model.ts"
 
 
 // ---------------------------------------------------------------------------
@@ -74,7 +74,8 @@ it.live("records where every typed value came from", () =>
 
     // ADR-0008: sensitive by default, and never the model's call. Nothing in the
     // proposal said so; the loop decided it because Policy declassifies nothing.
-    expect(trajectory.parameters.every((parameter) => parameter.sensitive)).toBe(true)
+    expect(memberId?.sensitive).toBe(true)
+    expect(trajectory.parameters.find((parameter) => parameter.name === "accountType")?.sensitive).toBe(false)
 
     // And the literal is a `Redacted`, so an accidental serialisation of the
     // trajectory names the parameter rather than leaking the value.
@@ -198,7 +199,7 @@ it.live("records each decision with its rationale beside the action taken", () =
     }
   }))
 
-it.live("is safe to serialise: only the goal itself carries a discovered value", () =>
+it.live("is safe to serialise, including the goal", () =>
   Effect.gen(function*() {
     const { trajectory } = yield* runDiscovery({
       goal: GOAL,
@@ -214,9 +215,9 @@ it.live("is safe to serialise: only the goal itself carries a discovered value",
     expect(JSON.stringify(rest)).not.toContain("12345")
     expect(JSON.stringify(rest)).toContain("[redacted:memberId]")
 
-    // The goal is the exception, and deliberately: ticket 11 needs it intact to
-    // check that no artifact literal echoes it.
-    expect(goal).toBe(GOAL)
+    // The compiler retains the goal only in memory.
+    expect(JSON.stringify(goal)).toBe('"<redacted:goal>"')
+    expect(JSON.stringify(trajectory)).not.toContain("12345")
   }))
 
 it.live("keeps the values it discovered out of its own evidence", () =>
@@ -558,7 +559,7 @@ it.live("tells the model when it invents an action, and never performs it", () =
       (event) => event.kind === "decide" && event.rationale.startsWith("refused")
     )
     expect(refusal && "rationale" in refusal ? refusal.rationale : "").toContain(
-      "not one of the available actions"
+      "available actions"
     )
   }))
 

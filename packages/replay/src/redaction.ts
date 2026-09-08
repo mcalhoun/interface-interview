@@ -1,34 +1,15 @@
 /**
  * Wiring a run's sensitive inputs to the Evidence scrubber.
  *
- * This module exists so that "the Evidence for a run redacts that run's
- * sensitive values" is something a caller cannot get wrong by omission. There is
- * one function that builds an Evidence Layer for a Replay run, it takes the
- * `ResolvedInputs`, and it derives the scrubber itself. A caller who wants
- * Evidence has to go through it.
+ * The writer derives its scrubber from ResolvedInputs so the call site cannot
+ * forget which values the run supplied. Non-sensitive treatment requires both
+ * an artifact declaration and policy authorization.
  *
- * ## One of the two unwrap sites
- *
- * `Redacted.value(...)` appears exactly twice in `packages/*​/src`:
- *
- * 1. here, to learn the characters the scrubber has to look for, and
- * 2. `resolveValue` in `checkpoint.ts`, to type a value into a field.
- *
- * Both are unavoidable — a scrubber that does not know the value cannot find it,
- * and a `fill` that does not know the value cannot type it — and both are the
- * narrowest possible: the plaintext exists as a local, is consumed immediately,
- * and is never stored on anything that could be serialised.
- *
- * `test/sensitive-data.test.ts` greps the workspace and asserts that set of two.
- * A third unwrap does not silently appear; it fails the suite and has to be
- * argued for.
- *
- * ## Non-sensitive inputs are not scrubbed
- *
- * That is what non-sensitive means. Getting there takes both an Artifact
- * declaring `sensitive: false` and a Policy allowlist entry naming the parameter
- * (`classifySensitive` in `@cua/artifact`), so the set is empty unless somebody
- * decided it should not be.
+ * Unwrapping is limited to explicit boundaries: this module registers input
+ * values for scrubbing, checkpoint.ts resolves values for actions and comparisons,
+ * and the discovery redaction module manages its private runtime context.
+ * The source scan in test/sensitive-data.test.ts checks those boundaries.
+ * Plaintext must not enter serialized evidence or artifact metadata.
  */
 
 import type { ResolvedInputs } from "@cua/artifact"
@@ -39,7 +20,7 @@ import type {
   SecretRegistry,
   SensitiveText
 } from "@cua/evidence"
-import { evidenceFiles, scrubbing, secretRegistry } from "@cua/evidence"
+import { evidenceFiles, scrubbing, secretRegistry, privateUrlValues } from "@cua/evidence"
 import { Redacted } from "effect"
 import type { Layer } from "effect/Layer"
 
@@ -58,27 +39,30 @@ export const scrubberFor = (inputs: ResolvedInputs): Scrubber => scrubbing(decla
 /**
  * The same values, as a registry the run can add to.
  *
- * This is what the Evidence writer gets. `scrubberFor` above is the fixed
- * snapshot, and it still has two callers that want exactly that — an Amendment
- * and an Override are written *after* a run, from its declared inputs, and the
- * question they ask ("does this text still contain a value this run typed") is
- * about the document, not about the log.
- *
- * A run's Evidence wants the live one, because a run learns secrets: what an
- * Operator types during an Intervention, and what a screen renders back.
+ * Evidence uses this live registry because a run learns secrets from operator
+ * actions and rendered screens. Post-run amendment and override persistence must
+ * retain Evidence.scrub too; rebuilding it from declared inputs would forget
+ * those values. `scrubberFor` is only a fixed snapshot for pre-run diagnostics.
  */
 export const secretsFor = (inputs: ResolvedInputs): SecretRegistry =>
   secretRegistry(declaredSecrets(inputs))
 
-/** UNWRAP SITE 1 OF 2. The plaintext goes into a `SensitiveText` and nowhere else. */
+/** Runtime scrubbing boundary. The plaintext goes into a `SensitiveText` and nowhere else. */
 const declaredSecrets = (inputs: ResolvedInputs): ReadonlyArray<SensitiveText> => {
   const values: Array<SensitiveText> = []
   for (const input of inputs.values()) {
     if (!input.sensitive) continue
-    values.push({ label: input.name, text: Redacted.value(input.text) })
+    const text = Redacted.value(input.text)
+    values.push({ label: input.name, text })
+    // A redirect or a rendered value can contain only one component of an input URL.
+    try { values.push(...urlSecrets(new URL(text, "http://runtime.invalid").toString())) } catch { /* not a URL */ }
   }
   return values
 }
+
+/** URLs observed at runtime are private independently of declared parameter sensitivity. */
+export const urlSecrets = (url: string): ReadonlyArray<SensitiveText> =>
+  privateUrlValues(url).map((text) => ({ label: "url", text }))
 
 export interface RunEvidenceOptions {
   /** e.g. `evidence/replay`. One subdirectory per run is created under it. */
@@ -87,6 +71,8 @@ export interface RunEvidenceOptions {
   readonly sessionId: string
   /** The run's validated inputs. The scrubber is derived from these. */
   readonly inputs: ResolvedInputs
+  /** Only callers using synthetic fixtures should enable unredacted binary proof. */
+  readonly allowUnredactedScreenshots?: boolean
   /** How the run's sensitivity was decided, for the directory's own note. */
   readonly policy?: string
 }
@@ -105,6 +91,7 @@ export const evidenceForRun = (
 ): Layer<Evidence, EvidenceUnwritable> =>
   evidenceFiles({
     root: options.root,
+    ...(options.allowUnredactedScreenshots === undefined ? {} : { allowUnredactedScreenshots: options.allowUnredactedScreenshots }),
     runId: options.runId,
     sessionId: options.sessionId,
     scrubber: secretsFor(options.inputs),

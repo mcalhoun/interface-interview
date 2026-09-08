@@ -51,15 +51,18 @@ import type { EvidenceUnwritable, Scrubber } from "@cua/evidence"
 import { Evidence } from "@cua/evidence"
 import type { ActionRequest } from "@cua/policy"
 import { Policy, personalCaptions, personalLabelFor } from "@cua/policy"
+import { Session } from "@cua/session"
 import type { SurfaceState, Target, TargetFailure } from "@cua/surface"
 import {
   SurfaceAdapter,
   describeMatch,
   describeTarget,
   labelledValuesIn,
+  entryValuesIn,
+  queryValuesIn,
   selectFromTree
 } from "@cua/surface"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import { checkProvenance } from "./Provenance.ts"
 import type { ProvenancedValue } from "./Provenance.ts"
@@ -77,7 +80,7 @@ import type {
 import type { Proposal } from "./Vocabulary.ts"
 import { DISCOVERY_VERBS, discoveryToolkit, isUndecodable, proposalFrom } from "./Vocabulary.ts"
 import type { DiscoveredSecrets } from "./redaction.ts"
-import { asSecret, charactersToType } from "./redaction.ts"
+import { asSecret, charactersToType, goalDiagnosticScrubber, privateUrlValues } from "./redaction.ts"
 import type { StepSummary } from "./prompt.ts"
 import { decisionPrompt } from "./prompt.ts"
 
@@ -99,6 +102,8 @@ export interface DiscoveryOptions {
   readonly bounds?: StuckBounds
   /** Named in the report so a reader knows which model produced the trajectory. */
   readonly modelName: string
+  readonly publicGoalTerms?: ReadonlyArray<string>
+  readonly providerName?: string
 }
 
 /**
@@ -137,7 +142,7 @@ export class DiscoveryFailed extends Error {
  * to hide.
  *
  * The plaintext of a goal-derived value is not lost: it lives on
- * `DiscoveredParameter.literal` as a `Redacted`, which is where ticket 11 reads
+ * `DiscoveredParameter.literal` as a `Redacted`, which is where the compiler reads
  * it from for `bakedInLiterals`.
  */
 const forTheRecord = (value: ProvenancedValue): ProvenancedValue =>
@@ -273,15 +278,15 @@ const UNUSABLE_RESPONSES_ALLOWED = 3
  * to be told which fields might hold a member number is one that misses the field
  * added next month.
  */
-const scrubDeeply = (value: unknown, scrub: (text: string) => string): never => {
-  if (typeof value === "string") return scrub(value) as never
-  if (Array.isArray(value)) return value.map((item) => scrubDeeply(item, scrub)) as never
+const scrubDeeply = (value: unknown, scrub: (text: string) => string): unknown => {
+  if (typeof value === "string") return scrub(value)
+  if (Array.isArray(value)) return value.map((item) => scrubDeeply(item, scrub))
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [key, scrubDeeply(item, scrub)])
-    ) as never
+    )
   }
-  return value as never
+  return value
 }
 
 const reasonTagOf = (error: unknown): string => {
@@ -327,17 +332,39 @@ export const discover = (
 ): Effect.Effect<
   Trajectory,
   DiscoveryFailed | EvidenceUnwritable,
-  SurfaceAdapter | Policy | Evidence | LanguageModel.LanguageModel
+  SurfaceAdapter | Policy | Evidence | Session | LanguageModel.LanguageModel
 > =>
   Effect.gen(function*() {
+    const session = yield* Session
     const surface = yield* SurfaceAdapter
     const policy = yield* Policy
-    const evidence = yield* Evidence
+    const writer = yield* Evidence
+    const entryUrl = new URL(options.entry, options.baseUrl)
+    const runtimeUrlValues = new Set<string>()
+    const rememberUrl = (url: string): void => {
+      for (const value of privateUrlValues(url)) {
+        runtimeUrlValues.add(value)
+        options.secrets.remember("url", asSecret("url", value))
+      }
+    }
+    rememberUrl(options.baseUrl)
+    rememberUrl(entryUrl.toString())
+    const publicTerms = new Set<string>(options.publicGoalTerms ?? [])
+    const diagnosticScrub = (text: string) => goalDiagnosticScrubber(options.goal, [...publicTerms])(text)
+    yield* writer.protectDiagnostics(diagnosticScrub)
+    const evidence = writer
     const bounds = options.bounds ?? DEFAULT_BOUNDS
-    const detector = stuckDetector(bounds)
+    let detector = stuckDetector(bounds)
+    const priorSignatures: Array<string> = []
+    let interventions = 0
     const startedAt = Date.now()
+    const deadlineAt = startedAt + bounds.maxMillis
+    let lastState: SurfaceState | undefined
+    let attempted = 0
+    yield* surface.setDeadline(deadlineAt)
 
     const steps: Array<DiscoveryStep> = []
+    const humanDependencies: Array<{ afterStep: string; interventionId: string }> = []
     const history: Array<StepSummary> = []
     /** Step id -> what that step read. Backs `uiDerived` and the outputs. */
     const readings = new Map<string, string>()
@@ -359,8 +386,7 @@ export const discover = (
      * adapter except through here, exactly as `engine.ts` does for Replay, and a
      * test counts the call sites so a second path would fail the suite.
      *
-     * `page` is always passed. Discovery is the mode that wanders, and ticket 07's
-     * note is explicit that an origin check with no current page constrains only
+     * `page` is always passed. An origin check with no current page constrains only
      * where you navigate — the weaker half.
      */
     const authorised = <A>(
@@ -371,9 +397,10 @@ export const discover = (
       act: () => Effect.Effect<A, TargetFailure>
     ): Effect.Effect<
       { readonly acted: A; readonly risk: string; readonly policy: string } | { readonly denied: string },
-      TargetFailure | EvidenceUnwritable
+      TargetFailure | EvidenceUnwritable | DiscoveryFailed
     > =>
       Effect.gen(function*() {
+        yield* session.claim(`${type} ${subject}`).pipe(Effect.mapError(() => new DiscoveryFailed("automation does not hold this session")))
         const request: ActionRequest = { type, subject, page, stepId, mode: "discovery" }
         const verdict = yield* policy.authorise(request)
         yield* evidence.record({
@@ -408,6 +435,9 @@ export const discover = (
          * Replay's, same declared captions, same reason -- see `personalFields`
          * in packages/policy/src/Sensitivity.ts.
          */
+        lastState = state
+        rememberUrl(state.url)
+        for (const frame of state.frames) rememberUrl(frame.url)
         yield* evidence.redact(
           labelledValuesIn(state.tree, personalCaptions).flatMap((found) => {
             const label = personalLabelFor(found.caption)
@@ -423,6 +453,38 @@ export const discover = (
           accessibility: state.accessibility
         })
         return state
+      })
+
+    const pauseFor = (trigger: StuckTrigger, attempted: number): Effect.Effect<boolean, EvidenceUnwritable | DiscoveryFailed> =>
+      Effect.gen(function* () {
+        if (interventions >= 1 || !(yield* session.handoffAvailable)) return false
+        interventions += 1
+        yield* surface.setDeadline(undefined)
+        const state = trigger.trigger === "deadline" ? lastState : yield* observeAndRecord(undefined)
+        const safe = evidence.scrub
+        const episode = yield* session.pause({
+          capability: "(discovering)", version: "(none)", runId: options.runId,
+          stepId: `discovery-${attempted}`, stepIntent: safe(options.goal),
+          reason: safe(trigger.detail), detail: safe(`Discovery stopped: ${trigger.trigger}. ${trigger.detail}`),
+          url: safe(state?.url ?? options.baseUrl), accessibility: safe(state?.accessibility ?? "No observation completed before the deadline.")
+        }, {
+          entries: surface.observe.pipe(Effect.map((observed) => [
+            ...entryValuesIn(observed.tree), ...queryValuesIn(observed.url),
+            ...observed.frames.flatMap((frame) => queryValuesIn(frame.url))
+          ]), Effect.orElseSucceed(() => []))
+        })
+        if (!episode.resumed) return false
+        // A watcher cannot prove absence of manual work. Retain every resumed
+        // boundary; replay needs a person only when its next checkpoint fails.
+        humanDependencies.push({
+          afterStep: steps.at(-1)?.id ?? "open",
+          interventionId: episode.record.intervention.interventionId
+        })
+        priorSignatures.push(...detector.signatures())
+        detector = stuckDetector(bounds)
+        yield* surface.setDeadline(deadlineAt)
+        if (Date.now() < deadlineAt) yield* observeAndRecord(undefined)
+        return true
       })
 
     /**
@@ -443,36 +505,65 @@ export const discover = (
     const finish = (
       conclusion: Trajectory["conclusion"],
       attempted: number
-    ): Trajectory => ({
-      goal: options.goal,
+    ): Effect.Effect<Trajectory, EvidenceUnwritable> => Effect.gen(function*() {
+      yield* surface.setDeadline(undefined)
+      let entryParameterName = "entryPath"
+      while (parameters.has(entryParameterName)) entryParameterName += "_"
+      const trajectory: Trajectory = {
+      goal: asSecret("goal", options.goal),
       runId: options.runId,
       sessionId: options.sessionId,
-      entry: options.entry,
+      entry: entryUrl.pathname,
+      ...(entryUrl.search !== "" || entryUrl.hash !== "" ? {
+        entryParameter: { name: entryParameterName, literal: asSecret(entryParameterName, entryUrl.pathname + entryUrl.search + entryUrl.hash) }
+      } : {}),
+      runtimeUrlValues: [...runtimeUrlValues].map((value) => asSecret("url", value)),
+      privateTextScrubber: options.secrets.scrubber,
       evidenceDirectory: evidence.directory,
       conclusion,
       steps,
+      humanDependencies,
       parameters: [...parameters.entries()].map(([name, use]): DiscoveredParameter => ({
         name,
         usedBy: use.usedBy,
         // ADR-0008: sensitive unless Policy allowlists it, which ships empty.
         // Never the model's call, and never inferred from the value's shape.
-        sensitive: true,
+        sensitive: !selections.some((selection) => selection.parameter === name && selection.declassifiedBecause !== undefined),
         literal: asSecret(name, use.literal)
       })),
       selections,
       outputs,
-      signatures: detector.signatures(),
+      signatures: [...priorSignatures, ...detector.signatures()],
       steps_attempted: attempted,
       durationMillis: Date.now() - startedAt
+      }
+      yield* evidence.record({
+        kind: "run.end",
+        result: conclusion.conclusion === "reached" ? "success"
+          : conclusion.conclusion === "stuck" ? "intervention_required" : "failure",
+        summary: conclusion.conclusion === "reached" ? conclusion.summary
+          : conclusion.conclusion === "stuck" ? conclusion.trigger.detail : conclusion.reason,
+        durationMillis: trajectory.durationMillis
+      })
+      return Object.assign(trajectory, {
+        toJSON: () => ({
+          format: "discovery-diagnostics-v2",
+          ...scrubDeeply(JSON.parse(JSON.stringify({ ...trajectory, toJSON: undefined })),
+            (text) => text === "<redacted:goal>" ? text : diagnosticScrub(options.secrets.scrubber(text))) as Record<string, unknown>
+        })
+      })
     })
 
     // -----------------------------------------------------------------------
     // Open the application
     // -----------------------------------------------------------------------
 
+    const work = Effect.gen(function* () {
     yield* evidence.record({
       kind: "run.start",
       mode: "discovery",
+      provider: options.providerName ?? "unspecified",
+      model: options.modelName,
       capability: "(discovering)",
       version: "(none)",
       baseUrl: options.baseUrl,
@@ -482,22 +573,21 @@ export const discover = (
       inputs: []
     })
 
-    const entryUrl = new URL(options.entry, options.baseUrl).toString()
     const opened = yield* authorised(
       "open",
       "navigate",
-      entryUrl,
+      entryUrl.toString(),
       "about:blank",
-      () => surface.navigate(entryUrl)
+      () => surface.navigate(entryUrl.toString())
     ).pipe(
       Effect.mapError((failure) =>
-        failure._tag === "EvidenceUnwritable"
+        failure._tag === "EvidenceUnwritable" || failure._tag === "DiscoveryFailed"
           ? failure
           : new DiscoveryFailed(explainTargetFailure(failure))
       )
     )
     if ("denied" in opened) {
-      return finish(
+      return yield* finish(
         { conclusion: "failed", reason: `policy refused to open ${options.entry}: ${opened.denied}` },
         0
       )
@@ -508,12 +598,19 @@ export const discover = (
     // -----------------------------------------------------------------------
 
     let correction: string | undefined
-    let attempted = 0
     /** Consecutive responses that were not a usable action. See above. */
     let unusableResponses = 0
 
     while (true) {
       attempted += 1
+      if (Date.now() - startedAt >= bounds.maxMillis) {
+        const trigger: StuckTrigger = {
+          trigger: "deadline", elapsedMillis: Date.now() - startedAt,
+          detail: "Discovery reached its wall-clock limit."
+        }
+        yield* pauseFor(trigger, attempted - 1)
+        return yield* finish({ conclusion: "stuck", trigger }, attempted - 1)
+      }
       if (attempted > bounds.maxSteps) {
         const trigger: StuckTrigger = {
           trigger: "max_steps",
@@ -521,14 +618,15 @@ export const discover = (
           detail: `the run reached its limit of ${bounds.maxSteps} steps without meeting the goal.`
         }
         yield* evidence.record({ kind: "outcome", code: "STUCK", detail: trigger.detail })
-        return finish({ conclusion: "stuck", trigger }, attempted - 1)
+        yield* pauseFor(trigger, attempted - 1)
+        return yield* finish({ conclusion: "stuck", trigger }, attempted - 1)
       }
 
       const state = yield* observeAndRecord(undefined)
       yield* captureScreenshot(`step-${String(attempted).padStart(2, "0")}.png`)
 
       // --- decide ---------------------------------------------------------
-      const answered = yield* LanguageModel.generateText({
+      const responseWithinBudget = yield* LanguageModel.generateText({
         prompt: decisionPrompt({
           goal: options.goal,
           state,
@@ -545,15 +643,25 @@ export const discover = (
         Effect.catch((error) => {
           const tag = reasonTagOf(error)
           if (!RETRYABLE_MODEL_ERRORS.has(tag)) {
-            return Effect.fail(new DiscoveryFailed(`the model could not be reached (${tag}): ${error}`))
+            return Effect.fail(new DiscoveryFailed(`the model could not be reached (${tag})`))
           }
           return Effect.succeed({
             unusable:
               `that was not one of the available actions. Choose one of: ` +
               `${DISCOVERY_VERBS.join(", ")}, and give its arguments exactly as described.`
           })
-        })
+        }),
+        Effect.timeoutOption(Math.max(1, bounds.maxMillis - (Date.now() - startedAt)))
       )
+      if (Option.isNone(responseWithinBudget)) {
+        const trigger: StuckTrigger = {
+          trigger: "deadline", elapsedMillis: Date.now() - startedAt,
+          detail: "Discovery reached its wall-clock limit while awaiting the model."
+        }
+        yield* pauseFor(trigger, attempted)
+        return yield* finish({ conclusion: "stuck", trigger }, attempted)
+      }
+      const answered = responseWithinBudget.value
       correction = undefined
 
       if ("unusable" in answered) {
@@ -595,6 +703,16 @@ export const discover = (
       }
 
       const stepId = stepIdFor(proposal, attempted)
+      if (proposal.verb === "navigate") {
+        let navigation: URL | undefined
+        try { navigation = new URL(proposal.path, options.baseUrl) } catch { /* refused below */ }
+        if (navigation !== undefined) rememberUrl(navigation.toString())
+        if (navigation === undefined || privateUrlValues(navigation.toString()).length > 0) {
+          correction = "Navigation requires a stable path without credentials, query values or a fragment. Use the caller's entry path or navigate through visible controls and parameterized inputs."
+          yield* evidence.record({ kind: "decide", stepId, rationale: correction, action: "navigate (rejected)" })
+          continue
+        }
+      }
 
       // --- register secrets BEFORE anything is written --------------------
       //
@@ -606,11 +724,34 @@ export const discover = (
       // why a mis-tagged `constant` is registered here too rather than only being
       // rejected below.
       const value = valueOf(proposal)
+      let publicSelectionReason: string | undefined
+      if (proposal.verb === "selectFromList" && proposal.match.kind === "goalDerived" &&
+        proposal.match.name === "accountType" && publicTerms.has(proposal.match.literal) && ["savings", "checking"].includes(proposal.match.literal)) {
+        const listed = selectFromTree(state.tree, {
+          list: proposal.list,
+          wanted: proposal.match.literal,
+          describedAs: "the public account type"
+        })
+        if (listed._tag === "Selected" && checkSelection({
+          match: proposal.match,
+          observedLabels: listed.items.map((item) => item.label),
+          discoveredFrom: proposal.discoveredFrom,
+          within: proposal.list.within,
+          itemRole: proposal.list.itemRole
+        }, options.goal) === undefined) {
+          publicSelectionReason = "Canonical savings/checking product term, validated against the live account list; it identifies a product rather than a member."
+          publicTerms.add(proposal.match.literal)
+          options.secrets.registry.declassify([
+            { label: "accountType", text: proposal.match.literal },
+            { label: "goalTerm", text: proposal.match.literal }
+          ], publicSelectionReason)
+        }
+      }
       if (value !== undefined && value.kind !== "uiDerived") {
         const name = value.kind === "goalDerived" ? value.name : "goalTerm"
         const mistagged = checkProvenance(value, options.goal, new Set(readings.keys()))
         const fromGoal = value.kind === "goalDerived" ? mistagged === undefined : mistagged !== undefined
-        if (fromGoal) options.secrets.remember(name, asSecret(name, value.literal))
+        if (fromGoal && publicSelectionReason === undefined) options.secrets.remember(name, asSecret(name, value.literal))
       }
 
       yield* evidence.record({
@@ -755,7 +896,11 @@ export const discover = (
           code: proposal.code,
           detail: proposal.detail
         })
-        return finish({ conclusion: "stuck", trigger }, attempted)
+        if (yield* pauseFor(trigger, attempted)) {
+          correction = "The operator returned control. Observe the current screen afresh, verify progress, and continue. Do not assume the goal is met."
+          continue
+        }
+        return yield* finish({ conclusion: "stuck", trigger }, attempted)
       }
 
       if (proposal.verb === "succeed") {
@@ -886,7 +1031,7 @@ export const discover = (
           code: "SUCCESS",
           detail: proposal.summary
         })
-        return finish({ conclusion: "reached", summary: proposal.summary }, attempted)
+        return yield* finish({ conclusion: "reached", summary: proposal.summary }, attempted)
       }
 
       // --- act ------------------------------------------------------------
@@ -913,7 +1058,11 @@ export const discover = (
           : undefined
         if (trigger !== undefined) {
           yield* evidence.record({ kind: "outcome", code: "STUCK", detail: trigger.detail })
-          return finish({ conclusion: "stuck", trigger }, attempted)
+          if (yield* pauseFor(trigger, attempted)) {
+          correction = "The operator returned control. Observe the current screen afresh, verify progress, and continue. Do not assume the goal is met."
+          continue
+        }
+        return yield* finish({ conclusion: "stuck", trigger }, attempted)
         }
         continue
       }
@@ -942,7 +1091,10 @@ export const discover = (
           existing.usedBy.push(stepId)
         }
       }
-      if (performed.selection !== undefined) selections.push(performed.selection)
+      if (performed.selection !== undefined) selections.push({
+        ...performed.selection,
+        ...(publicSelectionReason === undefined ? {} : { declassifiedBecause: publicSelectionReason })
+      })
 
       // The outcome is scrubbed on the way into the Trajectory, not on the way
       // out of it.
@@ -966,7 +1118,7 @@ export const discover = (
         intent: proposal.intent,
         rationale: scrub(proposal.rationale),
         verb: proposal.verb,
-        action: scrubDeeply(performed.action, scrub),
+        action: Object.fromEntries(Object.entries(performed.action).map(([key, value]) => [key, scrubDeeply(value, scrub)])),
         ...(value === undefined ? {} : { value: forTheRecord(value) }),
         outcome: {
           ...performed.outcome,
@@ -1010,10 +1162,35 @@ export const discover = (
       })
       if (trigger !== undefined) {
         yield* evidence.record({ kind: "outcome", stepId, code: "STUCK", detail: trigger.detail })
-        return finish({ conclusion: "stuck", trigger }, attempted)
+        if (yield* pauseFor(trigger, attempted)) {
+          correction = "The operator returned control. Observe the current screen afresh, verify progress, and continue. Do not assume the goal is met."
+          continue
+        }
+        return yield* finish({ conclusion: "stuck", trigger }, attempted)
       }
     }
-  })
+    })
+    return yield* work.pipe(
+      Effect.catch((error) => Effect.gen(function* () {
+        if (error._tag === "EvidenceUnwritable" || Date.now() < deadlineAt) return yield* Effect.fail(error)
+        const trigger: StuckTrigger = {
+          trigger: "deadline", elapsedMillis: Date.now() - startedAt,
+          detail: "Discovery reached its wall-clock limit while operating the application."
+        }
+        yield* pauseFor(trigger, attempted)
+        return yield* finish({ conclusion: "stuck", trigger }, attempted)
+      })),
+      Effect.ensuring(surface.setDeadline(undefined))
+    )
+  }).pipe(Effect.tapError((error) => Effect.gen(function* () {
+    if (error._tag === "EvidenceUnwritable") return
+    const evidence = yield* Evidence
+    const began = (yield* evidence.written).find((event) => event.kind === "run.start")
+    yield* evidence.record({
+      kind: "run.end", result: "failure", summary: "Discovery failed before the goal was verified.",
+      durationMillis: began === undefined ? 0 : Math.max(0, Date.now() - Date.parse(began.at))
+    }).pipe(Effect.ignore)
+  })))
 
 // ---------------------------------------------------------------------------
 // Performing one proposal
@@ -1034,7 +1211,7 @@ interface PerformOptions {
     act: () => Effect.Effect<A, TargetFailure>
   ) => Effect.Effect<
     { readonly acted: A; readonly risk: string; readonly policy: string } | { readonly denied: string },
-    TargetFailure | EvidenceUnwritable
+    TargetFailure | EvidenceUnwritable | DiscoveryFailed
   >
 }
 
@@ -1075,7 +1252,7 @@ const perform = (
     ): Effect.Effect<
       | { readonly acted: A; readonly risk: string; readonly policy: string }
       | Refused,
-      EvidenceUnwritable
+      EvidenceUnwritable | DiscoveryFailed
     > =>
       authorised(stepId, type, subject, state.url, act).pipe(
         Effect.map((result) =>
@@ -1087,7 +1264,7 @@ const perform = (
             } satisfies Refused)
             : result
         ),
-        Effect.catch((failure): Effect.Effect<Refused, EvidenceUnwritable> =>
+        Effect.catch((failure): Effect.Effect<Refused, EvidenceUnwritable | DiscoveryFailed> =>
           // An `EvidenceUnwritable` is machinery breaking and stays on the error
           // channel. A Target failure is the model being wrong about the screen,
           // which is an ordinary event in a loop that is working things out — so
@@ -1096,7 +1273,7 @@ const perform = (
           // Discriminated by `_tag` rather than `instanceof Error`: every failure
           // in this system is a `Schema.TaggedError` and therefore an `Error`, so
           // an `instanceof` check here would silently match everything.
-          failure._tag === "EvidenceUnwritable"
+          failure._tag === "EvidenceUnwritable" || failure._tag === "DiscoveryFailed"
             ? Effect.fail(failure)
             : Effect.succeed({
               correction: explainTargetFailure(failure),

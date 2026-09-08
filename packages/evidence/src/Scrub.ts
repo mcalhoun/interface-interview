@@ -167,6 +167,8 @@ export interface SecretRegistry {
   readonly remember: (values: Iterable<SensitiveText>) => void
   /** Which labels have been registered. Never their values. */
   readonly labels: () => ReadonlyArray<string>
+  /** Remove only the named registrations after a caller validates a public-data policy. */
+  readonly declassify: (values: Iterable<SensitiveText>, because: string) => void
 }
 
 export const secretRegistry = (initial: Iterable<SensitiveText> = []): SecretRegistry => {
@@ -195,7 +197,17 @@ export const secretRegistry = (initial: Iterable<SensitiveText> = []): SecretReg
   return {
     scrub: (text) => current(text),
     remember,
-    labels: () => [...new Set(values.map((value) => value.label))]
+    labels: () => [...new Set(values.map((value) => value.label))],
+    declassify: (publicValues, because) => {
+      if (because.trim() === "") throw new Error("Declassification requires a policy reason")
+      for (const value of publicValues) {
+        registered.delete(`${value.label} ${value.text}`)
+        for (let index = values.length - 1; index >= 0; index--) {
+          if (values[index]?.label === value.label && values[index]?.text === value.text) values.splice(index, 1)
+        }
+      }
+      current = scrubbing(values)
+    }
   }
 }
 
@@ -210,3 +222,18 @@ export const secretRegistry = (initial: Iterable<SensitiveText> = []): SecretReg
  * that off.
  */
 export const noSecrets = (): SecretRegistry => secretRegistry([])
+
+/** URL credentials and query/fragment values are runtime data, even before a fill. */
+export const privateUrlValues = (url: string): ReadonlyArray<string> => {
+  let parsed: URL
+  try { parsed = new URL(url) } catch { return [] }
+  const decoded = (value: string): string => {
+    try { return decodeURIComponent(value) } catch { return value }
+  }
+  const fragment = parsed.hash.slice(1)
+  return [...new Set([
+    parsed.username, decoded(parsed.username), parsed.password, decoded(parsed.password),
+    ...parsed.searchParams.values(), fragment, decoded(fragment),
+    ...new URLSearchParams(fragment).values()
+  ].filter((value) => value !== ""))]
+}

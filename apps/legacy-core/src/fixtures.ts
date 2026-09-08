@@ -49,7 +49,7 @@ export const isLedgerKey = (value: string): value is LedgerKey => value === "A" 
 
 /**
  * The fixture index. Not linked from anywhere in the product, so that observing
- * Member Search sees exactly what ticket 01 built and nothing else.
+ * Member Search exposes only the banking workflow.
  */
 export const fixtureIndexPage = (): string =>
   shell(
@@ -216,7 +216,7 @@ const splitRunRow = (label: string, lead: string, code: string, trail: string): 
 /**
  * Dual Ledger: two iframes, one set of captions.
  *
- * Ticket 01's Account Detail proves a Target can reach *into* a frame without
+ * Account Detail proves a Target can reach *into* a frame without
  * naming one. This proves the harder half: with two frames the same Target
  * reaches into both, and the run has to stop and say which document each
  * candidate came from. A Target still says nothing about frames — `within` names

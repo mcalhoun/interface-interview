@@ -44,8 +44,8 @@ import {
   sessionControl,
   watchesNothing
 } from "@cua/session"
-import { shippedArtifact } from "./support/replay-harness.ts"
-import { type OperatorDesk, attendedReplay } from "./support/handoff-harness.ts"
+import { shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
+import { type OperatorDesk, attendedReplay } from "../apps/demo/src/support/handoff-harness.ts"
 
 const RESTRICTED = "77777"
 // Ticket 09 renamed this step when the hard-coded click on "Primary Savings"
@@ -146,6 +146,7 @@ const brittleControl = (failFirst: EvidenceEventBody["kind"], waitMillis: number
       attach: () => Effect.void,
       written: Effect.sync(() => []),
       redact: () => Effect.void,
+      protectDiagnostics: () => Effect.void,
       scrub: (text: string) => text
     }))
   )
@@ -173,6 +174,81 @@ const HELD = {
   url: "http://example.invalid/account",
   accessibility: "- table:"
 }
+
+it.live("observed input is mutation evidence even when no note was recorded", () =>
+  Effect.gen(function* () {
+    const control = yield* bareControl()
+    let typed = false
+    yield* control.attach("http://127.0.0.1:0")
+    const paused = yield* Effect.forkChild(control.pause(HELD, {
+      entries: Effect.sync(() => typed ? [{ field: "Supervisor ID", value: "SUP7" }] : [])
+    }))
+    while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
+    yield* control.takeControl("j.okafor")
+    typed = true
+    yield* control.returnControl({
+      operator: "j.okafor", classification: "resolved", detail: "Released the hold",
+      nextTime: "always_stop_here"
+    })
+    const outcome = yield* Fiber.join(paused)
+    expect(outcome.record?.observed).toContain("supervisorId")
+    expect(classify(outcome.record!)).toMatchObject({ _tag: "Learned", learnedClass: "requires_human" })
+  }).pipe(Effect.scoped)
+)
+
+it.live("recording an observation alone still teaches an untouched business outcome", () =>
+  Effect.gen(function* () {
+    const control = yield* bareControl()
+    yield* control.attach("http://127.0.0.1:0")
+    const paused = yield* Effect.forkChild(control.pause(HELD, watchesNothing))
+    while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
+    yield* control.takeControl("j.okafor")
+    yield* control.noteAction({ detail: "Only a checking account is listed" })
+    yield* control.returnControl({
+      operator: "j.okafor", classification: "unresolved", detail: "Nothing to change",
+      nextTime: "automation_handles_it"
+    })
+    const outcome = yield* Fiber.join(paused)
+    expect(classify(outcome.record!)).toMatchObject({ _tag: "Learned", learnedClass: "business_outcome" })
+  }).pipe(Effect.scoped)
+)
+
+it.live("an explicitly confirmed action is recorded with the return and informs learning", () =>
+  Effect.gen(function* () {
+    const control = yield* bareControl()
+    yield* control.attach("http://127.0.0.1:0")
+    const paused = yield* Effect.forkChild(control.pause(HELD, watchesNothing))
+    while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
+    yield* control.takeControl("j.okafor")
+    yield* control.returnControl({
+      operator: "j.okafor", classification: "resolved", detail: "Dismissed the expired session dialog",
+      actionTaken: true, nextTime: "automation_handles_it"
+    })
+    const outcome = yield* Fiber.join(paused)
+    expect(outcome.resumed).toBe(true)
+    expect(outcome.record?.actions).toContainEqual(expect.objectContaining({
+      kind: "confirmed_action", detail: "Dismissed the expired session dialog"
+    }))
+    expect(classify(outcome.record!)).toMatchObject({ _tag: "Learned", learnedClass: "recoverable" })
+  }).pipe(Effect.scoped)
+)
+
+it.live("confirming an action without describing it leaves control with the operator", () =>
+  Effect.gen(function* () {
+    const control = yield* bareControl()
+    yield* control.attach("http://127.0.0.1:0")
+    const paused = yield* Effect.forkChild(control.pause(HELD, watchesNothing))
+    while ((yield* control.snapshot).owner !== "paused") yield* Effect.sleep(5)
+    yield* control.takeControl("j.okafor")
+    const refusal = yield* Effect.result(control.returnControl({
+      operator: "j.okafor", classification: "resolved", detail: " ",
+      actionTaken: true, nextTime: "always_stop_here"
+    }))
+    expect(refusal._tag).toBe("Failure")
+    expect((yield* control.snapshot).owner).toBe("operator")
+    yield* Fiber.interrupt(paused)
+  }).pipe(Effect.scoped)
+)
 
 /**
  * The failure this exists to rule out.

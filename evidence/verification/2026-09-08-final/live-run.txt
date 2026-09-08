@@ -1,0 +1,8 @@
+model: gpt-4.1; capability: member.account-balance.discovered@1.5.0; evidence: evidence/discovery/live-2026-09-08T14-45-52-190Z-132a40d2
+Discovery reached the goal in 5 steps; compiling the recorded flow.
+Saved member.account-balance.discovered@1.5.0; replaying the exact stored artifact.
+Fresh artifact replay succeeded; exercising its exceptional-state handoff.
+The observed intervention produced a business_outcome amendment; saving and replaying it.
+Observing and learning the MEMBER_NOT_FOUND checkpoint answer on the same discovered capability.
+Observing and learning the INPUT_VALIDATION_ERROR checkpoint answer on the same discovered capability.
+Saved member.account-balance.discovered@1.5.0, learned through @1.8.0; success and three business outcomes; evidence: evidence/discovery/live-2026-09-08T14-45-52-190Z-132a40d2

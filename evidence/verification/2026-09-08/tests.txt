@@ -1,0 +1,9 @@
+$ bun run --bun vitest run
+
+ RUN  v4.1.11 /Users/matt/code/github.com/mcalhoun/interface-interview
+
+
+ Test Files  43 passed (43)
+      Tests  494 passed (494)
+   Start at  09:52:54
+   Duration  19.47s (transform 2.52s, setup 0ms, import 17.67s, tests 218.13s, environment 4ms)

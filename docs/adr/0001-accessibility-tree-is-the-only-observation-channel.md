@@ -8,4 +8,4 @@ CSS and XPath selectors are unusable on this class of application, so they went 
 
 ## Consequences
 
-An accessibility-tree or desktop Surface Adapter becomes a swap rather than a rewrite, since no Capability Artifact contains anything browser-shaped. The cost is real: a control the accessibility tree cannot express is genuinely unreachable. If that happens, we write it up as a finding about the approach rather than quietly putting selectors back.
+An accessibility-tree or desktop Surface Adapter becomes a swap rather than a rewrite, because Targets contain no selectors or browser handles; surface metadata and entry locations remain explicit adapter concerns. The cost is real: a control the accessibility tree cannot express is genuinely unreachable. If that happens, we write it up as a finding about the approach rather than quietly putting selectors back.

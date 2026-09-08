@@ -17,7 +17,7 @@
 import { Schema } from "effect"
 
 /** Supplied by the caller at Replay time, against a declared input. */
-export const ParameterRef = Schema.Struct({
+const ParameterRef = Schema.Struct({
   from: Schema.Literal("parameter"),
   name: Schema.String
 })
@@ -27,7 +27,7 @@ export const ParameterRef = Schema.Struct({
  * between runs. ADR-0008: compilation rejects a constant echoing the Goal, which
  * is how a member id would otherwise quietly get baked in.
  */
-export const ConstantRef = Schema.Struct({
+const ConstantRef = Schema.Struct({
   from: Schema.Literal("constant"),
   text: Schema.String
 })
@@ -37,7 +37,7 @@ export const ConstantRef = Schema.Struct({
  * provenance; a Step that extracts binds its reading under the Step's own id, so
  * `{ from: step, step: read-available-balance }` needs no second name to track.
  */
-export const StepRef = Schema.Struct({
+const StepRef = Schema.Struct({
   from: Schema.Literal("step"),
   step: Schema.String
 })

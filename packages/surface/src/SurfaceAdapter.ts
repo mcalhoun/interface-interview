@@ -3,9 +3,9 @@
  * perceives and operates an application.
  *
  * Read the shape of it as an argument, not just an interface. `observe` returns
- * a Surface State — accessibility structure, location, frames — and every other
- * method takes a Target, which is a description of a control in an operator's
- * words. There is no method that returns markup and no parameter anywhere that
+ * a Surface State: accessibility structure, location and frames. Targeted
+ * operations take descriptions of controls in an operator's words. Deadline
+ * control bounds those operations without exposing browser internals. There is no method that returns markup and no parameter anywhere that
  * could hold a CSS or XPath selector. A caller who wants the DOM has nowhere to
  * put the request, which is the difference between a design claim and a
  * checkable one. See
@@ -209,6 +209,9 @@ export type TargetFailure = TargetNotFound | TargetAmbiguous | SurfaceUnavailabl
 // ---------------------------------------------------------------------------
 
 export class SurfaceAdapter extends Context.Service<SurfaceAdapter, {
+  /** Absolute wall-clock deadline for native operations; undefined removes it for human control. */
+  readonly setDeadline: (deadlineAt: number | undefined) => Effect.Effect<void>
+
   /** Open a location. A URL is a place, not a description of markup. */
   readonly navigate: (url: string) => Effect.Effect<SurfaceState, SurfaceUnavailable>
 

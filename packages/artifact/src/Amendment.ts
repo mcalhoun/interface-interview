@@ -19,8 +19,9 @@
  * It writes exactly two kinds of change, and they are the same change seen from
  * two sides: a state the Capability previously escalated **without knowing what
  * it was** becomes a state it declares. `declareLearnedNoMatch` declares one as a
- * Business Outcome the run may answer with; `declareRequiresHuman` declares one
- * as a state that always stops for a person. Nothing else. Neither can add a
+ * Business Outcome the run may answer with; `declareCheckpointOutcome` adds a
+ * human-confirmed public checkpoint answer; `declareRequiresHuman` declares a
+ * state that always stops for a person. None can add a
  * Step, change a Target, retune a bound or touch a `robustness` paragraph,
  * because those are things a person decides and this is a mechanism a person's
  * *answer* drives. The narrowness is the safety property: an Amendment that could
@@ -39,13 +40,6 @@
  * Amendment has to pass. SPEC: "These entries are write-once: no later
  * intervention can downgrade one to `business_outcome`. The rule only tightens."
  *
- * Ticket 13 could only ever travel in the `business_outcome` direction, because
- * `requiresHuman:` did not exist to be read yet. It wrote and tested the rule in
- * full anyway, and predicted that `classificationOf` was the single function a
- * new section would have to teach. That turned out to be exactly true: ticket 14
- * added one lookup there and changed nothing else in this file's refusals, and
- * the downgrade SPEC actually names became reachable.
- *
  * **The direction that matters is unreachable from below.** There is no argument
  * a caller of `declareLearnedNoMatch` can make — no answer, no operator, no
  * number of repetitions — that turns a code classified `requires_human` into a
@@ -59,13 +53,12 @@
  * An Amendment writes prose into a document that outlives the run, from a record
  * made during a run that had a member number in it. So the finished document is
  * scanned for the run's own sensitive values before it is returned, and a
- * refusal never repeats what it found (ADR-0008, and ticket 11's third gate for
- * the same reason). A leak report that contains the leak is a leak.
+ * refusal never repeats what it found (ADR-0008). A leak report that contains the leak is a leak.
  */
 
 import { Result, Schema } from "effect"
 import { noMatchCode, noMatchOutcome } from "./Action.ts"
-import type { OutcomeDeclaration } from "./BusinessOutcomes.ts"
+import { OutcomeCode, type OutcomeDeclaration } from "./BusinessOutcomes.ts"
 import type { CapabilityArtifact, Step } from "./CapabilityArtifact.ts"
 import { formatArtifact } from "./parse.ts"
 import { type RequiresHumanDeclaration, requiresHumanCode } from "./RequiresHuman.ts"
@@ -103,9 +96,8 @@ export const atLeastAsStrictAs = (
 /**
  * What this Artifact already says about one code, if anything.
  *
- * The single place the ratchet reads from, and — as ticket 13 wrote it would be —
- * the single function ticket 14 had to extend. One more lookup, and every refusal
- * below started enforcing the downgrade rule with no other change anywhere.
+ * The shared lookup for a state's classification. Downgrade checks read it
+ * so requires-human entries take precedence consistently.
  *
  * **`requiresHuman` is consulted first, and the order is load-bearing.** A
  * document that somehow carried a code in both sections is malformed —
@@ -145,7 +137,7 @@ export class AmendmentRefused extends Schema.TaggedError<AmendmentRefused>()("Am
 export interface LearnedBusinessOutcome {
   /** The version being cut. A new file; never one that already exists. */
   readonly version: string
-  /** Which Step's unmatched selection is being promoted to an answer. */
+  /** Which Step met the state being promoted to an answer. */
   readonly stepId: string
   /** One line, in the caller's terms. What is true of the domain. */
   readonly title: string
@@ -173,9 +165,8 @@ export interface AmendmentOptions {
    * commit.
    *
    * A scrubber rather than a list of values, for two reasons. It needs no new
-   * `Redacted.value` call site — `test/sensitive-data.test.ts` pins that set at
-   * two, and an amendment is not a good enough reason to make it three. And it
-   * makes the rule exactly one rule: **what this run's Evidence would have
+   * `Redacted.value` call site; test/sensitive-data.test.ts checks the permitted
+   * boundaries. It also preserves one definition of sensitive data: **what this run's Evidence would have
    * redacted, its Artifact refuses to carry.** A separate list would be a second
    * definition of "sensitive" that could drift from the first.
    *
@@ -183,7 +174,7 @@ export interface AmendmentOptions {
    * the document contains something it should not, and the Amendment is refused
    * without anything having to say what was found.
    *
-   * **Required, for the same reason `EvidenceOptions.scrubber` is** (ticket 08).
+   * **Required, for the same reason `EvidenceOptions.scrubber` is**.
    * An optional scrubber defaulting to identity does not weaken the guarantee a
    * little: it removes it entirely and silently, because the document is then
    * compared against an unchanged copy of itself and the comparison always
@@ -191,6 +182,52 @@ export interface AmendmentOptions {
    * reviewer can grep for, rather than an argument somebody left out.
    */
   readonly scrub: (text: string) => string
+}
+
+export interface LearnedCheckpointOutcome extends LearnedBusinessOutcome {
+  /** The stable outcome code and public screen text chosen by the operator. */
+  readonly code: string
+  readonly text: string
+}
+
+/** Add an observed, human-confirmed answer to a checkpoint without changing its action. */
+export const declareCheckpointOutcome = (
+  artifact: CapabilityArtifact,
+  learned: LearnedCheckpointOutcome,
+  options: AmendmentOptions
+): Result.Result<CapabilityArtifact, AmendmentRefused> => {
+  const refuse = (reason: string) => Result.fail(new AmendmentRefused({ capability: artifact.capability, reason }))
+  if (learned.version === artifact.version) return refuse("an amendment must create a new version")
+  if (!Schema.is(OutcomeCode)(learned.code)) return refuse("the confirmed outcome code is invalid")
+  if (learned.text.trim() === "" || /[<\[]redacted\b/i.test(learned.text)) {
+    return refuse("the confirmed screen text must be public and nonempty")
+  }
+  const step = artifact.steps.find((candidate) => candidate.id === learned.stepId)
+  if (step === undefined) return refuse("the confirmed checkpoint step does not exist")
+  const existing = classificationOf(artifact, learned.code)
+  if (existing !== undefined) return refuse("the confirmed code is already classified; existing classifications cannot be replaced")
+  if (Object.values(artifact.requiresHuman ?? {}).some((entry) => entry.step === step.id)) {
+    return refuse("this checkpoint already requires a person and cannot be downgraded to a business outcome")
+  }
+  const amended: CapabilityArtifact = {
+    ...artifact,
+    version: learned.version,
+    outcomes: {
+      ...artifact.outcomes,
+      [learned.code]: { title: learned.title, summary: learned.summary, discoveredFrom: learned.discoveredFrom }
+    },
+    steps: artifact.steps.map((candidate): Step => candidate.id !== learned.stepId ? candidate : {
+      ...candidate,
+      checkpoint: {
+        ...candidate.checkpoint,
+        orOutcome: [
+          ...(candidate.checkpoint.orOutcome ?? []),
+          { code: learned.code, when: [{ assert: "textPresent", text: learned.text }] }
+        ]
+      }
+    })
+  }
+  return carriesNothingSensitive(amended, options, refuse)
 }
 
 /**
@@ -243,9 +280,7 @@ export const declareLearnedNoMatch = (
 
   const code = noMatchCode(step.action.onNoMatch)
 
-  // The ratchet. Today `classificationOf` can only answer `business_outcome`,
-  // so this refuses a redeclaration; when ticket 14 adds `requiresHuman:` it
-  // starts refusing the downgrade SPEC actually names, with no change here.
+  // Reject redeclarations and any attempt to downgrade a requires-human state.
   const existing = classificationOf(artifact, code)
   if (!atLeastAsStrictAs("business_outcome", existing)) {
     return refuse(
@@ -403,8 +438,8 @@ export const declareRequiresHuman = (
  *
  * The scan is over the *finished document*, not over the fields that went into
  * it. Prose is assembled from several places, and a check that looked at each one
- * separately would miss a value that only exists once they are joined. Ticket
- * 11's third gate is here for the same reason.
+ * separately would miss a value that only exists once they are joined.
+ * The compiler applies the same check to the finished document.
  *
  * Shared rather than repeated, so there is one answer to "what does an Amendment
  * refuse to carry" no matter which kind is being written.

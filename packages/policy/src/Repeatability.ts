@@ -6,10 +6,8 @@
  * A Recoverable Condition that resumes `at-step` navigates back to where a Step
  * began and **attempts the Step's Action again**. That is exactly right for a
  * read: a search re-run returns the same screen. It is exactly wrong for a
- * transfer. Ticket 06 shipped the mechanism and said so out loud — "`at-step`
- * re-attempts a Step's Action, so it is only as safe as that Action is
- * repeatable" — and nothing stopped an Artifact from declaring one over an
- * irreversible Action.
+ * transfer. An `at-step` remedy re-attempts the Step's Action, so the
+ * Artifact must justify that repetition when the action is risky.
  *
  * ## Why the check is here and not in the schema
  *
@@ -18,8 +16,7 @@
  * worth less than none. So the risk question is asked here, where the answer
  * already lives, and `@cua/artifact` carries only the field the author writes the
  * justification into. The import of the Artifact's types is type-only, so
- * `@cua/policy` still has no runtime dependency on `@cua/artifact` — ticket 07's
- * arrangement is unchanged.
+ * this check introduces no runtime dependency on `@cua/artifact`.
  *
  * ## The rule
  *
@@ -46,7 +43,7 @@
  * justification at all. That is precisely the silent re-performance of an
  * irreversible Action this check exists to stop.
  *
- * This is ticket 07's precedent one layer up: a risky action cannot be permitted
+ * The action policy's rule applies here too: a risky action cannot be permitted
  * silently, and the justification travels with the permission. A read-only
  * Capability needs no ceremony — every Action is `safe`, so nothing is required.
  * A Capability that moved money would have to argue for the retry in the document

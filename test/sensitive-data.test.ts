@@ -35,14 +35,14 @@ import {
 import { placeholderFor, scrubbing } from "@cua/evidence"
 import { declassifierFor, declassifying, sensitivityPolicy } from "@cua/policy"
 import { scrubberFor, sensitiveNames } from "@cua/replay"
-import { replay, shippedArtifact } from "./support/replay-harness.ts"
+import { replay, shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
 import {
   type Appearance,
   UNSCANNED_EXTENSIONS,
   describeAppearances,
   filesUnder,
   scanForSecrets
-} from "./support/secret-scan.ts"
+} from "../apps/demo/src/support/secret-scan.ts"
 
 /**
  * The member the demo runs on. Sensitive by declaration and by policy, and
@@ -266,12 +266,16 @@ function allowlistingEverything(): (name: string) => boolean {
 }
 
 it("the shipped policy declassifies only what a reviewer signed off, and nothing about a member", () => {
-  // Deny-first still holds. The one exception is a product label the institution
+  // Deny-first still holds. The named exceptions cover a product label the institution
   // prints on the account list itself; every parameter carrying member data is
   // absent from this list, which is the property worth asserting rather than the
   // list being empty.
   expect(sensitivityPolicy.summary).toContain("deny-first")
-  expect(sensitivityPolicy.declassified.map((entry) => entry.parameter)).toEqual(["accountType"])
+  expect(sensitivityPolicy.declassified.map((entry) => `${entry.capability}.${entry.parameter}`)).toEqual([
+    "member.account-balance.accountType",
+    "member.account-balance.discovered.accountType"
+  ])
+  expect(declassifierFor(sensitivityPolicy, "unreviewed.capability")("accountType")).toBe(false)
   expect(sensitivityPolicy.declassified.every((entry) => entry.because.length > 40)).toBe(true)
 
   // memberId is not declassified for the capability that actually uses it.
@@ -527,7 +531,8 @@ it.live("the evidence directory says screenshots are unredacted and over synthet
     expect(note).toContain("Screenshots are NOT redacted")
     expect(note).toContain("SYNTHETIC")
     expect(note).toContain("docs/adr/0010-evidence-screenshots-are-not-redacted.md")
-    expect(note).toContain("optical recognition")
+    expect(note).toContain("explicitly opted into unredacted screenshots")
+    expect(note).toContain("Pixel redaction is not implemented")
 
     // It names which parameters were scrubbed, without naming their values.
     expect(note).toContain("memberId")

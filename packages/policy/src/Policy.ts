@@ -1,10 +1,7 @@
 /**
  * The Policy chokepoint: the one place that decides whether an Action may happen.
  *
- * **Ticket 03 built the chokepoint. Ticket 07 filled in the decisions.** Routing
- * every call site through one service was the invasive half and it happened first;
- * what this module adds is the judgement, and the configuration a reviewer reads
- * instead of this code.
+ * Policy supplies action decisions and the deployment configuration a reviewer reads.
  *
  * SPEC user story 57: "I want every action in both modes to pass the policy
  * engine before execution, so that there is one chokepoint rather than scattered
@@ -34,8 +31,8 @@
  * permit within it.
  *
  * `RISK` is `satisfies Record<ActionType, Risk>` over the Artifact's closed Action
- * union. That is the load-bearing line: ticket 09 adding `selectFromList` to the
- * vocabulary does not compile until it has been classified here, so no Action
+ * union. Adding a verb to the vocabulary does not compile until its risk has
+ * been classified here, so no Action
  * type can reach the adapter that Policy has never had an opinion about. The
  * import is type-only, so this package carries no runtime dependency on
  * `@cua/artifact`.

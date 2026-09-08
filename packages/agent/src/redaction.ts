@@ -1,42 +1,12 @@
 /**
- * Keeping a Discovery run's values out of its own Evidence.
+ * Discovery keeps its goal and parameter literals in Redacted wrappers. Before
+ * the first proposal, diagnostic text is scrubbed against every undeclassified
+ * goal term. As values are discovered, the shared registry also protects their
+ * rendered and encoded forms. Only caller policy and validated public account
+ * selections can declassify text; the model never classifies sensitive data.
  *
- * Replay knows its sensitive values before it starts: they are declared inputs,
- * validated by `prepareInputs`, and `scrubberFor` builds one scrubber from them
- * up front. **Discovery cannot do that.** Its only input is a sentence. Which
- * parameters exist, and what their values are, is exactly what the run is there to
- * find out — the first time anyone knows `memberId` is `12345` is the moment the
- * model proposes typing it.
- *
- * So the scrubber grows. `discoveredSecrets()` returns a `Scrubber` that closes
- * over a set the loop adds to as the model tags values, and the loop registers a
- * value **at the moment it is proposed** — before the Policy check, before the
- * action, and therefore before the `decide` event that first names it is written.
- * Registration happening earlier than the first mention is the property that
- * makes this work at all; it is asserted by a test rather than left to the order
- * of statements in the loop.
- *
- * ## Sensitivity is not the model's call
- *
- * Every discovered parameter is sensitive (ADR-0008). Not "unless the model
- * thinks otherwise" — we do not ask a model to classify PII in regulated
- * financial data, and a document a model writes is not a control. Declassifying
- * takes a Policy allowlist entry, and `sensitivityPolicy` ships empty, so in
- * practice every value a Discovery run types is scrubbed.
- *
- * ## The unwrap site
- *
- * `Redacted.value(` appears in `packages/*​/src` in three files now. Two are
- * Replay's, documented in `packages/replay/src/redaction.ts`. This is the third,
- * and `test/sensitive-data.test.ts` names it explicitly so it could not have
- * arrived unnoticed.
- *
- * It is unavoidable for the same reason Replay's is: a scrubber that does not
- * know the characters cannot find them, and a `fill` that does not know them
- * cannot type them. Both uses are as narrow as they can be made — the plaintext
- * is a local, it is consumed immediately, and it is never stored on anything that
- * gets serialised. What the loop holds and what the Trajectory carries is the
- * `Redacted` wrapper.
+ * This file owns the package's unwrap sites. Plaintext is consumed only by
+ * prompts, actions, scrubber registration and the in-memory compiler guards.
  */
 
 import type { SecretRegistry, Scrubber } from "@cua/evidence"
@@ -94,7 +64,7 @@ export const charactersToType = (value: Redacted.Redacted<string>): string =>
  * The characters of a discovered value, as a needle for the baked-in-literal
  * check.
  *
- * UNWRAP SITE. Ticket 11's compiler has to be able to ask "does this Artifact
+ * UNWRAP SITE. The compiler has to be able to ask "does this Artifact
  * contain the member number this run typed", and a check that cannot see the
  * characters cannot answer it — the same unavoidable reason the scrubber above
  * unwraps. `bakedInLiterals` compares and discards; nothing keeps what it is
@@ -116,3 +86,34 @@ export const literalToCheck = (value: Redacted.Redacted<string>): string =>
  */
 export const asSecret = (label: string, literal: string): Redacted.Redacted<string> =>
   Redacted.make(literal, { label })
+
+
+/**
+ * Discovery cannot classify arbitrary goal text as public. This scrubber is for
+ * diagnostic prose only; it must never rewrite executable targets or schema tags.
+ * Public words come only from caller policy. Unknown terms are removed even
+ * inside longer text, because URLs and account references can embed a value.
+ */
+export const goalDiagnosticScrubber = (goal: string, publicTerms: ReadonlyArray<string> = []): Scrubber => {
+  const terms = [...new Set([
+    ...goal.split(/\s+/u),
+    ...(goal.match(/[\p{L}\p{N}]+/gu) ?? [])
+  ].filter((term) => term !== "" && !publicTerms.includes(term.toLowerCase())))].flatMap((term) => [term, encodeURIComponent(term)])
+  const escaped = terms.sort((a, b) => b.length - a.length)
+    .map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  if (escaped.length === 0) return (text) => text
+  const pattern = new RegExp(`(?:${escaped.join("|")})`, "giu")
+  return (text) => text.replace(pattern, "[redacted:goal]")
+}
+
+/** Model prompts and the compiler consume the goal only in memory. */
+export const goalToUse = (goal: string | Redacted.Redacted<string>): string =>
+  typeof goal === "string" ? goal : Redacted.value(goal)
+
+export { privateUrlValues } from "@cua/evidence"
+
+/** A compiler gate and diagnostic scrubber share the URL runtime-value spellings. */
+export const runtimeUrlScrubber = (values: ReadonlyArray<Redacted.Redacted<string>>): Scrubber => {
+  const registry = secretRegistry(values.map((value) => ({ label: "url", text: literalToCheck(value) })))
+  return registry.scrub
+}

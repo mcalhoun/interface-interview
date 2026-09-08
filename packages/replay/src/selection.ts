@@ -17,7 +17,7 @@
  *
  * That indirection is deliberate three times over. Policy sees the actual
  * control that is about to be pressed rather than an abstract "select
- * something", so ticket 07 classifies the real subject. The adapter re-resolves
+ * something", so Policy classifies the real subject. The adapter re-resolves
  * against a fresh snapshot at the moment of acting, so nothing carries a stale
  * accessibility ref across a page load. And the engine gains no new way to touch
  * the Surface, which is what keeps the chokepoint count in
@@ -127,8 +127,7 @@ const targetForItem = (list: ItemList, label: string): Target => ({
  * Reads the live list and decides which item the parameter meant.
  *
  * `wanted` is resolved by the caller, because `resolveValue` is the single place
- * a `ValueRef` becomes text and ticket 08 turns that into the one explicit
- * unwrap of a `Redacted`.
+ * a `ValueRef` becomes text through the explicit runtime-value boundary.
  */
 export const chooseItem = (
   context: ChoiceContext,

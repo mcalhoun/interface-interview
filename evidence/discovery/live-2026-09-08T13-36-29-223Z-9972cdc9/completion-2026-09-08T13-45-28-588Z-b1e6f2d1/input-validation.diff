@@ -1,0 +1,41 @@
+--- member.account-balance.discovered@1.3.0
++++ member.account-balance.discovered@1.4.0
+@@ -1,5 +1,5 @@
+ capability: member.account-balance.discovered
+-version: 1.3.0
++version: 1.4.0
+ title: Reported the available balance for the member's savings account as requested.
+ summary: |-
+   Reported the available balance for the member's savings account as requested.
+@@ -84,6 +84,20 @@
+       Asked "Next time automation meets this state, should it handle it itself?", they answered yes. demo.operator took control, observed the screen, changed nothing, and confirmed that automation should treat this state as an answer next time.
+ 
+       ADR-0004: an operator who resolves a state without acting has demonstrated that it is terminal and observational, which is what makes it declarable. The classification comes from what they did, not from what anyone wrote in advance, and it only ever tightens from here.
++  INPUT_VALIDATION_ERROR:
++    title: The member number has an invalid format
++    summary: >-
++      The operator observed "Member number must contain only digits.", changed nothing, and
++      confirmed that this state is an application answer. The member number has an invalid
++      format
++    discoveredFrom: |-
++      Learned from intervention session-learn-input-validation-intervention-1 (session session-learn-input-validation, run learn-input-validation, step click-2), raised at 2026-09-08T13:45:40.275Z.
++
++      demo.operator took control at 2026-09-08T13:45:40.298Z and returned it at 2026-09-08T13:45:40.301Z. Action evidence: recorded no actions on the live session.
++
++      Asked "Next time automation meets this state, should it handle it itself?", they answered yes. demo.operator took control, observed the screen, changed nothing, and confirmed that automation should treat this state as an answer next time.
++
++      ADR-0004: an operator who resolves a state without acting has demonstrated that it is terminal and observational, which is what makes it declarable. The classification comes from what they did, not from what anyone wrote in advance, and it only ever tightens from here.
+ steps:
+ - id: open
+   intent: Open the application at the entry path this capability starts from.
+@@ -193,6 +207,10 @@
+       when:
+       - assert: textPresent
+         text: Member Not Found
++    - code: INPUT_VALIDATION_ERROR
++      when:
++      - assert: textPresent
++        text: Member number must contain only digits.
+ - id: selectFromList-3
+   intent: Select the savings account to view its details and balance
+   action:

@@ -5,7 +5,7 @@
  * Fixed is the operative word. SPEC user story 3 wants Discovery choosing from a
  * constrained vocabulary "rather than emit arbitrary code, so that every action
  * it takes is reviewable and policy-checkable". A closed union is what makes both
- * true: a reviewer reads five verbs, and the Policy engine (ticket 07) has a
+ * true: a reviewer reads five verbs, and the Policy engine has a
  * finite set of things to classify as safe or risky.
  *
  * Every Action names its subject as a Target and its value as a `ValueRef`. There
@@ -30,8 +30,8 @@ import { ValueRef } from "./Value.ts"
  * Go to a location. The url is relative to the Tenant's base URL, never absolute:
  * an Artifact describes a Capability of a vendor product, and which institution's
  * installation it runs against is environment, not capability. That is also what
- * gives ticket 07 something to check an origin allowlist against, and ticket 16 a
- * second Tenant with no Artifact change.
+ * lets policy check a concrete origin and permits another Tenant without
+ * changing the Artifact.
  */
 const Navigate = Schema.Struct({
   type: Schema.Literal("navigate"),
@@ -109,7 +109,7 @@ const Escalation = Schema.Struct({ escalate: Schema.String })
  * What it means when the live list offers nothing matching.
  *
  * Two spellings, and the difference between them is the whole of what an
- * Intervention teaches (ticket 13):
+ * Intervention teaches:
  *
  *   - `escalate: CODE` — *we do not know*. The list rendered, nothing in it
  *     carried the tokens asked for, and whether that is the domain saying no or
@@ -194,7 +194,7 @@ const SelectFromList = Schema.Struct({
 export const Action = Schema.Union([Navigate, Fill, Click, Extract, SelectFromList])
 export type Action = typeof Action.Type
 
-/** The Action's verb, for Evidence and for Policy's classification (ticket 07). */
+/** The Action's verb, for Evidence and for Policy's classification. */
 export type ActionType = Action["type"]
 
 export type SelectFromListAction = typeof SelectFromList.Type

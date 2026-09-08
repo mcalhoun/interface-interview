@@ -71,7 +71,7 @@ const typescriptUnder = (root: string): ReadonlyArray<{ name: string; text: stri
 const sourceFiles = (): ReadonlyArray<{ name: string; text: string }> =>
   typescriptUnder(SOURCE_DIRECTORY)
 
-it.live("the adapter exposes exactly the seven Surface methods and nothing else", () =>
+it.live("the adapter exposes only documented Surface operations and deadline control", () =>
   Effect.gen(function* () {
     const core = yield* serve({ port: 0 })
     const methods = yield* Effect.gen(function* () {
@@ -79,8 +79,8 @@ it.live("the adapter exposes exactly the seven Surface methods and nothing else"
       return Object.keys(surface).sort()
     }).pipe(Effect.provide(playwrightSurface({ startUrl: core.origin + "/" })))
 
-    // `navigate` is the eighth: opening a location. A URL is a place, not a
-    // description of markup, so it does not weaken the constraint.
+    // Navigation names a location. Deadline control changes an operation budget.
+    // Neither provides a way to inspect markup or construct a selector.
     expect(methods).toEqual([
       "captureEvidence",
       "click",
@@ -89,6 +89,7 @@ it.live("the adapter exposes exactly the seven Surface methods and nothing else"
       "navigate",
       "observe",
       "resolveTarget",
+      "setDeadline",
       "waitFor"
     ])
   }).pipe(Effect.scoped)

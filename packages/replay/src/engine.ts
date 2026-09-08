@@ -1,20 +1,17 @@
+import { publicResult } from "./diagnostics.ts"
 /**
- * Deterministic Replay: running a Capability Artifact against a live Surface with
- * nothing deciding anything.
+ * Deterministic Replay: running a Capability Artifact against a live Surface
+ * without model-chosen actions.
  *
  * ## The headline claim, and where it lives
  *
  * `replayCapability` returns
  * `Effect<ReplayResult, never, SurfaceAdapter | Policy | Evidence | Session>`.
- * Those four services and no others. A model is not reachable from here, and
- * that is not a convention — adding a `LanguageModel` call anywhere in this file
- * or anything it imports puts `LanguageModel` into that requirement set, and
- * `test/replay-has-no-model.test.ts` stops compiling. ADR-0003, and SPEC user
- * story 22.
- *
- * A README sentence, a runtime assertion, an unset environment variable: each of
- * those survives someone adding a model call six months from now. A type error
- * does not. This is the concrete payoff of choosing Effect.
+ * Type tests reject a LanguageModel service requirement. The default
+ * composition supplies no advisor, and runtime evidence tests verify that it
+ * emits no model decisions. An opt-in advisor can internally call a model
+ * without adding a service requirement here; those assisted results and events
+ * are labeled separately. See ADR-0003 for the scope of this guarantee.
  *
  * ## The other rule
  *
@@ -55,7 +52,7 @@
  * authority rather than perception. When an Operator is reachable, this engine
  * stops there, hands them the live Session, and waits (`handOff` below).
  *
- * Resuming re-asks the **Checkpoint**, never the Action. The Action already
+ * On the checkpoint-failure path, resuming re-asks the Checkpoint. The Action already
  * happened; what failed is the state it was supposed to produce, and a person has
  * just changed that state by hand. Re-running the Action would at best be
  * redundant and at worst irreversible — clicking a link that is no longer on the
@@ -73,12 +70,12 @@
  *
  * ```
  *   expect
- *     ->  declared Business Outcomes                 (ADR-0004, ticket 04)
- *     ->  declared Recoverable Conditions            (ticket 06)
- *     ->  one bounded assisted consultation          (ADR-0005, ticket 15)
- *     ->  hand off to a person                       (ADR-0006, ticket 12)
+ *     ->  declared Business Outcomes                 (ADR-0004)
+ *     ->  declared Recoverable Conditions
+ *     ->  one bounded assisted consultation          (ADR-0005)
+ *     ->  hand off to a person                       (ADR-0006)
  *           labelled by what this Capability has learned about the state
- *           (`requiresHuman:`, ticket 14) — and a state it has already learned
+ *           (`requiresHuman:`) — and a state it has already learned
  *           needs authority skips the consultation entirely.
  * ```
  *
@@ -93,7 +90,7 @@
  * that can tell "the application answered" from "the automation is broken" for a
  * state nobody has written down yet.
  *
- * And that last clause is the whole of where ticket 14 meets ticket 15. A state
+ * A state
  * the document has *already* classified as needing authority is not a question,
  * so it is not asked: the run short-circuits from the recovery rung straight to
  * the human one, carrying the learned code and the sentence somebody who solved
@@ -146,7 +143,7 @@ import {
   personalLabelFor,
   unsafeRepeats
 } from "@cua/policy"
-import { type ScreenWatch, type TargetProposal, Session } from "@cua/session"
+import { type InterventionRequest, type ScreenWatch, type TargetProposal, Session } from "@cua/session"
 import {
   type SurfaceAdapterService,
   type SurfaceState,
@@ -179,6 +176,7 @@ import {
   resolveValue
 } from "./checkpoint.ts"
 import { chooseItem } from "./selection.ts"
+import { urlSecrets } from "./redaction.ts"
 import {
   type RecoveryBlocked,
   type RecoveryOutcome,
@@ -277,8 +275,7 @@ export const replayCapability = (
      * Evidence scrubs on write, so everything in the log is already covered. A
      * consultation is the only text this engine sends anywhere else, and it is
      * put through the same function rather than a second definition of
-     * "sensitive" that could drift from the first (ADR-0008, and ticket 13's
-     * argument for passing the run's own scrubber into an Amendment).
+     * "sensitive" that could drift from the first (ADR-0008).
      *
      * It is the writer's **live** scrubber rather than one built here from the
      * declared inputs, and that is the point: a run learns sensitive values as it
@@ -306,12 +303,14 @@ export const replayCapability = (
      * stronger claim than the value being absent.
      */
     const witness = (state: SurfaceState): Effect.Effect<void> =>
-      evidence.redact(
-        labelledValuesIn(state.tree, personalCaptions).flatMap((found) => {
+      evidence.redact([
+        ...urlSecrets(state.url),
+        ...state.frames.flatMap((frame) => urlSecrets(frame.url)),
+        ...labelledValuesIn(state.tree, personalCaptions).flatMap((found) => {
           const label = personalLabelFor(found.caption)
           return label === undefined ? [] : [{ label, text: found.text }]
         })
-      )
+      ])
 
     /** Observation, with what it saw registered before anybody can write it down. */
     const observing = surface.observe.pipe(Effect.tap(witness))
@@ -386,7 +385,7 @@ export const replayCapability = (
      * `page` is the URL the run is on when it asks. Policy checks every Action
      * against the origin it happens *on*, and a navigation additionally against
      * where it goes; without the first half, a click that followed a link
-     * off-allowlist would leave everything after it unchecked (ticket 07).
+     * off-allowlist would leave everything after it unchecked.
      */
     const authorised = <A>(
       step: Step,
@@ -461,7 +460,7 @@ export const replayCapability = (
      * **Two invariants to keep, and they are different.**
      *
      * *Every assertion kind that calls `read` must be one this loop authorises.*
-     * Today that is `targetReads` and only `targetReads`. A later ticket adding
+     * Today that is `targetReads` and only `targetReads`. Adding
      * an assertion that reads a control has to add it here as well, or that read
      * reaches the adapter unjudged.
      *
@@ -470,8 +469,7 @@ export const replayCapability = (
      * every declared outcome branch. `evaluate` puts a branch's conditions to the
      * screen through the same `context.read` as `expect`, so authorising only
      * `expect` left a branch's `targetReads` reaching `surface.extract` with no
-     * `policy.check` in front of it and no deny path — ticket 07's bypass,
-     * reopened one level in. The set lives in `checkpoint.ts` beside `evaluate`
+     * `policy.check` in front of it and no deny path. The set lives in `checkpoint.ts` beside `evaluate`
      * so the two cannot drift.
      *
      * The assertions are a parameter rather than being read off the Step, because
@@ -511,8 +509,7 @@ export const replayCapability = (
      *
      *   - A **declared Business Outcome** is a result. It stays on the success
      *     channel, always, so a domain answer never shares a road with a fault
-     *     (ticket 04; see the module note, and do not "simplify" it into a signal
-     *     failure folded at the boundary).
+     *     rather than becoming a signal failure folded at the boundary.
      *   - An **Intervention nobody resolved** is not a result yet: the run stops
      *     and a person is still required. That travels the error channel as
      *     `Escalated`, purely so one Step abandoning the run short-circuits the
@@ -606,24 +603,7 @@ export const replayCapability = (
          * action, so each pass asks Policy again rather than reusing a permission
          * granted before the screen moved.
          */
-        const verify = (page: string): Effect.Effect<CheckpointOutcome, StepProblem> =>
-          Effect.gen(function* () {
-            const readTarget = yield* authorisedReader(step, page, assertionsOf(step.checkpoint))
-            return yield* evaluate(
-              { surface: perception, inputs, readings, read: readTarget },
-              step.checkpoint
-            ).pipe(
-              Effect.catch((unavailable) =>
-                Effect.fail<StepProblem>(
-                  fail({
-                    reason: "surface_failed",
-                    expected: `to verify: ${step.checkpoint.description}`,
-                    observed: unavailable.reason
-                  })
-                )
-              )
-            )
-          }).pipe(Effect.tap((outcome) => recordVerdict(step, outcome)))
+        const verify = (page: string) => verifyCheckpoint(step, page)
 
         // ---------------------------------------------------------------
         // The ladder below a failed Checkpoint
@@ -667,7 +647,8 @@ export const replayCapability = (
         //      `classifyAsHumanRequired`. Reaching a person without the assisted
         //      rung having had its turn for an *unclassified* state does not
         //      type-check either.
-        let outcome: CheckpointOutcome = yield* verify(performed.url)
+        let outcome: CheckpointOutcome = performed._tag === "CompletedByOperator"
+          ? performed.checkpoint : yield* verify(performed.url)
         let escalation: Escalated | undefined
         // Possibly already true: an Operator may have been in the Session before
         // the Action could run at all, in which case this Step has had a person
@@ -691,10 +672,9 @@ export const replayCapability = (
           } else {
             exhausted = attempted.recovery.attempted ? attempted.recovery : undefined
 
-            // Rung 4 is deliberately not the first thing asked here, and that
-            // ordering is the whole of what composing tickets 14 and 15 means.
-            //
-            // Ticket 14's rung changes *what this stall is called*, not where it
+            // A learned requires-human classification takes precedence over
+            // asking an advisor to classify the state again.
+            // It changes what this stall is called, not where it
             // is. A state this Capability has learned always needs a person is
             // announced under its declared code, with the sentence somebody who
             // already solved it wrote, instead of as a Checkpoint that would not
@@ -893,21 +873,13 @@ export const replayCapability = (
      * what they did. Re-running the Action there would be redundant at best and
      * irreversible at worst.
      *
-     * Here the opposite holds. The Action never ran — `chooseItem` decides before
-     * the chokepoint, and `resolveTarget` fails before the adapter is asked to
-     * press anything — so re-asking the Checkpoint would prove nothing whatever.
-     * It would fail for the reason it was always going to fail: the Step's own
-     * gesture has not happened. What a returned session has to be given is the
-     * Step itself, from the top.
-     *
-     * **That is not a repeat, which is why it needs no `repeatable:`
-     * justification.** `unsafeRepeats` exists because an `at-step` recovery rule
-     * re-performs an Action that *may already have landed*, so a Capability whose
-     * Actions are risky has to say in writing why doing one twice is safe.
-     * Nothing landed here: both zero-match failures are raised strictly before
-     * the Surface is touched, so this is the Action's first attempt rather than
-     * its second. Demanding a justification for repeating something that never
-     * happened would teach the wrong lesson about when one is needed.
+     * Automation did not perform the missing Action, but the Operator may have
+     * completed it. When the episode records an action, verify the returned
+     * screen before attempting anything. A held Checkpoint or declared outcome
+     * completes the Step without repeating the human's gesture. Extraction still
+     * has to run: a person cannot supply a machine reading merely by returning
+     * control. If the Checkpoint is not reached, the person may only have restored
+     * the missing control, so permit the original Action's first automated attempt.
      *
      * ## Once, and then a record
      *
@@ -932,7 +904,7 @@ export const replayCapability = (
       step: Step,
       before: SurfaceState
     ): Effect.Effect<
-      { readonly performed: Performed; readonly afterHandoff: boolean },
+      { readonly performed: Performed | CompletedByOperator; readonly afterHandoff: boolean },
       StepProblem
     > =>
       Effect.gen(function* () {
@@ -968,9 +940,8 @@ export const replayCapability = (
         const handed = yield* handOff(step, consulted)
 
         // Nobody to ask, or nobody came, or they could not resolve it. An
-        // unattended run reports the Hard Failure it always did: the engine's
-        // behaviour with no operator attached is unchanged by this ticket, which
-        // is what keeps every existing selection test honest.
+        // unattended run reports a structured failure rather than waiting for
+        // an operator who has no way to reach the session.
         if (!handed.resumed) {
           return yield* Effect.fail<StepProblem>(handed.escalation ?? first.failure)
         }
@@ -987,17 +958,40 @@ export const replayCapability = (
           )
         )
 
+        if (handed.operatorActed && step.action.type !== "extract") {
+          const checkpoint = yield* verifyCheckpoint(step, resumedAt.url)
+          if (checkpoint.verdict !== "failed") {
+            return {
+              performed: { _tag: "CompletedByOperator", read: undefined, url: resumedAt.url, checkpoint },
+              afterHandoff: true
+            }
+          }
+        }
+
         const second = yield* attemptAction(step, resumedAt)
         if (second._tag !== "Blocked") return { performed: second, afterHandoff: true }
 
         return yield* Effect.fail<StepProblem>(
           escalated(
             step,
-            before.accessibility,
+            resumedAt.accessibility,
             `control was returned as resolved, but ${second.failure.observed}`
           )
         )
       })
+
+    const verifyCheckpoint = (step: Step, page: string): Effect.Effect<CheckpointOutcome, StepProblem> =>
+      Effect.gen(function* () {
+        const readTarget = yield* authorisedReader(step, page, assertionsOf(step.checkpoint))
+        return yield* evaluate(
+          { surface: perception, inputs, readings, read: readTarget },
+          step.checkpoint
+        ).pipe(Effect.catch((unavailable) => Effect.fail<StepProblem>(failing(step)({
+          reason: "surface_failed",
+          expected: `to verify: ${step.checkpoint.description}`,
+          observed: unavailable.reason
+        }))))
+      }).pipe(Effect.tap((outcome) => recordVerdict(step, outcome)))
 
     /** The Step's Action, with a zero-match failure caught rather than propagated. */
     const attemptAction = (
@@ -1199,8 +1193,7 @@ export const replayCapability = (
     /**
      * The rung above the consultation: what this Capability has already learned.
      *
-     * Ticket 14's rung, kept exactly where ticket 14 put it and given one new
-     * job. It fires on `recovery.attempted === false`, which means precisely "no
+     * It fires on `recovery.attempted === false`, which means precisely "no
      * declared recovery rule recognised this screen at all", and it takes an
      * `Unrecovered` — the value only `attemptRecovery` produces — so a
      * `HumanRequired` still cannot be built before recovery has had its turn.
@@ -1236,9 +1229,8 @@ export const replayCapability = (
      *
      * ## Why this rung serves both stall paths when recovery serves one
      *
-     * Ticket 13 left recovery off the action-blocked path with a reason, and the
-     * reason is worth restating because it is exactly what does *not* apply
-     * here. A declared Recoverable Condition **acts** — it performs a remedy —
+     * Declared recovery does not run on the action-blocked path. A
+     * Recoverable Condition acts by performing a remedy
      * and then believes the Checkpoint rather than itself. `resume: here` means
      * "re-evaluate that Checkpoint", which is meaningless for a Step whose
      * Action never ran: the Checkpoint would fail for the reason it was always
@@ -1508,7 +1500,8 @@ export const replayCapability = (
       step: Step,
       forPerson: ForAPerson
     ): Effect.Effect<
-      { readonly resumed: boolean; readonly escalation: Escalated | undefined },
+      | { readonly resumed: true; readonly escalation: undefined; readonly operatorActed: boolean }
+      | { readonly resumed: false; readonly escalation: Escalated | undefined },
       EvidenceUnwritable
     > =>
       Effect.gen(function* () {
@@ -1545,6 +1538,7 @@ export const replayCapability = (
             stepId: step.id,
             stepIntent: step.intent,
             reason: said.reason,
+            failureCause: said.failureCause,
             // What the rung above tried, when it was enabled. An Operator who has
             // been woken deserves to know the system asked first and what it was
             // told, not least because "the model was not sure" and "the model was
@@ -1567,7 +1561,11 @@ export const replayCapability = (
         )
 
         return episode.resumed
-          ? { resumed: true, escalation: undefined }
+          ? {
+              resumed: true, escalation: undefined,
+              operatorActed: episode.record.observed.length > 0 ||
+                episode.record.actions.some((action) => action.kind !== "note")
+            }
           : {
               resumed: false,
               escalation: escalated(
@@ -1594,6 +1592,7 @@ export const replayCapability = (
       stalled: Stalled
     ): {
       readonly reason: string
+      readonly failureCause: InterventionRequest["failureCause"]
       readonly detail: string
       /** Only where an earlier episode wrote something down. See `Intervention`. */
       readonly background?: string
@@ -1609,6 +1608,7 @@ export const replayCapability = (
         const outcome = stalled.outcome
         return {
           reason: stalled.declaration.title,
+          failureCause: { type: "checkpoint_failed" },
           // What happened in *this* run, and what was written about the state
           // before it, reported as two things. They used to be one paragraph, and
           // an operator meeting it read a previous operator's account of what
@@ -1625,6 +1625,7 @@ export const replayCapability = (
         const outcome = stalled.outcome
         return {
           reason: `the checkpoint "${step.checkpoint.description}" did not hold`,
+          failureCause: { type: "checkpoint_failed" },
           detail: `expected ${outcome.expected}; observed ${outcome.observed}`,
           url: outcome.state.url,
           accessibility: outcome.state.accessibility
@@ -1633,6 +1634,9 @@ export const replayCapability = (
       const failure = stalled.failure
       return {
         reason: `this step could not act: ${failure.expected} was not on the screen`,
+        failureCause: failure.reason === "no_matching_item"
+          ? { type: "no_matching_item", code: failure.code }
+          : { type: "target_missing" },
         detail:
           `${failure.observed}. The action never ran, so nothing has been changed by ` +
           `automation. If this state is the application answering rather than the ` +
@@ -1735,6 +1739,7 @@ export const replayCapability = (
           const path = resolveValue({ inputs, readings }, action.path)
           if (path === undefined) return yield* Effect.fail(unresolvable(fail, action.path))
           const destination = new URL(path, baseUrl).toString()
+          yield* evidence.redact(urlSecrets(destination))
           const opened = yield* authorised(step, "navigate", destination, url, (surface) =>
             surface.navigate(destination).pipe(
               Effect.catch((unavailable) =>
@@ -1894,6 +1899,7 @@ export const replayCapability = (
     // -----------------------------------------------------------------------
 
     const body = Effect.gen(function* () {
+      yield* evidence.redact(urlSecrets(baseUrl))
       // Before anything is performed, and before the first `run.start`: an
       // `at-step` recovery rule re-performs a Step's own Action, so a Capability
       // whose Actions are risky has to say in writing why doing one twice is
@@ -2030,8 +2036,25 @@ export const replayCapability = (
       )
     )
 
-    yield* finalise(surface, evidence, result, startedAt, witness)
-    return result
+    const finalisation = yield* finalise(surface, evidence, result, startedAt, witness).pipe(Effect.result)
+    if (Result.isFailure(finalisation)) {
+      return publicResult({
+        result: "failure",
+        ...common,
+        steps,
+        failure: {
+          reason: "evidence_failed",
+          stepId: result.result === "failure" ? result.failure.stepId
+            : result.result === "intervention_required" ? result.stepId
+            : steps.at(-1)?.id ?? "run",
+          stepIntent: result.result === "failure" ? result.failure.stepIntent : "record what happened",
+          expected: "the run to be auditable",
+          observed: `${finalisation.failure.reason}; preceding result: ${describeResult(result)}`,
+          path: finalisation.failure.path
+        }
+      }, evidence.scrub)
+    }
+    return publicResult(result, evidence.scrub)
   })
 
 // ---------------------------------------------------------------------------
@@ -2151,7 +2174,7 @@ type ForAPerson = Unassisted | Classified
  * answer and is the reason this type is on the *success* channel at all; the
  * alternative — failing with a signal value and folding it at the boundary —
  * would put a legitimate domain answer on the same road as a fault, which is the
- * mistake ticket 04 exists to make impossible.
+ * mistake the result contract prevents.
  *
  * `afterHandoff` is the other half of the composition. A Step can now end in the
  * same three ways it always could *after a person has been in the Session*, so
@@ -2159,8 +2182,8 @@ type ForAPerson = Unassisted | Classified
  * automation found on its own and one that only became visible because a
  * supervisor released a hold are different events, even though they are the same
  * value. Keeping it here rather than inferring it at the boundary means the
- * Evidence log says so at the moment it happened, and it is the field ticket 13
- * reads when it turns "what the Operator did" into an Artifact Amendment.
+ * Evidence log says so at the moment it happened. Amendment learning reads it
+ * to distinguish an independently reached answer from one enabled by an Operator.
  */
 /** A Checkpoint that reached neither the intended state nor a declared outcome. */
 type FailedCheckpoint = Extract<CheckpointOutcome, { verdict: "failed" }>
@@ -2254,6 +2277,13 @@ interface Escalated {
   readonly code?: string
   /** What the screen showed when it stopped, so an Operator has context. */
   readonly accessibility: string
+}
+
+interface CompletedByOperator {
+  readonly _tag: "CompletedByOperator"
+  readonly read: undefined
+  readonly url: string
+  readonly checkpoint: Exclude<CheckpointOutcome, { readonly verdict: "failed" }>
 }
 
 /**
@@ -2465,9 +2495,8 @@ const targetFailed =
  *
  * A screenshot that cannot be taken does not change the verdict — SPEC user story
  * 65 wants it for debugging, and a failed run whose result flipped because the
- * camera jammed would be worse than one with no picture. Evidence that cannot be
- * written *does* change the verdict, which is why the failure above is folded
- * into the result rather than swallowed.
+ * camera jammed would be worse than one with no picture. Structured evidence that
+ * cannot be written changes the verdict and stops finalisation immediately.
  */
 const finalise = (
   surface: SurfaceAdapterService,
@@ -2481,23 +2510,20 @@ const finalise = (
    * be carrying something nobody declared.
    */
   witness: (state: SurfaceState) => Effect.Effect<void>
-): Effect.Effect<void> =>
+): Effect.Effect<void, EvidenceUnwritable> =>
   Effect.gen(function* () {
-    yield* surface.captureEvidence.pipe(
-      Effect.tap((captured) => witness(captured.state)),
-      Effect.flatMap((captured) =>
-        evidence
-          .record({
-            kind: "observe",
-            url: captured.state.url,
-            title: captured.state.title,
-            frames: captured.state.frames.map((frame) => frame.name),
-            accessibility: captured.state.accessibility
-          })
-          .pipe(Effect.flatMap(() => evidence.attach("final.png", captured.screenshot)))
-      ),
-      Effect.ignore
-    )
+    const captured = yield* surface.captureEvidence.pipe(Effect.result)
+    if (Result.isSuccess(captured)) {
+      yield* witness(captured.success.state)
+      yield* evidence.record({
+        kind: "observe",
+        url: captured.success.state.url,
+        title: captured.success.state.title,
+        frames: captured.success.state.frames.map((frame) => frame.name),
+        accessibility: captured.success.state.accessibility
+      })
+      yield* evidence.attach("final.png", captured.success.screenshot).pipe(Effect.ignore)
+    }
 
     yield* evidence
       .record({
@@ -2506,7 +2532,6 @@ const finalise = (
         summary: describeResult(result),
         durationMillis: Date.now() - startedAt
       })
-      .pipe(Effect.ignore)
   })
 
 const isEvidenceProblem = (problem: unknown): problem is EvidenceUnwritable =>

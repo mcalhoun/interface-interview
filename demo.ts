@@ -1,8 +1,8 @@
 /**
  * `bun run demo` runs the whole arc, unattended, in one command.
  *
- * Nine acts, in the order the system was built: a catalog an agent can read, a
- * goal that becomes a capability, deterministic replay of that capability, the
+ * Eight acts, in the order the system was built: a goal that becomes a
+ * capability, deterministic replay of that capability, the
  * three things that are not failures, a person taking the live session, the two
  * amendments that came out of two interventions, the assisted rung between
  * replay and a person, the same capability at a second institution, and a scan
@@ -20,15 +20,15 @@
  * real operator interface over HTTP, and the real amendment and override
  * mechanisms.
  *
- * Scripted: the model's judgement in acts 2, 5 and 7b, at `LanguageModel.make`,
+ * Scripted: the model's judgement in acts 1, 4 and 6b, at `LanguageModel.make`,
  * the same provider hook `@effect/ai-openai` fills. That is a choice about this
  * command rather than a missing key. A demo has to give the same answer every
  * time it is run and has to run for somebody with no key at all, and a live
  * model gives neither. The genuine model-driven run is committed instead, at
  * `evidence/discovery/gpt-4.1-drove-this/`, and is reproduced by
- * `bun run test/support/drive-the-discovery-run.ts`.
+ * `bun run apps/demo/src/support/drive-the-discovery-run.ts`.
  *
- * Act 7a is the exception and calls the provider for real. It is one call, it is
+ * Act 6a is the exception and calls the provider for real. It is one call, it is
  * cheap, and it degrades cleanly: with no key the consultation reports that the
  * model could not be reached, the run falls through to the failure it would have
  * had anyway, and the act prints the same shape of log either way.
@@ -49,15 +49,15 @@ import {
   formatArtifact,
   prepareInputs
 } from "@cua/artifact"
-import { declassifierFor, sensitivityPolicy } from "@cua/policy"
+import { declassifierFor, heritagePublicGoalTerms, sensitivityPolicy } from "@cua/policy"
 import { type Advisor, type ReplayResult, proposeAmendment, scrubberFor } from "@cua/replay"
 import { Effect, Result } from "effect"
-import { runDiscovery } from "./test/support/discovery-harness.ts"
-import { GOAL, readsTheScreen } from "./test/support/discovery-script.ts"
-import { attendedReplay } from "./test/support/handoff-harness.ts"
-import { replay, shippedArtifact } from "./test/support/replay-harness.ts"
-import { respondingModel, scriptedModel } from "./test/support/scripted-model.ts"
-import { UNSCANNED_EXTENSIONS, filesUnder, scanForSecrets } from "./test/support/secret-scan.ts"
+import { runDiscovery } from "./apps/demo/src/support/discovery-harness.ts"
+import { GOAL, readsTheScreen } from "./apps/demo/src/support/discovery-script.ts"
+import { attendedReplay } from "./apps/demo/src/support/handoff-harness.ts"
+import { replay, shippedArtifact } from "./apps/demo/src/support/replay-harness.ts"
+import { respondingModel, scriptedModel } from "./apps/demo/src/support/scripted-model.ts"
+import { UNSCANNED_EXTENSIONS, filesUnder, scanForSecrets } from "./apps/demo/src/support/secret-scan.ts"
 
 const DEMO_ROOT = join("evidence", "demo")
 const CAPABILITY = "member.account-balance"
@@ -75,7 +75,7 @@ const indent = (text: string, by = "  "): void => {
 }
 
 let actNumber = 0
-const ACTS = 9
+const ACTS = 8
 
 const act = (title: string): void => {
   actNumber += 1
@@ -169,7 +169,7 @@ const NO_MODEL = [
   "      demo gives the same answer every time and runs for somebody with no key.",
   "      Everything below the judgement is the production path. A run a real model",
   "      drove is committed at evidence/discovery/gpt-4.1-drove-this/ and is",
-  "      reproduced by: bun run test/support/drive-the-discovery-run.ts"
+  "      reproduced by: bun run apps/demo/src/support/drive-the-discovery-run.ts"
 ] as const
 
 const NO_PERSON = [
@@ -219,28 +219,10 @@ const main = async (): Promise<void> => {
   note([
     "READ THIS FIRST. A language model drove a real discovery run, and the artifact",
     "this repository ships as `discovered` was compiled from it. That run is at",
-    "evidence/discovery/gpt-4.1-drove-this/ and is not what act 2 below does: a demo",
-    "has to give the same answer every time and has to run with no key, so acts 2, 5",
-    "and 7b substitute a script for the model's judgement and label it where they do.",
-    "Act 7a calls the provider for real, and prints what came back either way."
-  ])
-
-  // -------------------------------------------------------------------------
-  act("The catalog: what an agent sees before it calls anything")
-  // -------------------------------------------------------------------------
-  note([
-    "A capability is a callable signature, not a script. This is the whole",
-    "agent-facing surface: what it takes, what it returns, which domain answers it",
-    "can give instead of returning, where it stops for a person, and the exact line",
-    "that invokes it."
-  ])
-  await cli(["catalog"])
-  say()
-  note([
-    "The second entry is tagged [awaiting review] because it was written by the",
-    "compiler rather than by a person. Note also that its accountType default is",
-    "withheld: every parameter a model discovers is sensitive by default (ADR-0008),",
-    "and the catalog publishes a parameter's domain but never its value."
+    "evidence/discovery/gpt-4.1-drove-this/ and is not what act 1 below does: a demo",
+    "has to give the same answer every time and has to run with no key, so acts 1, 4",
+    "and 6b substitute a script for the model's judgement and label it where they do.",
+    "Act 6a calls the provider for real, and prints what came back either way."
   ])
 
   // -------------------------------------------------------------------------
@@ -252,7 +234,7 @@ const main = async (): Promise<void> => {
   const discovery = await Effect.runPromise(
     runDiscovery({ goal: GOAL, model: respondingModel(readsTheScreen) })
   )
-  const discoveryEvidence = collect(discovery.evidenceDirectory, "02-discovery")
+  const discoveryEvidence = collect(discovery.evidenceDirectory, "01-discovery")
 
   const conclusion = discovery.trajectory.conclusion
   say(
@@ -281,12 +263,13 @@ const main = async (): Promise<void> => {
   note([
     "Which of those two words gets recorded is the whole multi-tenant argument.",
     "Recording \"Primary Savings\" would bind the capability to this institution's",
-    "label table. Recording \"savings\" makes act 8 free."
+    "label table. Recording \"savings\" makes act 7 free."
   ])
   landed(discoveryEvidence)
 
   const compiled = compileArtifact(discovery.trajectory, {
     capability: "member.account-balance.demo",
+    publicGoalTerms: heritagePublicGoalTerms,
     version: "1.0.0",
     product: "Heritage Core Member Services (MSS 4.02.11)"
   })
@@ -307,24 +290,24 @@ const main = async (): Promise<void> => {
   const fromDiscovery = await Effect.runPromise(
     replay({ artifact: compiled.success, inputs: { memberId: "12345" }, runId: "compiled-replay" })
   )
-  collect(fromDiscovery.evidenceDirectory, "02-discovery-replayed")
+  collect(fromDiscovery.evidenceDirectory, "01-discovery-replayed")
   say(`  and replayed, unedited, by the engine that has never seen a model:`)
   say(`    ${describe(fromDiscovery.result)}`)
-  landed(join(DEMO_ROOT, "02-discovery-replayed"))
+  landed(join(DEMO_ROOT, "01-discovery-replayed"))
   note([
     "The same arc, with a real model rather than this scripted one, is committed at",
     `evidence/discovery/gpt-4.1-drove-this/. artifacts/${DISCOVERED}/1.0.0.yaml`,
     "was compiled from THAT run, in the process that did it, and is callable by name:",
     `  $ bun run replay ${DISCOVERED} --memberId 12345`,
     "",
-    "  $ bun run test/support/drive-the-discovery-run.ts     # needs OPENAI_API_KEY"
+    "  $ bun run apps/demo/src/support/drive-the-discovery-run.ts     # needs OPENAI_API_KEY"
   ])
 
   // -------------------------------------------------------------------------
   act("Replay: the same call twice, and the same answer twice")
   // -------------------------------------------------------------------------
   const summary = await cli(["replay", CAPABILITY, "--memberId", "12345"])
-  collect(summary.evidenceDirectory, "03-replay")
+  collect(summary.evidenceDirectory, "02-replay")
   say(exitLine(summary))
   say()
   note([
@@ -339,8 +322,8 @@ const main = async (): Promise<void> => {
 
   const first = await cli(["replay", CAPABILITY, "--memberId", "12345", "--json"], { quiet: true })
   const second = await cli(["replay", CAPABILITY, "--memberId", "12345", "--json"], { quiet: true })
-  collect(first.evidenceDirectory, "03-determinism-a")
-  collect(second.evidenceDirectory, "03-determinism-b")
+  collect(first.evidenceDirectory, "02-determinism-a")
+  collect(second.evidenceDirectory, "02-determinism-b")
 
   const comparable = (output: string): string =>
     output.replace(/^\s*"(runId|sessionId|evidenceDirectory)":.*$/gm, "")
@@ -374,7 +357,7 @@ const main = async (): Promise<void> => {
   say("  (a) the application answering: no such member")
   say()
   const notFound = await cli(["replay", CAPABILITY, "--memberId", "99999"])
-  collect(notFound.evidenceDirectory, "04a-business-outcome")
+  collect(notFound.evidenceDirectory, "03a-business-outcome")
   say(exitLine(notFound))
   say()
   note([
@@ -387,7 +370,7 @@ const main = async (): Promise<void> => {
   say("  (b) a transient condition the run gets past on its own")
   say()
   const transient = await cli(["replay", CAPABILITY, "--memberId", "55555"])
-  collect(transient.evidenceDirectory, "04b-recoverable")
+  collect(transient.evidenceDirectory, "03b-recoverable")
   say(exitLine(transient))
   say()
 
@@ -403,7 +386,7 @@ const main = async (): Promise<void> => {
     "--expireSessionAfter",
     "2"
   ])
-  collect(expired.evidenceDirectory, "04c-session-expiry")
+  collect(expired.evidenceDirectory, "03c-session-expiry")
   say(exitLine(expired))
   say()
   note([
@@ -412,7 +395,7 @@ const main = async (): Promise<void> => {
     "at the interrupted step rather than starting over: one run.start, each step",
     "attempted once, and the steps before the interruption never re-ran.",
     "",
-    "The password never appears in the evidence. Act 9 checks."
+    "The password never appears in the evidence. Act 8 checks."
   ])
 
   // -------------------------------------------------------------------------
@@ -490,7 +473,7 @@ const main = async (): Promise<void> => {
         })
     })
   )
-  const episodeEvidence = collect(episode.evidenceDirectory, "05-handoff")
+  const episodeEvidence = collect(episode.evidenceDirectory, "04-handoff")
   say()
   say(`  the run resumed from the paused step and finished: ${describe(episode.result)}`)
   say("    it finished because a person acted. The step's checkpoint was re-asked, not")
@@ -527,7 +510,7 @@ const main = async (): Promise<void> => {
   note([
     "The demo stops one step short of storing it. artifacts/ already holds 1.2.0,",
     "cut by exactly this episode when the repository was built, and the store is",
-    "append-only: writing it again is refused rather than replaced. Act 6 shows the",
+    "append-only: writing it again is refused rather than replaced. Act 5 shows the",
     "committed version and the diff a reviewer approves."
   ])
 
@@ -554,11 +537,11 @@ const main = async (): Promise<void> => {
   ])
 
   const escalating = await cli(["replay", CAPABILITY, "--memberId", "88888", "--version", "1.0.0"])
-  collect(escalating.evidenceDirectory, "06a-88888-before")
+  collect(escalating.evidenceDirectory, "05a-88888-before")
   say(exitLine(escalating))
   say()
   const answered = await cli(["replay", CAPABILITY, "--memberId", "88888"])
-  collect(answered.evidenceDirectory, "06b-88888-after")
+  collect(answered.evidenceDirectory, "05b-88888-after")
   say(exitLine(answered))
   say()
   note([
@@ -569,11 +552,11 @@ const main = async (): Promise<void> => {
   ])
 
   const generic = await cli(["replay", CAPABILITY, "--memberId", "77777", "--version", "1.1.0"])
-  collect(generic.evidenceDirectory, "06c-77777-before")
+  collect(generic.evidenceDirectory, "05c-77777-before")
   say(exitLine(generic))
   say()
   const routed = await cli(["replay", CAPABILITY, "--memberId", "77777"])
-  collect(routed.evidenceDirectory, "06d-77777-after")
+  collect(routed.evidenceDirectory, "05d-77777-after")
   say(exitLine(routed))
   say()
   note([
@@ -606,7 +589,7 @@ const main = async (): Promise<void> => {
     "1.0.0",
     "--assist"
   ])
-  const declinedEvidence = collect(declined.evidenceDirectory, "07a-assist-live")
+  const declinedEvidence = collect(declined.evidenceDirectory, "06a-assist-live")
   say(exitLine(declined))
   say()
   say("  what the evidence records for that consultation:")
@@ -654,13 +637,13 @@ const main = async (): Promise<void> => {
       assist: confidentAdvisor()
     })
   )
-  collect(assisted.evidenceDirectory, "07b-assist-accepted")
+  collect(assisted.evidenceDirectory, "06b-assist-accepted")
   say(`    ${describe(assisted.result)}`)
   if (assisted.result.result === "business_outcome") {
     say(`    assisted: ${assisted.result.assisted === true}   confidence: ${assisted.result.confidence}`)
     say(`    proposal: ${assisted.result.proposalRef}`)
   }
-  landed(join(DEMO_ROOT, "07b-assist-accepted"))
+  landed(join(DEMO_ROOT, "06b-assist-accepted"))
   say()
   say(
     fingerprint(ARTIFACTS_DIRECTORY) === artifactsBefore
@@ -696,7 +679,7 @@ const main = async (): Promise<void> => {
       core: { tenant: "community-cu" }
     })
   )
-  collect(unconfigured.evidenceDirectory, "08a-tenant-unconfigured")
+  collect(unconfigured.evidenceDirectory, "07a-tenant-unconfigured")
   say(`    ${describe(unconfigured.result)}`)
   say(
     `    steps that held first: ${unconfigured.result.steps
@@ -704,7 +687,7 @@ const main = async (): Promise<void> => {
       .map((step) => step.id)
       .join(", ")}`
   )
-  landed(join(DEMO_ROOT, "08a-tenant-unconfigured"))
+  landed(join(DEMO_ROOT, "07a-tenant-unconfigured"))
   say()
   note([
     "The shortened caption was absorbed by matching on the accessible name, and both",
@@ -726,11 +709,11 @@ const main = async (): Promise<void> => {
   ])
 
   const withDelta = await cli(["replay", CAPABILITY, "--memberId", "12345", "--tenant", "community-cu"])
-  collect(withDelta.evidenceDirectory, "08b-tenant-with-override")
+  collect(withDelta.evidenceDirectory, "07b-tenant-with-override")
   say(exitLine(withDelta))
   say()
   const vendor = await cli(["replay", CAPABILITY, "--memberId", "12345"])
-  collect(vendor.evidenceDirectory, "08c-vendor-unchanged")
+  collect(vendor.evidenceDirectory, "07c-vendor-unchanged")
   say(exitLine(vendor))
   say()
   note([
@@ -774,17 +757,17 @@ const main = async (): Promise<void> => {
   // find the application's own banner and call it a leak.
   report(
     "the operator password, in the one run that supplied it:",
-    join(DEMO_ROOT, "04c-session-expiry"),
+    join(DEMO_ROOT, "03c-session-expiry"),
     ["HERITAGE"]
   )
   say()
-  // The credentials a person typed into the live window during act 5. No
+  // The credentials a person typed into the live window during act 4. No
   // capability declared them, because nobody knew a person would be involved,
   // and nobody transcribed them either: the paused session watched the screen it
   // handed over and registered both as they appeared.
   report(
     "what the operator typed into the live session, in the run they held:",
-    join(DEMO_ROOT, "05-handoff"),
+    join(DEMO_ROOT, "04-handoff"),
     ["SUP7", "4417"]
   )
   say()
@@ -796,9 +779,9 @@ const main = async (): Promise<void> => {
   ])
   note([
     "Every parameter is sensitive unless the artifact says otherwise in writing AND",
-    "policy allowlists it, and the shipped allowlist is empty. A sensitive value is a",
-    "Redacted<string> end to end with exactly two places in the workspace that unwrap",
-    "one, pinned by a test. The evidence writer scrubs at the single point where an",
+    "policy allowlists it. The shipped policy approves the discovered account category;",
+    "member identifiers remain sensitive. Redacted values unwrap only at explicit",
+    "runtime boundaries checked by tests. The evidence writer scrubs where each",
     "event is serialised, so redaction does not depend on any call site remembering.",
     "",
     "The cost of matching by literal occurrence is legibility: Heritage Core's",
@@ -807,7 +790,7 @@ const main = async (): Promise<void> => {
     "identifier is not.",
     "",
     "SCREENSHOTS ARE NOT REDACTED. They render member numbers and balances as",
-    "captured. The exclusion above is one line of code in test/support/secret-scan.ts",
+    "captured. The exclusion above is one line of code in apps/demo/src/support/secret-scan.ts",
     "so the gap is findable rather than silent, and every evidence directory says so",
     "in its own README.txt. Pixel masking is named as a gap, not half-solved."
   ])
@@ -838,7 +821,7 @@ const main = async (): Promise<void> => {
     "The discovery run above was scripted so this command is deterministic. The one",
     "a model drove is one command, and it costs a few cents:",
     "",
-    "  $ bun run test/support/drive-the-discovery-run.ts"
+    "  $ bun run apps/demo/src/support/drive-the-discovery-run.ts"
   ])
 }
 

@@ -31,12 +31,14 @@ import {
 
 const withEvidence = <A, E>(
   body: (evidence: Evidence["Service"], directory: string) => Effect.Effect<A, E>,
-  scrubber: SecretRegistry = noSecrets()
+  scrubber: SecretRegistry = noSecrets(),
+  allowUnredactedScreenshots = false
 ) =>
   Effect.gen(function* () {
     const root = mkdtempSync(join(tmpdir(), "cua-evidence-test-"))
     const layer: Layer.Layer<Evidence, unknown> = evidenceFiles({
       root,
+      allowUnredactedScreenshots,
       runId: "r1",
       sessionId: "s1",
       scrubber
@@ -113,7 +115,7 @@ it.live("writes a screenshot beside the log, unscrubbed and stated as such", () 
       yield* evidence.attach("final.png", new Uint8Array([137, 80, 78, 71]))
       expect(readFileSync(join(directory, "final.png")).byteLength).toBe(4)
       expect(readFileSync(join(directory, "README.txt"), "utf8")).toContain("NOT redacted")
-    })
+    }), noSecrets(), true
   )
 )
 
@@ -235,3 +237,65 @@ it.effect("a second writer on the same run is refused, rather than interleaving 
     expect(JSON.parse(lines[0]!).sessionId).toBe("session-one")
   })
 )
+
+it.live("keeps sealed schema tags and generated run identifiers stable when secrets collide", () =>
+  withEvidence((evidence, directory) => Effect.gen(function*() {
+    yield* evidence.record({ kind: "action", action: "action", target: "action success allow risky r1 s1" })
+    yield* evidence.record({ kind: "policy.check", action: "fill", subject: "success",
+      verdict: "allow", reason: "allow risky", policy: "test-policy", risk: "risky" })
+    yield* evidence.record({ kind: "run.end", result: "success", summary: "success", durationMillis: 1 })
+    const records = linesOf(directory)
+    expect(records.map((event) => event.kind)).toEqual(["action", "policy.check", "run.end"])
+    expect(records.every((event) => event.runId === "r1" && event.sessionId === "s1")).toBe(true)
+    expect(records[0]).toMatchObject({ action: "[redacted:private]", target: "[redacted:private] [redacted:private] [redacted:private] [redacted:private] [redacted:private] [redacted:private]" })
+    expect(records[1]).toMatchObject({ verdict: "allow", risk: "risky", reason: "[redacted:private] [redacted:private]" })
+    expect(records[2]).toMatchObject({ result: "success", summary: "[redacted:private]" })
+  }), secretRegistry(["action", "success", "allow", "risky", "r1", "s1"].map((text) => ({ label: "private", text }))))
+)
+
+
+it.live("does not persist binary evidence without explicit synthetic-data opt-in", () =>
+  withEvidence((evidence, directory) => Effect.gen(function*() {
+    const refused = yield* evidence.attach("final.png", new Uint8Array([137, 80, 78, 71])).pipe(Effect.flip)
+    expect(refused.reason).toContain("synthetic-data opt-in")
+    expect(() => readFileSync(join(directory, "final.png"))).toThrow()
+    expect(readFileSync(join(directory, "README.txt"), "utf8")).toContain("Screenshots are disabled")
+  })))
+
+it.live("shares discovery diagnostics protection with handoff writers without changing compiler secrets", () => {
+  const registry = secretRegistry([{ label: "memberId", text: "65432" }])
+  return withEvidence((evidence, directory) => Effect.gen(function*() {
+    const handoffScrub = evidence.scrub
+    const handoffRecord = evidence.record
+    expect(handoffScrub("Morgan Ellsworth 65432")).toBe("Morgan Ellsworth [redacted:memberId]")
+
+    const publicTerms = new Set<string>()
+    yield* evidence.protectDiagnostics((text) => {
+      let protectedText = text
+      for (const term of ["Morgan", "Ellsworth", "savings", "action", "r1", "65432"]) {
+        if (!publicTerms.has(term)) protectedText = protectedText.replaceAll(term, "[redacted:goal]")
+      }
+      return protectedText
+    })
+
+    yield* handoffRecord({ kind: "intervention.human_action", operator: "reviewer",
+      detail: "Helped Morgan Ellsworth with member 65432 and savings action r1" })
+    expect(handoffScrub("Morgan Ellsworth 65432")).toBe("[redacted:goal] [redacted:goal] [redacted:memberId]")
+    expect(registry.labels()).toEqual(["memberId"])
+    expect(registry.scrub("Morgan Ellsworth savings")).toBe("Morgan Ellsworth savings")
+
+    // Approved public vocabulary may grow, and every existing writer and scrub
+    // reference must see the current protection rather than a captured snapshot.
+    publicTerms.add("savings")
+    expect(handoffScrub("savings Morgan")).toBe("savings [redacted:goal]")
+    yield* handoffRecord({ kind: "action", action: "action", target: "savings Morgan" })
+    const disk = readFileSync(join(directory, "events.jsonl"), "utf8")
+    expect(disk).not.toContain("Morgan")
+    expect(disk).not.toContain("Ellsworth")
+    expect(disk).not.toContain("65432")
+    const records = linesOf(directory)
+    expect(records.map((event) => event.kind)).toEqual(["intervention.human_action", "action"])
+    expect(records.every((event) => event.runId === "r1" && event.sessionId === "s1")).toBe(true)
+    expect(records[1]).toMatchObject({ action: "[redacted:goal]", target: "savings [redacted:goal]" })
+  }), registry)
+})

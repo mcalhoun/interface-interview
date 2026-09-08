@@ -21,8 +21,9 @@
  *
  * The Operator is asked exactly one question — should automation handle this
  * itself next time? — and that question cannot distinguish rows one and two on
- * its own, because the answer to both is yes. What separates them is evidence
- * the system already holds and did not have to ask for: the `actions` list.
+ * its own, because the answer to both is yes. What separates them is observed
+ * field or URL changes, or an explicit confirmation of an action on return.
+ * A free-text note alone does not establish that anything changed.
  *
  * An Operator who observed a screen and returned control without touching
  * anything has demonstrated that the state is terminal and observational. There
@@ -31,9 +32,9 @@
  * something has demonstrated the opposite, and what automation would handle is
  * the remedy they performed.
  *
- * That asymmetry is the whole reason the classification is trustworthy. The
- * declarable half comes from behaviour, which nobody can fake by picking the
- * wrong radio button; the question only resolves the ambiguity behaviour leaves.
+ * The watcher cannot infer every click, so the return form lets the Operator
+ * confirm an action and describe it. Observed changes still count even without
+ * that confirmation. The next-time question resolves the ambiguity actions leave.
  * Reversing it — asking the Operator to name the class outright — is the
  * "smuggling the answer in as configuration" ADR-0004 exists to refuse.
  *
@@ -104,7 +105,7 @@ export const classify = (record: InterventionRecord): Learned => {
   }
 
   const operator = record.operator ?? "(unnamed)"
-  const touched = record.actions.length > 0
+  const touched = record.observed.length > 0 || record.actions.some((action) => action.kind !== "note")
 
   switch (record.nextTime) {
     case "not_asked":
@@ -145,7 +146,7 @@ export const classify = (record: InterventionRecord): Learned => {
               `that automation should do the same thing itself next time`
           }
         : {
-            // The row this ticket is built on. Nothing was done, and the person
+            // The observed state was unchanged, and the person
             // who resolved it says automation should handle it — so the state is
             // terminal, observational, and an answer rather than a stop.
             _tag: "Learned",

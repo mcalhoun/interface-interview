@@ -1,0 +1,2 @@
+# Unified diff evidence uses a single-space prefix for empty context lines.
+evidence/**/*.diff whitespace=-blank-at-eol

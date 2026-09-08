@@ -64,9 +64,9 @@ import {
   playwrightSurface,
   selectFromTree
 } from "@cua/surface"
-import { attendedReplay } from "./support/handoff-harness.ts"
-import { replay, shippedArtifact } from "./support/replay-harness.ts"
-import { scriptedModel } from "./support/scripted-model.ts"
+import { attendedReplay } from "../apps/demo/src/support/handoff-harness.ts"
+import { replay, shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
+import { scriptedModel } from "../apps/demo/src/support/scripted-model.ts"
 
 const TENANT = COMMUNITY_CU.key
 const CAPABILITY = "member.account-balance"
@@ -91,7 +91,7 @@ const storedOverride = (): TenantOverride => {
   if (Result.isFailure(loaded)) throw new Error(loaded.failure.message)
   if (loaded.success === undefined) {
     throw new Error(
-      `no override is stored for ${TENANT}. Run bun run test/support/drive-the-tenant-override.ts`
+      `no override is stored for ${TENANT}. Run bun run apps/demo/src/support/drive-the-tenant-override.ts`
     )
   }
   return loaded.success

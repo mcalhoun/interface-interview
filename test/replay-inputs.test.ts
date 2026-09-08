@@ -11,7 +11,7 @@
 import { expect, it } from "vitest"
 import { Effect, Redacted, Result } from "effect"
 import { prepareInputs } from "@cua/artifact"
-import { shippedArtifact } from "./support/replay-harness.ts"
+import { shippedArtifact } from "../apps/demo/src/support/replay-harness.ts"
 
 const inputsOf = () => shippedArtifact().inputs
 

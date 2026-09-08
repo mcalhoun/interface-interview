@@ -1,40 +1,15 @@
 /**
- * The result contract: what a caller gets back, and what they are allowed to
- * conclude from it.
+ * The result contract separates successful outputs, known business answers,
+ * requests for intervention and hard failures. All four variants are reachable.
  *
- * Four classes. `Success` and `BusinessOutcome` are reachable; the other two are
- * defined and unreachable until tickets 12 and 15. The brief calls the
- * distinction between them the most common design mistake in this problem, and a
- * taxonomy that arrives one class per ticket is a taxonomy that gets bolted onto
- * an engine already shaped around success-or-exception. Defining all four first
- * forced the engine's shape, and it is why adding `BusinessOutcome` at ticket 04
- * changed no signature.
+ * A BusinessOutcome is a successful domain answer and exits zero. A failure
+ * carries the stopped step, expectation and observed state for diagnosis.
+ * InterventionRequired carries the session identifier and any known escalation
+ * code. An assisted outcome is explicitly marked so it cannot count as a
+ * successful deterministic replay.
  *
- * | Class                  | Means                                        | The caller should |
- * | ---------------------- | -------------------------------------------- | ----------------- |
- * | `Success`              | The flow completed and produced its outputs   | use the outputs |
- * | `BusinessOutcome`      | The application answered, and the answer is a legitimate domain result | branch on `code` |
- * | `InterventionRequired` | Nothing could be decided safely; a person has the session | wait or hand off |
- * | `Failure`              | The automation is broken, not the record       | page someone |
- *
- * `BusinessOutcome` is not an error. A run ending in one is a *successful* run,
- * exits zero, and reports no failure anywhere (ticket 04's checklist says so
- * explicitly). That is the whole point of separating it from `Failure`.
- *
- * ## Why this is a Schema rather than a plain union
- *
- * A result gets written into Evidence and, later, returned across a process
- * boundary to a calling agent. Encoding it through the same schema that types it
- * keeps those two from drifting.
- *
- * ## Seams
- *
- *   - ticket 12 constructs `InterventionRequired`. It carries the Session id
- *     because an Operator has to be able to find the browser window.
- *   - ticket 15 sets `assisted` on a `BusinessOutcome` reached through Assisted
- *     Recovery, so a caller can always tell a deterministic outcome from a
- *     proposed one (user story 37) and reliability scoring is never inflated by
- *     one (user story 38).
+ * The same schema describes the caller's result and its serialized evidence,
+ * preventing those contracts from drifting.
  */
 
 import { Schema } from "effect"
@@ -145,9 +120,9 @@ const RecoveryExhausted = failure("recovery_exhausted", {
  * Nothing on screen answers to a Target.
  *
  * Distinct from ambiguity on purpose: SPEC treats zero matches as "as likely to
- * be domain truth as breakage", so ticket 05 routes this into the Recovery
+ * be domain truth as breakage", so the engine routes this into the Recovery
  * Ladder while ambiguity stays a Hard Failure. The result classes have to be
- * distinguishable before that can be true (ticket 05's checklist).
+ * distinguishable so the engine can choose the appropriate response.
  */
 const TargetMissing = failure("target_missing", {
   target: Schema.String,
@@ -185,8 +160,8 @@ const TargetAmbiguous = failure("target_ambiguous", {
  * missing Target says a control is not there and leaves open whether the screen
  * changed or the member simply has no such thing. A no-match says the list
  * rendered perfectly, here is everything it offered, and none of it carries the
- * tokens that were asked for — which is usually the domain saying no. Ticket 13
- * turns exactly this into a declared Business Outcome.
+ * tokens that were asked for — which can be a legitimate domain answer. A verified amendment can declare
+ * that classification.
  */
 const NoMatchingItem = failure("no_matching_item", {
   /** The Artifact's declared `onNoMatch.escalate` code. */
@@ -216,7 +191,7 @@ const AmbiguousMatch = failure("ambiguous_match", {
 /** The Surface could not be reached or operated at all. */
 const SurfaceFailed = failure("surface_failed", {})
 
-/** Policy said no. Ticket 07 produces these; the class exists so it need not. */
+/** Policy denied an action. */
 const PolicyViolation = failure("policy_violation", {
   action: Schema.String,
   subject: Schema.String
@@ -227,7 +202,7 @@ const OutputUnreadable = failure("output_unreadable", {
   output: Schema.String
 })
 
-/** The engine tried to act while an Operator held the Session (ticket 12). */
+/** The engine tried to act while an Operator held the Session. */
 const ControlLost = failure("control_lost", {
   owner: Schema.String
 })
@@ -241,7 +216,7 @@ const EvidenceFailed = failure("evidence_failed", {
  * The Artifact parsed but could not be carried out — a value a Step needed was
  * never supplied and had no default.
  *
- * In ticket 11's terms this is a compiler bug rather than a Surface problem, and
+ * This is an artifact or compiler problem rather than a Surface problem, and
  * it says so, because the two demand completely different responses.
  */
 const ArtifactUnexecutable = failure("artifact_unexecutable", {})
@@ -316,7 +291,7 @@ const BusinessOutcome = Schema.Struct({
   detail: Schema.String,
   /**
    * True when Assisted Recovery proposed this rather than the Artifact declaring
-   * it (ticket 15). An assisted result never counts as deterministic.
+   * it. An assisted result never counts as deterministic.
    *
    * Absent, rather than `false`, on every deterministic outcome. A field that is
    * always present invites `if (result.assisted)` to be written as though the
@@ -337,7 +312,7 @@ const BusinessOutcome = Schema.Struct({
   proposalRef: Schema.optional(Schema.String)
 })
 
-/** Automation stopped and a person has the live Session (ticket 12). */
+/** Automation stopped and a person has the live Session. */
 const InterventionRequired = Schema.Struct({
   result: Schema.Literal("intervention_required"),
   ...Common,
@@ -345,7 +320,7 @@ const InterventionRequired = Schema.Struct({
   stepId: Schema.String,
   /**
    * The Artifact's declared code for a state it has *learned* always needs a
-   * person (ticket 14), when this is one of those.
+   * person, when this is one of those.
    *
    * Optional, and its absence is information rather than a gap: no code means the
    * run met a state nothing has classified, which is a different thing for a

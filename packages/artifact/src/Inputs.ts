@@ -17,7 +17,7 @@
  * is the same argument ADR-0003 makes one level up. `test/replay-inputs.test.ts`
  * pins it.
  *
- * ## Values are `Redacted`, uniformly (ticket 08)
+ * ## Values are uniformly Redacted
  *
  * `ResolvedInput.text` is a `Redacted<string>`, and it is *always* one — the
  * wrapper does not appear and disappear with the `sensitive` flag. A type that
@@ -124,8 +124,8 @@ export const declassifiesNothing: Declassifier = () => false
  * treated as non-sensitive.**
  *
  * The Artifact has to say `sensitive: false` in writing, *and* Policy has to
- * allowlist the parameter. An Artifact is a discovered document — at ticket 11 a
- * model writes it — so on its own it does not get to declassify anything.
+ * allowlist the parameter. A model can write an Artifact, so the document
+ * cannot declassify its own values.
  * Configuration a human approved is the second signature.
  *
  * Written as an `||` on purpose: every path that is not "both said yes" lands on

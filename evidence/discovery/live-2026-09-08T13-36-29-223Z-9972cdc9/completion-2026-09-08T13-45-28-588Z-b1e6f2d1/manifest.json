@@ -1,0 +1,87 @@
+{
+  "runId": "live-2026-09-08T13-36-29-223Z-9972cdc9",
+  "provider": "openai",
+  "model": "gpt-4.1",
+  "discovery": {
+    "events": "../discovery/events.jsonl"
+  },
+  "compiled": {
+    "path": "artifacts/member.account-balance.discovered/1.1.0.yaml",
+    "copy": "1.1.0.yaml",
+    "sha256": "811f7e4ad09e2ab1f42e664012ea512347ca64edff47cab85e358ddbcf5f078f"
+  },
+  "replay": {
+    "events": "replay/events.jsonl",
+    "result": "success",
+    "outputs": {
+      "availableBalance": "4182.55 USD"
+    }
+  },
+  "learning": {
+    "events": "intervention/events.jsonl",
+    "operator": "scripted demonstration over real HTTP session handoff",
+    "learnedClass": "business_outcome"
+  },
+  "amended": {
+    "path": "artifacts/member.account-balance.discovered/1.2.0.yaml",
+    "copy": "1.2.0.yaml",
+    "sha256": "8162b860d7b556e2c3113e83498a5136794c95c16f6dfebdfc8218d4dcf40d27",
+    "diff": "amendment.diff"
+  },
+  "exceptionalReplay": {
+    "events": "replay-learned-outcome/events.jsonl",
+    "result": "business_outcome",
+    "code": "NO_MATCHING_ITEM"
+  },
+  "amendedHappyReplay": {
+    "events": "replay-learned-success/events.jsonl",
+    "result": "success"
+  },
+  "checkpointLessons": [
+    {
+      "code": "MEMBER_NOT_FOUND",
+      "version": "1.3.0",
+      "artifact": "1.3.0.yaml",
+      "sha256": "b5835935b57c306207326c07ab7c34a00511b65db4833390deb4dc1113ab023d",
+      "intervention": "learn-member-not-found/events.jsonl",
+      "diff": "member-not-found.diff"
+    },
+    {
+      "code": "INPUT_VALIDATION_ERROR",
+      "version": "1.4.0",
+      "artifact": "1.4.0.yaml",
+      "sha256": "7004234cc1137784714f821f34d2bf1ef90fd324e14ec38119e799abc7784195",
+      "intervention": "learn-input-validation/events.jsonl",
+      "diff": "input-validation.diff"
+    }
+  ],
+  "finalCapability": {
+    "version": "1.4.0",
+    "artifact": "1.4.0.yaml"
+  },
+  "finalReplays": [
+    {
+      "name": "success",
+      "events": "final-success/events.jsonl",
+      "result": "success"
+    },
+    {
+      "name": "no-matching-account",
+      "events": "final-no-matching-account/events.jsonl",
+      "result": "business_outcome",
+      "code": "NO_MATCHING_ITEM"
+    },
+    {
+      "name": "member-not-found",
+      "events": "final-member-not-found/events.jsonl",
+      "result": "business_outcome",
+      "code": "MEMBER_NOT_FOUND"
+    },
+    {
+      "name": "input-validation",
+      "events": "final-input-validation/events.jsonl",
+      "result": "business_outcome",
+      "code": "INPUT_VALIDATION_ERROR"
+    }
+  ]
+}

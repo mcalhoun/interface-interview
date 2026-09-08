@@ -3,8 +3,8 @@
  *
  * ADR-0008: "Every parameter discovered from a Goal counts as sensitive unless
  * Policy allowlists it otherwise." So the authority sits here rather than in the
- * Artifact. An Artifact is a discovered document — from ticket 11 onward a model
- * writes it — and a document that can declassify itself is not a control. It gets
+ * Artifact. A model can write an Artifact, and a document that can declassify
+ * itself is not a control. It gets
  * to *request* clear treatment with `sensitive: false`; this file is the second
  * signature, and `classifySensitive` in `@cua/artifact` requires both.
  *
@@ -18,7 +18,7 @@
  * `prepareInputs` takes. Nothing here imports `@cua/artifact`: the predicate type
  * is structural, so the dependency runs one way.
  *
- * ## Ticket 07
+ * ## Other policy decisions
  *
  * The origin allowlist and action-type risk classification belong beside this, as
  * one reviewable configuration document rather than two. `Policy.ts` holds the
@@ -93,7 +93,7 @@ export const declassifierFor = (
 /**
  * The policy every entry point uses.
  *
- * One entry, and it earns its place. Everything about a member stays sensitive:
+ * Explicit entries cover the canonical and discovered capabilities. Member data stays sensitive:
  * the identifier, and by consequence the account number that embeds it.
  *
  * `accountType` is different in kind. It is the name of a product an institution
@@ -201,5 +201,24 @@ export const sensitivityPolicy: SensitivityPolicy = declassifying([
       "A product label the institution prints on the account list itself, carrying " +
       "nothing about the member. Scrubbing it by literal occurrence would erase the " +
       "list the selection matched against, destroying the evidence of the choice."
+  },
+  {
+    capability: "member.account-balance.discovered",
+    parameter: "accountType",
+    because:
+      "The discovered Heritage Core capability uses the same reviewed savings/checking " +
+      "product vocabulary as the canonical capability. It identifies an institution's " +
+      "public product, never a member; preserving it keeps the learned selection reviewable."
   }
 ])
+
+/**
+ * Reviewed public vocabulary of the synthetic Heritage Core task. Unknown goal
+ * terms remain private. This list is policy configuration, never model output;
+ * another deployment must approve its own labels before exporting a capability.
+ */
+export const heritagePublicGoalTerms: ReadonlyArray<string> = [
+  "look", "up", "the", "a", "an", "of", "for", "and", "get", "read", "find", "show",
+  "retrieve", "available", "ledger", "balance", "balances", "account", "accounts",
+  "member", "number", "id", "savings", "checking", "primary", "money", "market", "usd"
+]

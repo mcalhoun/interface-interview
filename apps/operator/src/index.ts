@@ -5,8 +5,7 @@
  * ## Deliberately plain
  *
  * Server-rendered HTML, form posts, no client-side anything. The interface is
- * not the interesting part of this ticket and pretending otherwise would hide
- * what is: an Operator does the actual work in the browser window the automation
+ * a control interface. An Operator does the actual work in the browser window the automation
  * was already driving, not in here. This page tells them where that window is,
  * what stopped, what order to do things in, and gives them the buttons that move
  * the Control Owner state machine. That is the whole job.
@@ -47,9 +46,9 @@
  * That is a different question from what is allowed to happen, and it is the one
  * thing this file must answer for itself, because there is nobody else to ask.
  *
- * The interface listens on a predictable loopback port. Until this ticket it had
- * no authentication, no origin check and no CSRF token, which meant **any page
- * open in the operator's browser could POST to it**: a form submission is not
+ * The interface listens on a loopback port. Authentication and origin checks
+ * matter because any page open in the operator's browser can submit a form here.
+ * A form submission is not
  * subject to the same-origin policy, and the attacker does not need to read the
  * response to do damage. Return-of-control is what writes durable Capability
  * amendments (ADR-0004) and tenant overrides (ADR-0006), carrying an operator's
@@ -296,6 +295,7 @@ const route = (
                   operator: field("operator"),
                   classification: classificationOf(field("classification")),
                   detail: field("detail"),
+                  actionTaken: field("actionTaken") === "true",
                   nextTime: nextTimeOf(field("nextTime")),
                   confirmProposal: confirmProposalOf(field("confirmProposal"))
                 })
@@ -562,9 +562,10 @@ const theOrder = (held: boolean): string =>
 <li>Do the work in ${escape(BROWSER_APPLICATION)}. Nothing you do there needs to be
   typed in here: the session watches the screen, and any value you type into it is
   redacted from this run's evidence from the moment it appears.</li>
-<li>Write down anything the screen does not show &mdash; why the state happened, what
-  you would tell the next person. That is what the note is for.</li>
-<li>Hand control back, and say whether the run can carry on.</li>
+<li>In the return form, describe what you did or what stopped you. Confirm any
+  action you took, including clicks that did not involve typing.</li>
+<li>Hand control back, saying whether the run can carry on and what automation
+  should do next time.</li>
 </ol>`
 
 const pendingPanel = (snapshot: HandoffSnapshot, token: string): string => {
@@ -634,14 +635,14 @@ const doneSoFar = (record: InterventionRecord): string => {
       : `<table>${
           record.actions
             .map(
-              (action) => `<tr><th>${escape(action.at)}</th><td>${escape(action.detail)}</td></tr>`
+              (action) => `<tr><th>${escape(action.at)}</th><td>${action.kind === "note" ? "Note: " : "Confirmed action: "}${escape(action.detail)}</td></tr>`
             )
             .join("")
         }</table>`
   const observed =
     record.observed.length === 0
       ? ""
-      : `<p class="note">This session saw you type into ${
+      : `<p class="note">This session observed changes in ${
           escape(record.observed.join(", "))
         }. Those values are redacted from this run's evidence from the moment they
         appeared, wherever they turn up afterwards &mdash; in a URL, in a field the
@@ -668,14 +669,6 @@ const holdingControls = (record: InterventionRecord, token: string): string =>
 <p class="note">Taken by ${escape(record.operator ?? "")} at ${
     escape(record.tookControlAt ?? "")
   }. The automation cannot act until you hand it back.</p>
-<form method="post" action="/note">
-${tokenField(token)}
-<label>Something you did, or something the screen would not tell the next person
-  <input type="text" name="detail" placeholder="the hold was on the account, not the member"></label>
-<p class="note">Your words. You do not have to list what you typed: the session is
-  watching the screen and registers those itself.</p>
-<button type="submit">Record it</button>
-</form>
 <form method="post" action="/return">
 ${tokenField(token)}
 <input type="hidden" name="operator" value="${escape(record.operator ?? "")}">
@@ -691,6 +684,10 @@ ${tokenField(token)}
 </fieldset>
 <label>What you did, or what stopped you
   <input type="text" name="detail" placeholder="released the hold as an authorized supervisor"></label>
+<label><input type="checkbox" name="actionTaken" value="true">
+  I changed the live session, including by clicking a control. My description above says what I did.</label>
+<p class="note">Leave unchecked if you only observed. Field changes the session saw already
+  count as actions; this confirmation also records actions that did not involve typing.</p>
 ${theQuestion(record)}
 ${theProposalQuestion(record)}
 <button type="submit">Return control</button>
@@ -714,31 +711,30 @@ ${theProposalQuestion(record)}
  *
  * The line above the radios says what the system observed them do, because that
  * is the other input to the derivation and they should be able to see it. An
- * Operator who fixed something by hand and did not record it can say so with the
- * form above before answering.
+ * Operator who fixed something by hand can describe and confirm it in this same
+ * return form before answering.
  *
  * The default is "I would rather not say". A page that arrived pre-answered
  * would make the commonest outcome of all — somebody hitting the button without
  * reading — into a durable change to a Capability's contract.
  */
 const theQuestion = (record: InterventionRecord): string => {
-  const done =
-    record.actions.length === 0
-      ? "You have not recorded doing anything to this session."
-      : `You have recorded ${record.actions.length} action(s) on this session.`
+  const confirmed = record.actions.filter((action) => action.kind !== "note").length
+  const done = confirmed === 0
+    ? "No action has been confirmed yet. Notes alone do not count as changes."
+    : `You have confirmed ${confirmed} action(s) on this session.`
   const seen =
     record.observed.length === 0
       ? ""
-      : ` The session also saw you type into ${
+      : ` The session observed changes in ${
           escape(record.observed.join(", "))
-        }, which it redacted but does not count as an action: what you did is what you say
-      you did.`
+        }. These changes count as action evidence; the values are redacted.`
 
   return `<fieldset>
 <legend>${escape(THE_QUESTION)}</legend>
 <p class="note">${escape(done)}${seen} That, and your answer, are together what decide
-  whether this state can be declared in the capability itself. If you fixed something
-  by hand and have not said so above, say so before answering.</p>
+  whether this state can be declared in the capability itself. Describe and confirm
+  any additional action above before returning control.</p>
 <label><input type="radio" name="nextTime" value="automation_handles_it">
   Yes &mdash; automation should handle this state itself next time</label>
 <label><input type="radio" name="nextTime" value="always_stop_here">

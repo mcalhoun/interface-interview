@@ -22,7 +22,7 @@
  * layer construction — before a browser opens — rather than a 401 six steps into
  * a run.
  *
- * ## Ticket 15
+ * ## Assisted recovery
  *
  * The assisted-recovery model is a classification-only call against the same
  * provider. Reuse `openAiProvider` unchanged and give it a toolkit containing no
@@ -45,7 +45,7 @@ import { FetchHttpClient } from "effect/unstable/http"
  * its way through raw markup. Running it on something modest is part of the
  * evidence for that.
  */
-export const DEFAULT_MODEL = "gpt-4.1-mini"
+export const DEFAULT_MODEL = "gpt-4.1"
 
 /** The environment variable the key is read from. Named once, here. */
 export const API_KEY_VARIABLE = "OPENAI_API_KEY"
@@ -68,7 +68,7 @@ export interface ProviderOptions {
  * platform HTTP client because Bun has a global `fetch` and adding
  * `@effect/platform-*` for one service would be a dependency bought for nothing.
  */
-export const openAiProvider = (
+const openAiProvider = (
   options: ProviderOptions = {}
 ): Layer.Layer<LanguageModel.LanguageModel, ConfigError> =>
   OpenAiLanguageModel.layer({
